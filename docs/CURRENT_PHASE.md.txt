@@ -1,0 +1,248 @@
+# Current Phase
+
+---
+
+## Phase
+
+Phase 22 — Global Strategy Filter
+
+Status:
+
+COMPLETE
+
+---
+
+## Objective
+
+Connect the fully-built Advanced Filters capability (Phase 14) to the
+application's shared trades pipeline, so a saved FilterGroup becomes an
+active global lens applied on top of the existing account/market
+filters across every consuming page.
+
+Before this phase, SettingsModal passed an empty function to
+SavedFiltersList's onApply: a user could build a multi-condition AND/OR
+filter, preview its match count, name it, save it and favorite it, and
+clicking "Apply" did nothing. That is now a working feature.
+
+The phase's central safety property — with no active filter the visible
+trade set is identical to before — was established by three independent
+mechanisms rather than asserted (see Verification below).
+
+---
+
+## Scope (as delivered)
+
+1. calculations/visibleTrades.ts (new, pure L3) —
+   selectVisibleTrades(trades, accFilter, mktFilter, activeGroup).
+   Holds the account/market predicate moved VERBATIM out of
+   useFilters.applyFilters, composed with the existing
+   applyFilterGroup(). Fixed composition order: account → market →
+   group.
+2. One-line barrel addition to calculations/index.ts.
+3. useFilters() gained activeFilter / setActiveFilter /
+   clearActiveFilter. In-memory only, matching the existing
+   account/market filter semantics. applyFilters() is now a thin
+   useCallback delegating to selectVisibleTrades(); its exported
+   signature is unchanged.
+4. SettingsModal gained an optional onApplyFilter, replacing the dead
+   no-op. App.jsx supplies it: snapshot the group, close the modal.
+5. Snapshot semantics via structuredClone — deleting or editing the
+   source SavedFilter cannot change the active view.
+6. FilterBar gained four additive optional props rendering the active
+   filter chip: name, "N of M trades", and a ✕ clear control.
+7. pages/Backtest.tsx continues to receive UNFILTERED allTrades.
+
+---
+
+## Files Changed
+
+Modified (5):
+- src/hooks/useFilters.ts
+- src/calculations/index.ts
+- src/components/layout/FilterBar.tsx
+- src/components/settings/SettingsModal.tsx
+- src/App.jsx
+
+New (3):
+- src/calculations/visibleTrades.ts
+- src/calculations/visibleTrades.test.ts
+- src/calculations/filterEngine.test.ts
+
+Eight files, exactly matching the phase's Allowed Files list — proven
+by SHA-256 integrity-manifest diff, not by inspection. Zero changes to
+vitest.config.ts, package.json, any page file, any other calculations
+module, services/storage.js, or any sync file.
+
+---
+
+## Out of Scope (respected)
+
+- No change to calculations/filterEngine.ts logic. (Its stale
+  ASSUMPTIONS comment block was corrected in the documentation pass
+  after the phase closed — a comment-only edit, no code change.)
+- No new storage key, no migration, no DATABASE_VERSION bump. The
+  active filter is in-memory only and resets on reload.
+- No test-infrastructure change: no jsdom, no testing-library, no setup
+  file, no vitest config edit, no new dependency.
+- No change to Raw's own 4-field filter, Strategy's Multi-Filter
+  Comparison tool, or any page's internal filter UI.
+- No page file modified. Pages simply receive a narrower array.
+- No AI, Prop Firm, Position Calculator, Sync, or Backtest v2 work.
+- The 7 pre-existing lint warnings were left untouched, including the
+  unused useMemo import in useFilters.ts — a file this phase edits.
+  Removing it would have failed the exactly-7 baseline gate.
+
+---
+
+## Verification (all performed)
+
+Automated:
+- npm run typecheck — 0 errors, at every step.
+- npm run lint — 0 errors, exactly 7 pre-existing warnings.
+- npm run test — 34 → 61 passing (4 files → 6).
+- npm run verify — full chain green.
+- npm run build — succeeds, 994 modules.
+
+Evidence-based, not inspection-based:
+- Predicate-move diff: the moved account/market predicate, diffed
+  against a source snapshot captured BEFORE the move, is byte-identical
+  after whitespace and parameter-rename normalization; the early return
+  differs only by the added `activeGroup === null` conjunct.
+- Mutation spot-check: removing that guard failed 3 tests; the revert
+  was verified byte-identical and the suite returned to green.
+- Static call-graph verification (comments stripped first):
+  applyFilters has exactly ONE call site in src/, in App.jsx;
+  <BacktestPage> receives the identifier destructured from useTrades(),
+  not the one bound by the trades memo.
+- SHA-256 manifest diff: changed-file set equals the Allowed Files list
+  exactly — no more, no fewer.
+
+Manual, in a running browser against a real authenticated account with
+74 trades — all six scenarios passed:
+- (a) applying a saved filter narrowed the header subtitle and all six
+  pages to 16, matching the chip's "16 of 74 trades".
+- (b) Backtest isolation, MEASURED: with the filter active, the
+  Backtest builder previewed "Matches 74 of 74 trades" and a
+  no-condition backtest recorded 74 matched trades while the UI showed
+  16.
+- (c) deleting the source saved filter left the chip and counts
+  unchanged — snapshot semantics confirmed.
+- (d) a filter matching nothing rendered "0 of 74 trades" with every
+  page showing its empty state; no crashes, no console errors.
+- (e) ✕ restored the 74-trade baseline.
+- (f) with the market filter set to Forex, applying then clearing a
+  group returned to the Forex-filtered total with Forex still selected.
+
+Scenario (f) used the market filter rather than the account filter the
+phase definition named: the verification account has a single account,
+so an account filter could not narrow and the assertion would have been
+vacuous. Same class of global-bar filter, identical property under
+test. Recorded as a data-driven substitution, not a spec change.
+
+---
+
+## Exit Criteria
+
+- [x] selectVisibleTrades() lives in calculations/visibleTrades.ts,
+      imports nothing from hooks/components/pages/services/sync, and is
+      the only place the lens is computed.
+- [x] Predicate diff empty apart from the permitted differences.
+- [x] Applying a saved filter narrows all six pages — verified in a
+      running browser.
+- [x] Chip shows name, "N of M trades", and a working ✕; the zero case
+      renders "0 of M trades" and every page shows its empty state.
+- [x] ✕ clears only the active group; global bar filters survive.
+- [x] Backtest isolation proven by measurement.
+- [x] Static call-graph verification passed both checks.
+- [x] Identity guarantee proven by test, and that test proven to fail
+      under mutation.
+- [x] Applying is snapshot-based.
+- [x] filterEngine.ts has automated coverage — it had none before.
+- [x] Each slice's tests were written and passing before the next slice
+      began.
+- [x] Manifest diff equals the Allowed Files list exactly.
+- [x] Zero changes to test config, package.json, docs/ (during
+      implementation), any existing calculations module, or any page.
+- [x] npm run verify green: 0 errors, exactly 7 warnings, all tests
+      passing.
+- [x] Every behavior in scope has an automated test or a recorded
+      runtime measurement.
+
+All exit criteria passed. Phase 22 is closed.
+
+---
+
+## Approved Decisions
+
+See docs/ARCHITECTURE_DECISIONS.md.txt, AD-016 (new, this phase).
+AD-001 through AD-015 unchanged, not reopened.
+
+---
+
+## Known Risks
+
+Introduced by this phase:
+
+- Low/Medium: fixed-threshold analyses — notably pages/Insights.tsx —
+  now run against arbitrarily small filtered samples. Its thresholds
+  and messages carry identical visual confidence at 3 trades as at 300.
+  A foreseeable consequence of making the trade set user-narrowable;
+  no minimum-sample guard exists. Out of scope for this phase.
+- Low: the chip's "N of M" denominator is the TOTAL unfiltered count,
+  so when an account or market filter is also active the ratio
+  understates how much of the reduction came from the chip's own
+  filter. Behaviorally correct, cosmetically imprecise. Observed
+  directly during manual scenario (f).
+
+Carried forward, unchanged and unrelated:
+
+- Medium: onIndexedDbBlocked has no subscriber (G-3, Phase 6h).
+  Unreachable at DATABASE_VERSION = 1, confirmed still 1.
+- Low/Medium items from Phase 6g-2/6h (stopLeaderElection cannot
+  interrupt an executing callback; local-persistence notice
+  read-failure labelling).
+- The 7 pre-existing lint warnings.
+
+---
+
+## Repository Statistics (measured at phase close)
+
+- src/ files: 155
+- .ts files: 75 · .tsx files: 70 · .test.ts files: 6
+- Tests: 61 passing across 6 files
+- Production build: 994 modules transformed
+- tsc: 0 errors · eslint: 0 errors, 7 warnings
+
+Note on the historical "985 modules" figure: it was recorded during
+Backtesting Foundation, while the backtest code was still unreachable
+from the runtime import graph. The Backtesting UI phase then wired 8
+modules in (→ 993), and Phase 22 adds exactly 1 (→ 994). Earlier
+CHANGELOG entries retain 985 because it was accurate on their date.
+
+---
+
+## Next Phase
+
+Not yet selected — requires the standard re-derivation-and-approval
+workflow before any scope is set.
+
+Recommended candidate: AI Insights Layer. Phase 22 was sequenced ahead
+of it deliberately, and the reason now holds concretely: an AI feature
+needs a defined subset of trades to reason about, and FilterGroup is
+now that subset object — one concept the user can view through,
+backtest, and (in a future phase) ask questions about. Establishing the
+single composed filtering pipeline first also removes the pressure for
+an AI layer to grow its own trade-selection logic, which would violate
+Playbook §3.
+
+Alternative candidate, smaller: wire components/trade/TradeReview.tsx.
+It remains the project's second dead-end capability — a user can define
+checklist templates and custom fields in Settings but cannot apply them
+to any trade, because TradeReview.tsx has zero importers. Narrower in
+value than the AI layer and more intrusive (it requires modifying
+TradeForm.tsx or TradeRow.tsx and adding a persistence decision), but
+it closes a visible gap.
+
+Neither is approved. Also still open and unscoped: Prop Firm Tracker
+and Position Size Calculator (never migrated from the original app),
+and Sync Engine enablement (built, flagged off).

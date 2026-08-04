@@ -1,0 +1,53 @@
+{
+  "compilerOptions": {
+    // ── Target ────────────────────────────────────────────
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+
+    // ── Module ────────────────────────────────────────────
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+
+    // ── TypeScript behaviour ───────────────────────────────
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    // ── JSX ───────────────────────────────────────────────
+    "jsx": "react-jsx",
+
+    // ── Strictness ────────────────────────────────────────
+    // Using "strict" mode but NOT "noUnusedLocals" / "noUnusedParameters"
+    // during migration — many existing .js files will trigger those.
+    // Re-enable them once migration is complete.
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // ── Allow JS files ────────────────────────────────────
+    // Needed so Phase 1 .js files and existing app coexist
+    // with new .ts files during migration.
+    "allowJs": true,
+    "checkJs": false,
+
+    // ── Path aliases ──────────────────────────────────────
+    // Must mirror vite.config.js resolve.alias exactly.
+    "baseUrl": ".",
+    "paths": {
+      "@/*":             ["./src/*"],
+      "@components/*":  ["./src/components/*"],
+      "@pages/*":        ["./src/pages/*"],
+      "@hooks/*":        ["./src/hooks/*"],
+      "@services/*":     ["./src/services/*"],
+      "@calculations/*": ["./src/calculations/*"],
+      "@constants/*":    ["./src/constants/*"],
+      "@contexts/*":     ["./src/contexts/*"],
+      "@apptypes/*":     ["./src/types/*"],
+      "@sync/*":         ["./src/sync/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,255 @@
+# Trading Journal AI – Engineering Playbook
+
+Version: 1.0
+
+---
+
+# 1. Project Philosophy
+
+## Primary Goal
+
+Preserve correctness over speed.
+
+Every migration must preserve business behavior exactly unless explicitly approved.
+
+Correctness always takes priority over implementation speed.
+
+---
+
+# 2. Scope Discipline
+
+Only modify files explicitly approved.
+
+If another file becomes necessary:
+
+STOP.
+
+Explain why.
+
+Wait for approval.
+
+Never expand scope silently.
+
+---
+
+# 3. Architecture Rules
+
+Never bypass the Resolver.
+
+Never duplicate business logic.
+
+Maintain a single source of truth.
+
+Avoid temporary shortcuts.
+
+Avoid hidden state.
+
+Avoid parallel implementations.
+
+Prefer extension over replacement.
+
+---
+
+# 4. Behavior Preservation
+
+Behavior must remain identical unless explicitly approved.
+
+Preserve:
+
+- Business logic
+- LocalStorage compatibility
+- Existing APIs
+- Calculation outputs
+- Data model
+- Migration semantics
+
+---
+
+# 5. Stop Conditions
+
+Immediately stop if:
+
+- New file required
+- Architecture change required
+- Specification ambiguity
+- Scope expansion
+- Breaking public API
+- Behavior cannot remain identical
+- Unexpected dependency discovered
+
+Do not continue after reporting.
+
+---
+
+# 6. Verification Requirements
+
+Every implementation must prove:
+
+- TypeScript status
+- Build status
+- Runtime status
+- Behavior parity
+- Migration correctness
+- No regressions
+- No new circular dependencies
+- No scope violations
+- No hidden changes
+
+Verification must contain evidence.
+
+Never assumptions.
+
+---
+
+# 7. Reporting Format
+
+Always end every implementation with:
+
+- Summary
+- Files Changed
+- Verification
+- Remaining Risks
+- Open Questions
+- Next Recommended Step
+
+---
+
+# 8. Code Quality
+
+- No dead code
+- No commented-out code
+- No TODO unless explicitly requested
+- No duplicated logic
+- Prefer existing utilities
+- Keep changes minimal
+
+---
+
+# 9. Documentation
+
+Every architectural decision must include:
+
+- Reason
+- Tradeoff
+- Alternatives Considered
+- Why Rejected
+
+---
+
+# 10. Review Policy
+
+Never assume.
+
+Always verify.
+
+Evidence beats confidence.
+
+If uncertain:
+
+STOP.
+
+Explain.
+
+Ask.
+
+Never guess.
+
+---
+
+# 11. Current Project Constraints
+
+- React + TypeScript
+- Offline-first
+- Resolver Architecture
+- Atomic Storage Cutover
+- No behavior regressions
+- No silent migrations
+- Backward compatibility required
+
+Status as of Phase 6g-2 (COMPLETE): Resolver Architecture and Atomic
+Storage Cutover are no longer aspirational — both are implemented and
+verified. The Resolver (services/localDatabase.ts) is live and routes
+every read/write for trades/accounts/lists/settings/cursors; the cutover
+(services/storageCutover.ts) is wired end-to-end behind its own
+independent flag (VITE_STORAGE_CUTOVER_ENABLED), gated on an
+authenticated user and leader election, sharing the existing Web Lock.
+Both remain OFF by default in every real environment until explicitly
+enabled. See docs/ARCHITECTURE_DECISIONS.md.txt (AD-004 through AD-013)
+for the permanent decisions behind this, and docs/CURRENT_PHASE.md.txt
+for what remains open.
+
+---
+
+# 12. Phase Rules
+
+Each phase must be:
+
+- Self-contained
+- Reversible (when possible)
+- Fully verified
+- Documented
+- Completed before the next phase
+- No overlapping unfinished work
+
+---
+
+# 13. Token Efficiency
+
+Avoid repeating previous analyses.
+
+Reuse verified conclusions.
+
+Do not reopen closed architectural decisions unless new evidence exists.
+
+Do not reverify unchanged code.
+
+Verify only affected areas.
+
+---
+
+# 14. Communication Style
+
+Separate:
+
+- Facts
+- Inferences
+- Unknowns
+- Required Approvals
+
+Never hide uncertainty.
+
+---
+
+# 15. Phase Completion Criteria
+
+A phase is complete only if:
+
+- All approved work is finished.
+- Verification passed.
+- Documentation updated.
+- Remaining risks documented.
+- Reviewer approved.
+
+---
+
+# 16. Engineering Principles
+
+Correctness > Speed
+
+Architecture > Convenience
+
+Evidence > Assumptions
+
+Minimal Change > Large Refactor
+
+No Silent Behavior Changes
+
+---
+
+# 17. Definition of Done
+
+- Implementation Complete
+- Verification Complete
+- Documentation Updated
+- Architecture Decisions Updated
+- Current Phase Updated

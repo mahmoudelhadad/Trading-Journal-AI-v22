@@ -1,0 +1,1514 @@
+# Architecture Decisions
+
+---
+
+# AD-001
+
+## Title
+
+Resolver is the single source of truth.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+YYYY-MM-DD
+
+---
+
+## Context
+
+...
+
+---
+
+## Decision
+
+...
+
+---
+
+## Consequences
+
+...
+
+---
+
+## Alternatives Considered
+
+...
+
+---
+
+## Rejected Alternatives
+
+...
+
+---
+
+## Spec References
+
+...
+
+---
+
+## Revisit Only If
+
+...
+
+---
+
+# AD-002
+
+...
+
+---
+
+# AD-003
+
+...
+
+---
+
+# AD-004
+
+## Title
+
+Independent storage-cutover feature flag (VITE_STORAGE_CUTOVER_ENABLED).
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+Leader election originally lived exclusively inside startSyncEngine(),
+itself gated behind VITE_SYNC_ENGINE_ENABLED. The §13 Step 6 storage
+cutover also requires leader election (sub-step 0: "elected by the same
+Web Lock that governs ongoing sync"). Reusing the Sync Engine's flag
+would have made it impossible to roll out the LocalStorage -> IndexedDB
+migration without also enabling real cloud sync network activity against
+the user's Supabase project.
+
+---
+
+## Decision
+
+Introduce a second, independent flag, VITE_STORAGE_CUTOVER_ENABLED, read
+by isStorageCutoverEnabled() (services/syncEngineSetup.ts). Defaults to
+OFF. Governs only whether the cutover is registered as a leader
+callback; has no effect on the Sync Engine.
+
+---
+
+## Consequences
+
+- The two rollout decisions (storage medium vs. cloud sync) can be made
+  independently.
+- Both flags can enable leader election, which must still resolve to
+  exactly one Web Lock acquisition — enforced structurally by
+  startLeaderElection()'s shared idempotent guard (AD-005), not by this
+  flag itself.
+- An operator can enable the cutover for a cohort without those users'
+  data ever leaving the device.
+
+---
+
+## Alternatives Considered
+
+- Reuse VITE_SYNC_ENGINE_ENABLED for both. Rejected: couples two
+  unrelated rollout decisions, and the spec's only feature-flag
+  recommendation (§13 Step 5's "gate Step 5 behind a feature flag") is
+  scoped to Step 5 only; §15.8 assigns Step 6 a different mitigation
+  (the completion-marker/verify/restart protocol), not a flag.
+
+---
+
+## Rejected Alternatives
+
+Single shared flag — rejected per above.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §13 Step 6 sub-step 0; §13 Step 5's rollout
+note; §15.8.
+
+---
+
+## Revisit Only If
+
+The two rollout tracks are later judged safe to merge (e.g. once both
+have shipped to 100% for some time), or a real deployment need arises to
+tie them together.
+
+---
+
+# AD-005
+
+## Title
+
+Leader election extracted from the Sync Engine into a standalone
+coordination layer.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+AD-004 requires the cutover to acquire leadership independently of the
+Sync Engine, but §5.4 and §13 sub-step 0 both require exactly one Web
+Lock acquisition per tab regardless of how many subsystems need
+leadership.
+
+---
+
+## Decision
+
+src/sync/syncEngine.ts exposes startLeaderElection(options) /
+stopLeaderElection(), a coordination-only layer: it registers a callback,
+ensures the Cross-Tab Coordinator's coordinatorStart() has run exactly
+once (via an idempotent guard), and returns. It creates no Scheduler, no
+periodic timer, no Online Monitor, no online/visibilitychange/dirty-ping
+listener, performs no network I/O, and does not touch the Sync Engine's
+own `started`/`engineDeps` state. startSyncEngine() itself now registers
+its own "app start" trigger through this same layer.
+
+---
+
+## Consequences
+
+- Any number of subsystems (today: the cutover and the Sync Engine) can
+  request leadership; the browser still grants exactly one Web Lock.
+- Registration order is load-bearing and is now a documented contract:
+  callbacks fire in registration order, each awaited before the next.
+- stopSyncEngine() now internally calls stopLeaderElection(); a caller
+  using leader election without the Sync Engine can still tear down
+  independently.
+
+---
+
+## Alternatives Considered
+
+- A second, parallel Web Lock name for the cutover. Rejected: directly
+  violates "the same Web Lock" (sub-step 0) and would allow two
+  independent leaders on one tab-set simultaneously.
+- Leave leader election inside startSyncEngine() and have the cutover
+  call startSyncEngine() with a no-op dependency set. Rejected: would
+  spin up a real SchedulerCore and its triggers merely to piggyback on
+  leadership, contradicting the Sync Engine's own idempotent
+  single-instance discipline (§5.4) and doing real work the cutover does
+  not need.
+
+---
+
+## Rejected Alternatives
+
+Both alternatives above — rejected per stated reasons.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §5.3, §5.4, §13 Step 6 sub-step 0.
+
+---
+
+## Revisit Only If
+
+A third subsystem needs leadership and the current registration-order
+contract proves insufficient to express its ordering requirements.
+
+---
+
+# AD-006
+
+## Title
+
+Set-based idempotent leader-callback registration.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+contexts/AuthContext.tsx's effect re-runs whenever the Supabase `session`
+object identity changes (e.g. on every token refresh). Without
+idempotent registration, each re-run would register the cutover callback
+again, and — depending on dispatch timing — could execute it more than
+once.
+
+---
+
+## Decision
+
+leaderCallbacks changed from an Array to a Set, keyed by callback
+reference. startLeaderElection() checks `leaderCallbacks.has(callback)`
+before adding; a duplicate registration is a complete no-op. A Set's
+iteration order matches insertion order, so registration ordering is
+preserved without extra bookkeeping.
+
+---
+
+## Consequences
+
+- Registering the same function reference any number of times executes
+  it exactly once.
+- Callers that want idempotency MUST pass a stable, module-scope
+  function reference — an inline arrow is a new reference on every call
+  and defeats the dedupe. contexts/AuthContext.tsx's
+  runCutoverAsLeader is declared at module scope specifically for this
+  reason; this constraint is documented at the call site.
+
+---
+
+## Alternatives Considered
+
+- A boolean "already registered" flag per caller, managed by each
+  caller. Rejected: pushes the responsibility out to every call site
+  instead of guaranteeing it centrally.
+- Dedupe by a caller-supplied string key instead of function identity.
+  Rejected: adds a second thing callers must get right (a unique,
+  stable key) for no benefit over reference identity, which is already
+  free in JavaScript.
+
+---
+
+## Rejected Alternatives
+
+Both above — rejected per stated reasons.
+
+---
+
+## Spec References
+
+None directly (implementation detail); supports AD-005's coordination
+layer and SYNC_ARCHITECTURE_SPEC.md §5.4's "must be idempotent"
+discipline.
+
+---
+
+## Revisit Only If
+
+A caller genuinely needs to register logically-different callbacks that
+happen to share a function reference (not currently possible in this
+codebase's usage).
+
+---
+
+# AD-007
+
+## Title
+
+Epoch-based cancellation of queued leader callbacks.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+stopLeaderElection() resetting the shared dispatchChain variable only
+replaces the module's reference to it — a chain already built continues
+running to completion independently. Testing proved a callback queued
+behind a slow one still executed after stopLeaderElection() had
+returned. This phase's scope explicitly forbids introducing any new
+locking or synchronization primitive (e.g. AbortController).
+
+---
+
+## Decision
+
+A plain integer, dispatchEpoch, incremented by stopLeaderElection().
+Each enqueue captures the epoch in effect at the moment it is queued;
+the wrapper re-checks it immediately before invoking the callback and
+is a no-op if the epoch has since changed.
+
+---
+
+## Consequences
+
+- Every callback still queued (not yet started) at the moment
+  stopLeaderElection() is called becomes a guaranteed no-op.
+- No new synchronization primitive, no lock, no abort mechanism —
+  satisfies the explicit constraint for this phase.
+- Disclosed, accepted residual: a callback already EXECUTING when
+  stopLeaderElection() is called cannot be interrupted. True
+  cancellation of in-flight work would require an abort mechanism that
+  does not exist in this codebase (MIGRATION_NOTES.md AN-015 item 3) and
+  which this phase was explicitly forbidden from adding.
+
+---
+
+## Alternatives Considered
+
+- AbortController per callback. Rejected: explicitly forbidden by this
+  phase's scope ("Do NOT introduce any new synchronization primitive").
+- Clearing leaderCallbacks alone, without an epoch. Rejected: does not
+  address an already-queued (already-chained) callback, since the
+  chain's `.then()` continuations are already scheduled independently
+  of the Set.
+
+---
+
+## Rejected Alternatives
+
+AbortController — rejected, out of scope by explicit instruction.
+
+---
+
+## Spec References
+
+None directly. Interacts with, but does not attempt to fully solve,
+SYNC_ARCHITECTURE_SPEC.md §3.5 step 1's abort requirement (AN-015 item 3,
+still deferred in full).
+
+---
+
+## Revisit Only If
+
+AN-015 item 3 (abort in-flight requests on sign-out) is taken up as its
+own approved phase — at that point the residual "cannot interrupt an
+executing callback" gap should be re-evaluated against whatever abort
+mechanism is introduced.
+
+---
+
+# AD-008
+
+## Title
+
+Stamping strategy: one implementation, two call sites, before the
+cutover's snapshot.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+SYNC_ARCHITECTURE_SPEC.md §13 sub-step 2 requires the copy to be "in the
+Step 3 shape (sync metadata included)". main.jsx already calls
+runSyncMetadataStampingPass() unconditionally on every load. Moving that
+call out of main.jsx (a literal reading of an earlier instruction) would
+have stopped stamping from running at all whenever the cutover flag is
+off — a real regression for any user with legacy unstamped data,
+since loadLists()/loadSettings() return null for unstamped singletons
+and their hooks fall back to hard defaults.
+
+A first implementation attempt placed the cutover's stamping call
+immediately before the FINAL readSource() (the re-check), matching an
+initial literal instruction. Testing proved this placement provided no
+real safety net: every IndexedDB business store keys on syncId, so an
+unstamped record fails the copy phase (`putAll`) before that placement
+is ever reached.
+
+---
+
+## Decision
+
+Keep main.jsx's call exactly where it is (preserves marker-absent
+behavior identically). Additionally call the SAME single
+runSyncMetadataStampingPass() implementation (src/sync/stamp.ts) inside
+runStorageCutover(), immediately BEFORE the initial readSource()
+snapshot — i.e. before the copy phase, not after it. The function is
+idempotent at record granularity (skips already-stamped records, writes
+nothing if nothing changed), so on the common path (main.jsx already
+stamped before React rendered) the cutover's call is a no-op.
+
+---
+
+## Consequences
+
+- The cutover now has a genuine safety net for legacy unstamped data
+  reaching it by any other route than main.jsx's normal startup call —
+  verified directly: previously-failing unstamped trades/accounts/
+  lists/settings now complete successfully, fully stamped.
+- Exactly one stamping implementation exists (src/sync/stamp.ts); no
+  logic duplicated.
+- main.jsx's call becomes a pure no-op read after the cutover has run
+  (marker present) — explicitly accepted as fine, since it performs no
+  write in that state.
+
+---
+
+## Alternatives Considered
+
+- Stamp only inside the cutover, remove main.jsx's call. Rejected:
+  regression while the cutover flag is off — see Context.
+- Stamp immediately before the re-check (first attempt). Rejected:
+  proven unreachable for unstamped data by direct testing (copy phase
+  fails first).
+- A stamping-specific flag/condition gating whether the cutover stamps.
+  Rejected: explicitly forbidden ("Do not add any flags, conditions").
+
+---
+
+## Rejected Alternatives
+
+Both non-chosen placements above — rejected per stated reasons, the
+second one only after being implemented and empirically disproven.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §13 Step 3 (the original stamping pass), §13
+Step 6 sub-step 2 ("in the Step 3 shape").
+
+---
+
+## Revisit Only If
+
+The stamping pass's own idempotency contract (src/sync/stamp.ts) ever
+changes, or a future phase decides main.jsx's call should be removed for
+an unrelated reason (e.g. an async pre-render gate is introduced
+elsewhere).
+
+---
+
+# AD-009
+
+## Title
+
+Source re-check strategy: Option A (re-read and restart), no lock.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+Between the cutover's LocalStorage snapshot and the completion-marker
+write, another tab's hooks could write new data to LocalStorage. Once
+the marker exists, IndexedDB becomes authoritative and that write would
+never be copied — a silent, permanent data loss (Principle 1). A Web
+Lock-based write barrier (Option B, previously discussed) would close
+this window completely but was explicitly rejected as introducing new
+application-visible behavior (delaying or blocking follower-tab writes
+during the cutover) not described anywhere in the specification.
+
+---
+
+## Decision
+
+Immediately before writing the completion marker, re-read LocalStorage
+via the existing readSource() and compare it (via JSON.stringify) against
+the original snapshot. If they differ, restart the entire attempt from
+the top (discard IndexedDB business data, re-stamp, re-snapshot,
+re-copy, re-verify), bounded at MAX_CUTOVER_ATTEMPTS (3). If attempts are
+exhausted, return a distinct {kind:'source_changed'} outcome; the marker
+is not written, and the cutover simply retries on the next load — the
+same effect as any other non-completing outcome (sub-step 5).
+
+---
+
+## Consequences
+
+- Narrows the unsafe window from "the entire copy+verify duration" to
+  "the time between the re-check read and the marker write" — verified
+  directly: a concurrent write injected mid-copy was detected, the
+  cutover restarted, and the write is present in the final state.
+- Does not fully close the window (a write landing in the few
+  instructions between the re-check and the marker write is still
+  possible in principle) — disclosed, not solved, per the explicit
+  decision to use Option A only.
+- No new synchronization primitive of any kind; cannot block or delay a
+  writer in any tab, so it introduces no new application behavior.
+- Bounded attempts prevent an unbounded retry loop under continuous
+  concurrent writing — verified: exhaustion after 3 attempts leaves
+  LocalStorage untouched and the marker unwritten.
+
+---
+
+## Alternatives Considered
+
+- Option B: a Web Lock-based write barrier requiring writers to
+  acquire a shared lock. Rejected: introduces new application behavior
+  (writers can be delayed/blocked during a cutover) with no basis in
+  the specification, and was explicitly excluded from this phase's
+  scope.
+- Unbounded retry until the source stabilizes. Rejected: no bound on
+  worst-case duration under continuous writing; the bounded-then-defer
+  approach achieves the same eventual outcome (sub-step 5's normal
+  retry-on-next-load) without an open-ended loop.
+
+---
+
+## Rejected Alternatives
+
+Web Lock write barrier (Option B) — rejected, out of scope by explicit
+instruction. Unbounded retry — rejected per stated reasons.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §13 Step 6 sub-step 5 (restart-from-scratch
+semantics); Principle 1 (no silent data loss).
+
+---
+
+## Revisit Only If
+
+The residual, disclosed micro-window between re-check and marker write
+is later judged unacceptable, at which point Option B (or an equivalent
+mechanism) would need its own dedicated review and approval.
+
+---
+
+# AD-010
+
+## Title
+
+Local-persistence notice architecture (§3.4 blocking notice).
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+SYNC_ARCHITECTURE_SPEC.md §3.4 requires two conditions be surfaced to
+the user as "a distinct, blocking notice — never folded into the
+ordinary 'sync pending' indicator": a failed local write (in particular
+quota exhaustion, which must direct the user toward a corrective action
+rather than offering a retry that cannot succeed), and a tab whose
+IndexedDB connection was force-closed by a version upgrade in another
+tab (which must prompt a reload).
+
+---
+
+## Decision
+
+A single last-event bus, services/localPersistenceEvents.ts, is the
+sole aggregation point for both conditions. It self-wires to the
+already-existing G-1 subscription API
+(onIndexedDbVersionChangeForcedClose) at module load, so importing it is
+sufficient to forward every future force-close. A single React
+component, components/LocalPersistenceNotice.tsx, subscribes and renders
+a Modal (not a toast, since §3.4 says "blocking") with condition-specific
+content: quota failures get corrective guidance and no retry button;
+other save failures name their source; a force-closed connection offers
+only a Reload action and cannot be backdrop-dismissed (since every
+subsequent local operation throws until reload). Built and wired in full
+in one phase rather than as a placeholder revisited later.
+
+---
+
+## Consequences
+
+- Exactly one notice can be active at a time — a second failure while
+  one is displayed overwrites rather than queues, since only one is
+  ever actionable.
+- 6g-2 required zero changes to this layer; wiring the cutover's own
+  failure modes into it (a later phase) only requires new callers of
+  reportLocalPersistenceFailure.
+- Verified end-to-end with a genuine browser versionchange event (not a
+  simulated call), and with a real IndexedDB write failure surfacing the
+  correct errorKind.
+
+---
+
+## Alternatives Considered
+
+- A generic single-message notice with no condition-specific content.
+  Rejected: fails §3.4's "must direct the user toward a corrective
+  action" requirement for the quota case specifically.
+- Build only what BD-1/BD-2 needed immediately, defer the rest.
+  Rejected in favor of building the full structure once, since a
+  partial build would have been revisited and reshaped in the very next
+  phase — explicitly rejected as an unnecessary intermediate
+  architecture.
+
+---
+
+## Rejected Alternatives
+
+Generic single-message notice — rejected per stated reason.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §3.4 (both the quota-exhaustion and the
+version-upgrade requirements).
+
+---
+
+## Revisit Only If
+
+A third distinct local-persistence condition needs surfacing (at which
+point the last-event, single-notice model should be re-examined for
+whether it still suffices), or read failures need their own distinct
+notice kind (currently labelled identically to save failures — a known,
+disclosed, low-severity gap).
+
+---
+
+# AD-011
+
+## Title
+
+backupService migration: four sections routed through the resolver.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+backupService.ts composes ten LocalStorage-backed sections
+(trades, accounts, lists, settings, propRules, savedFilters,
+checklistTemplates, checklistCompletions, customFieldDefs,
+customFieldValues) into one backup/restore format. Four of these
+(trades, accounts, lists, settings) are the sections migrated to the
+resolver in Phase 6f; once the cutover flip occurs, reading them via
+storage.js directly would silently read the frozen LocalStorage rollback
+copy instead of the authoritative store.
+
+---
+
+## Decision
+
+Only the four resolver-backed sections import their load/save functions
+from services/localDatabase.js; the other six remain on services/
+storage.js unchanged. BackupSection.load/save widened to
+MaybePromise<...> (reusing src/sync/localStores.ts's existing type, not
+a new one). buildBackup/restoreBackup and every function built on them
+(downloadBackup, restoreBackupFromJSON, createRestorePoint,
+restoreFromPoint, maybeCreateAutoBackup) became async; every consumer
+(BackupPanel.tsx, SyncConflictReview.tsx, useRestorePoints.ts,
+RestorePointsPanel.tsx, SettingsModal.tsx) updated to await and handle
+rejections. listRestorePoints/deleteRestorePoint remain synchronous —
+RESTORE_POINTS was never part of the Step 6 migration.
+
+---
+
+## Consequences
+
+- Backup/restore reflects whichever local backend is currently
+  authoritative, verified in both directions (LocalStorage sourcing
+  with the marker absent; IndexedDB sourcing with it present, proven by
+  deliberately diverging the two stores in a test).
+- Backup format (version, section keys, structure) is unchanged —
+  verified byte-for-byte across the migration.
+- The pre-existing AN-014 contravariance defect in
+  BackupSection.save's type (6 of the project's 7 known tsc errors) was
+  left unfixed, per explicit scope — it is a type-level issue only, no
+  runtime effect.
+
+---
+
+## Alternatives Considered
+
+- Migrate all ten sections. Rejected: six were never part of the Step 6
+  storage medium migration; touching them has no basis in the approved
+  scope and would have expanded the file list well beyond what was
+  authorized.
+- Fix the AN-014 defect while touching these functions' signatures
+  anyway. Rejected: explicitly out of scope; a separate, dedicated
+  decision.
+
+---
+
+## Rejected Alternatives
+
+Both above — rejected per stated reasons.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §13 Step 6 sub-step 5 (resolver routing); Phase
+20 audit note in backupService.ts (why RESTORE_POINTS/RECOVERY_BIN are
+excluded from BACKUP_SECTIONS, unrelated to and unchanged by this
+migration).
+
+---
+
+## Revisit Only If
+
+The AN-014 type defect is taken up as its own approved fix, or a future
+phase migrates any of the six remaining sections to a different storage
+medium.
+
+---
+
+# AD-012
+
+## Title
+
+loadFailed safeguard in the four hydration hooks.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+The four hooks' hydration effects had no rejection handling on the load
+path (only the save path was covered by BD-1). A rejected load left
+`hydrated` false forever — App.jsx's gate has no timeout — stranding the
+user on the loading spinner permanently, with an unhandled promise
+rejection. Simply completing hydration on failure was considered, but a
+naive version of that fix would persist the placeholder state (empty
+array / DEFAULT_ACCOUNTS / mergeLists(null) / DEFAULT_SETTINGS) over the
+user's real stored data on the very next persist-effect run — turning a
+transient read error into permanent, silent data loss.
+
+---
+
+## Decision
+
+Each hook's hydration effect gained `.catch()` (reports the failure via
+reportLocalPersistenceFailure and sets a new loadFailed flag) and
+`.finally()` (always sets hydrated, so the UI gate always releases). The
+persist effect's guard was extended from `if (!hydrated) return;` to
+`if (!hydrated || loadFailed) return;` — so a failed read completes
+hydration (no permanent spinner) but permanently suppresses persistence
+for that hook instance (no data loss), until the component remounts.
+
+---
+
+## Consequences
+
+- Hydration always completes, verified directly (including under
+  StrictMode's double-invoke).
+- No scenario found, across refresh/login/logout/retry/StrictMode/
+  marker-absent/marker-present, where the placeholder state overwrites
+  real user data — verified with a forced read failure against real
+  data in both stores, followed by a post-failure edit: neither store
+  was altered.
+- Disclosed consequence: a post-failure edit is accepted and displayed
+  in the UI but silently lost on the next reload, since persistence
+  stays suppressed. Judged the correct trade-off versus the alternative
+  (destroying real data).
+- Unreachable while the cutover marker is absent: LocalStorage's
+  storageGet/storageSet swallow every error and cannot reject, so
+  loadFailed can never become true in that configuration — verified,
+  zero behavior change in the default state.
+
+---
+
+## Alternatives Considered
+
+- Retry the load automatically on failure. Rejected: not requested,
+  and would need its own backoff/retry-limit design; deferred rather
+  than added speculatively.
+- Leave hydrated false forever on failure (original bug). Rejected:
+  permanent spinner, the defect being fixed.
+- Complete hydration on failure without suppressing persistence.
+  Rejected: proven to destroy real data in the first implementation
+  attempt's design review.
+
+---
+
+## Rejected Alternatives
+
+Both non-chosen behaviors above — rejected per stated reasons.
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md §3.4 (failure must be surfaced, not silent);
+Principle 1 (no silent data loss).
+
+---
+
+## Revisit Only If
+
+A retry-on-failure UX is explicitly requested, or the local-persistence
+notice gains a distinct "read failed" kind (AD-010's revisit condition)
+that changes what loadFailed should trigger.
+
+---
+
+# AD-013
+
+## Title
+
+Per-callback failure isolation in the leader dispatch chain.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-02
+
+---
+
+## Context
+
+enqueueLeaderCallback originally chained callbacks directly:
+`dispatchChain = dispatchChain.then(() => callback())`. A rejecting
+callback left dispatchChain permanently rejected; every later-registered
+callback, chained onto the same promise, was silently skipped by
+ordinary promise short-circuiting, and the rejection went unhandled. In
+6g-2, the cutover registers before the Sync Engine — a failing cutover
+callback would have silently prevented the engine's first cycle from
+ever running.
+
+---
+
+## Decision
+
+Each callback is wrapped in its own try/catch inside the chained
+function: `dispatchChain = dispatchChain.then(async () => { try {
+await callback() } catch (err) { console.error(...) } })`. The chain
+itself can therefore only ever resolve, never reject, so no later
+callback can be skipped by a failure. Logged via console.error, not
+routed through reportLocalPersistenceFailure — a leader-callback failure
+is not a local-persistence condition, and routing it there would
+mislabel an unrelated error as a storage/quota problem.
+
+---
+
+## Consequences
+
+- One failing callback can never prevent later callbacks from running —
+  verified directly: 3 callbacks with the middle one throwing all ran,
+  in order, exactly once each, with zero unhandled rejections.
+- Combined with AD-007's epoch check (which runs first inside the same
+  wrapper), a queued-but-cancelled callback is skipped before the
+  try/catch is even reached, and a callback that both runs and fails is
+  still isolated from its neighbors.
+- A callback's own failure is only diagnostic-logged; the callback's
+  owner remains responsible for any user-facing handling of its own
+  failure (e.g. the cutover's own result object already carries failure
+  detail via CutoverOutcome).
+
+---
+
+## Alternatives Considered
+
+- Promise.allSettled over all callbacks instead of a serial chain.
+  Rejected: would lose the registration-order guarantee (AD-005),
+  which the cutover's must-settle-before-the-engine's-first-cycle
+  requirement depends on.
+- Let a failing callback's error propagate to the caller of
+  startLeaderElection(). Rejected: leadership is granted asynchronously,
+  often long after startLeaderElection() has already returned, so there
+  is no caller left to propagate to.
+
+---
+
+## Rejected Alternatives
+
+Both above — rejected per stated reasons.
+
+---
+
+## Spec References
+
+None directly (implementation robustness); supports AD-005's ordering
+guarantee and SYNC_ARCHITECTURE_SPEC.md §13 Step 6's requirement that a
+failed cutover never destabilize anything else.
+
+---
+
+## Revisit Only If
+
+A caller needs to be notified synchronously of a leader-callback
+failure (no such need identified as of this phase).
+
+---
+
+# AD-014
+
+## Title
+
+Backtest results are unsynced local data, keyed by result ID, not a new synced table.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-03
+
+---
+
+## Context
+
+Gap-analysis finding G-4 (Backtesting Foundation readiness review):
+before any backtest result is persisted, the codebase needs a decided
+answer for which of the two existing local-persistence classes it
+belongs to.
+
+Class A — synced business data (trades, accounts, lists, settings,
+sync_cursors): accessed exclusively through the resolver
+(services/localDatabase.ts), participates in sync, tombstones,
+conflict detection (Tier 1/2), and the Step 6 atomic cutover.
+SYNC_ARCHITECTURE_SPEC.md's four non-negotiable guarantees (no silent
+loss/revert/local-overwrite/cloud-overwrite) apply in full.
+
+Class B — unsynced local data (savedFilters, recoveryBin,
+tradeReview settings): reads/writes services/storage.js directly,
+bypassing the resolver entirely. SYNC_ARCHITECTURE_SPEC.md's own
+stated scope already excludes this class from sync: "Does not cover
+... Recovery Bin, Restore Points, Import/Export."
+
+A backtest result is a deterministic simulation output (per the
+accepted architecture blueprint: hypothetical, never persisted trade
+data, never conflated with real L2 records) — regenerable at any time
+from its inputs (the strategy definition and the trade history it ran
+against). It carries no independent source-of-truth value the way a
+manually-entered trade does: if lost, it is rerun, not un-recoverable.
+
+---
+
+## Decision
+
+Backtest results are Class B: unsynced local data, read/written
+directly via services/storage.js (or its IndexedDB equivalent, should
+one be added later for this class specifically), never through
+services/localDatabase.ts's resolver. They do NOT become a sixth
+IndexedDB business store, do NOT carry SyncMetadata (§3.2), do NOT
+participate in the Push/Pull Managers, Tier 1/2 conflict detection, or
+the Step 6 cutover's copy/verify/completion-marker sequence.
+
+Each backtest result is keyed by an independently generated result ID
+(see calculations/idGenerator.ts's existing nextId(), already used for
+FilterCondition/FilterGroup/SavedFilter/RestorePoint IDs — the same
+"locally generated, never needs cross-device identity" pattern this
+decision extends to backtest results) — not a syncId, and not a _tid
+(the trade-specific identity `enrichTrades()` assigns).
+
+---
+
+## Consequences
+
+- SYNC_ARCHITECTURE_SPEC.md ("Design frozen") is not reopened: adding
+  a Class B data type requires no change to the spec, the resolver,
+  the Sync Engine, or the Step 6 cutover — all of which are scoped to
+  Class A only.
+- IndexedDB stays at DATABASE_VERSION = 1 for this reason specifically:
+  no new object store is required for backtest results, so this
+  decision alone does not trigger the schema-bump risk tracked
+  separately as gap-analysis finding G-3 (onIndexedDbBlocked has no
+  subscriber). A future, independent decision to add local IndexedDB
+  storage for backtest results would still need G-3 resolved first,
+  same as any other future store addition would.
+- A backtest result does not sync to a second device. A user switching
+  devices does not see prior backtest runs — acceptable, since a
+  result is reproducible on demand from its inputs, which (trades,
+  strategy definitions) DO sync normally as Class A data.
+- Backtest results are explicitly excluded from Backup & Restore
+  (services/backupService.ts's BACKUP_SECTIONS) for the same reason
+  Recovery Bin is excluded there today (documented in that file's own
+  Phase 20 audit note) — regenerable derived output, not source data.
+  A future phase MAY choose to add it for user convenience; that is a
+  separate, smaller decision than this one and does not require
+  revisiting this AD.
+
+---
+
+## Alternatives Considered
+
+- Class A (synced business data, full resolver + sync integration).
+  Rejected: drags a regenerable, hypothetical-by-definition value into
+  the frozen sync spec's guarantees, conflict model, and cutover
+  sequence — a heavy commitment for output whose whole purpose (per
+  the accepted architecture blueprint) is to stay clearly separated
+  from real trade records, not travel through the same identity and
+  conflict machinery they do.
+- A third, new persistence class specific to backtesting. Rejected as
+  premature: Backtesting Foundation has not started, so no concrete
+  requirement (result size, retention policy, query pattern) exists
+  yet to justify a new class instead of reusing Class B, which already
+  fits every currently-known property of a backtest result (local,
+  regenerable, independently-keyed, no cross-device requirement).
+
+---
+
+## Spec References
+
+SYNC_ARCHITECTURE_SPEC.md's explicit scope exclusion ("Does not cover
+... Recovery Bin, Restore Points, Import/Export"); gap-analysis
+findings G-3 and G-4 (Backtesting Foundation readiness review,
+2026-08-03); the accepted architecture blueprint's Analytics <-
+Backtesting <- AI layering (Backtesting output is hypothetical,
+distinct from L2 real trade records).
+
+---
+
+## Revisit Only If
+
+Backtest results need to sync across a user's own devices (a concrete
+product requirement, not a convenience guess), or grow large/frequent
+enough that direct LocalStorage access (Class B's current mechanism)
+becomes impractical and a dedicated IndexedDB store is justified on
+its own merits — at which point G-3 must be resolved first, since that
+would be this project's first real schema bump.
+
+---
+
+# AD-015
+
+## Title
+
+FilterGroup is the strategy definition for v1 backtesting;
+BacktestResult composes existing L3 types and excludes the equity
+curve.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-03
+
+---
+
+## Context
+
+AD-014 decided backtest results' persistence class (Class B) but
+explicitly deferred what a backtest result is a result OF: "A third,
+new persistence class specific to backtesting. Rejected as premature:
+Backtesting Foundation has not started, so no concrete requirement
+(result size, retention policy, query pattern) exists yet." The
+approved Backtesting Foundation Phase Definition resolved that open
+question, and its pre-implementation review surfaced one Blocking
+issue with the type as first drafted: it persisted a full per-trade
+equity-curve array (EquityPoint[]), fully recomputable and unbounded in
+size relative to matched-trade count. Both were resolved before Step 1
+of implementation and are recorded here.
+
+---
+
+## Decision
+
+1. No new persisted "strategy definition" type was introduced.
+   FilterGroup (calculations/filterEngine.ts, Phase 14 — already
+   tested, already has its own Class-B persisted form via SavedFilter)
+   is reused directly and snapshotted (not live-referenced) into each
+   BacktestResult. v1 backtesting means applying this FilterGroup to a
+   user's own real historical trades and running the matched subset
+   through the existing L3 analytics layer.
+2. BacktestResult (types/backtest.ts) composes six existing L3 output
+   types directly — TradeSummary, DrawdownResult, StreakResult,
+   AverageStreaks, LongestStreaks, CoreAnalytics — plus filterGroup,
+   startingCapital, matchedTradeIds, tradeCount, id, name, createdAt.
+   The full equity curve (EquityPoint[]) is not part of this type; it
+   is recomputable on demand from matchedTradeIds + startingCapital
+   via buildEquitySequence().
+3. Stored results are capped at 50, oldest evicted first, enforced in
+   hooks/useBacktests.ts's runBacktest().
+
+---
+
+## Consequences
+
+- SYNC_ARCHITECTURE_SPEC.md, the resolver, and the Sync Engine remain
+  untouched — Class B in full, per AD-014.
+- Strategy definitions (FilterGroup, via SavedFilter) are Class B,
+  unsynced (AD-011) — a saved filter used for a backtest does not
+  carry over to a second device automatically, the same as any other
+  saved filter.
+- BacktestResult does not persist the equity curve. A future consumer
+  needing to chart one recomputes buildEquitySequence() on demand,
+  consistent with AD-014's framing of a backtest result as regenerable
+  from its inputs.
+
+---
+
+## Alternatives Considered
+
+- A new, separately-persisted BacktestInput/"strategy definition"
+  type. Rejected: FilterGroup already exists, is already tested (Phase
+  14), and already has its own Class-B persisted form (SavedFilter) —
+  a parallel type would duplicate it for no benefit.
+- Persisting the full equity curve for future charting convenience.
+  Rejected: recomputable, and unbounded in size relative to matched-
+  trade count.
+
+---
+
+## Rejected Alternatives
+
+Both above — rejected per stated reasons.
+
+---
+
+## Spec References
+
+AD-011 (SavedFilter is Class B, unsynced); AD-014 (Class B backtest
+results — deferred the strategy-definition-shape question this AD
+resolves).
+
+---
+
+## Revisit Only If
+
+Backtest results need to sync across a user's own devices (reopens
+AD-014's own Class B decision, per its stated Revisit Only If), or a
+future phase has a concrete requirement to persist the equity curve
+rather than recompute it.
+
+---
+
+# AD-016
+
+## Title
+
+The global viewing lens is a pure calculations-layer function
+(selectVisibleTrades); Backtest is exempt from it and always consumes
+allTrades.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-04
+
+---
+
+## Context
+
+Phase 14 built the Advanced Filters capability — a condition engine
+(calculations/filterEngine.ts), a persistence hook
+(hooks/useAdvancedFilters.ts) and a builder UI — but wired it into no
+page. Its "Apply" action was literally an empty function in
+SettingsModal. Meanwhile every page in the application read a single
+derived array produced by useFilters.applyFilters, which understood
+only two dimensions: account and market.
+
+Phase 22 connected the two. That required deciding WHERE the composed
+filtering rule lives, in what ORDER the filters compose, what "apply"
+means with respect to the saved filter it came from, and whether the
+Backtest page participates in the lens at all.
+
+---
+
+## Decision
+
+1. THE RULE LIVES IN calculations/, NOT IN THE HOOK.
+   calculations/visibleTrades.ts exports a pure function:
+
+     selectVisibleTrades(trades, accFilter, mktFilter, activeGroup)
+
+   It contains the account/market predicate moved verbatim out of
+   useFilters.applyFilters, followed by the existing applyFilterGroup()
+   when activeGroup is non-null. useFilters() retains only React state
+   and delegates; it no longer decides what the application displays.
+   The module imports only from calculations/ and types/ — never from
+   hooks/, components/, pages/, services/ or sync/.
+
+2. COMPOSITION ORDER IS FIXED: account → market → group.
+
+3. SINGLE SOURCE OF TRUTH. selectVisibleTrades() is the only place the
+   lens is computed. applyFilters() has exactly one call site in the
+   entire source tree (App.jsx), and no page, component, hook or test
+   re-implements the rule.
+
+4. SNAPSHOT SEMANTICS. Applying a saved filter stores
+   structuredClone(savedFilter.group) alongside its name and sourceId,
+   as ActiveFilter. The active lens is a copy, not a live reference.
+
+5. BACKTEST IS EXEMPT. pages/Backtest.tsx receives the UNFILTERED
+   allTrades array and is the one page that does not read through the
+   lens.
+
+6. THE ACTIVE FILTER IS NOT PERSISTED. It is in-memory only and resets
+   on reload, exactly like accFilter/mktFilter.
+
+7. clearActiveFilter() CLEARS ONLY THE GROUP. Account and market
+   filters survive it.
+
+---
+
+## Reason
+
+1. This is business logic, and this codebase already has a settled
+   convention for where business logic lives relative to React state:
+   calculations/backtest.ts holds computeBacktestResult() while
+   hooks/useBacktests.ts holds the state around it; the same split
+   exists for analytics, drawdown, streaks and rolling. Placing the
+   filtering rule in a hook would have made the single most
+   consequential function in the application — the one deciding what
+   every page displays — unreachable without rendering React, and would
+   have put decision logic in the layer that is supposed to hold state.
+   As a pure function it is tested directly, with no DOM and no test
+   infrastructure change.
+
+2. The three filters are a pure conjunction, so the result is
+   order-independent and the order is a free choice. It is fixed
+   anyway, for two reasons: determinism (one documented order means one
+   reviewable behavior), and cost — account and market are single
+   field comparisons that narrow cheaply, while the group evaluates
+   every condition against every surviving trade.
+
+3. Duplicating the rule is the specific failure this decision exists to
+   prevent. The next phase most likely to want its own trade-selection
+   logic is the AI layer, where "which trades should the model see" is
+   a natural place to grow a second, subtly different filter. Playbook
+   §3 forbids parallel implementations; making one function the only
+   answer means a future consumer inherits filtering instead of
+   reinventing it.
+
+4. Without the clone, deleting a saved filter would mutate or
+   invalidate what the user is currently looking at. Copying makes
+   "apply" mean a point-in-time action rather than a live subscription,
+   which is what the interaction visibly promises: the chip names a
+   filter, it does not bind to one. sourceId records provenance without
+   creating that binding.
+
+5. A stored BacktestResult records its own filterGroup as the complete
+   strategy definition (AD-015). If the global lens narrowed the input,
+   a result would have been computed over a smaller set than its own
+   filterGroup describes — silently, with nothing in the stored record
+   indicating it. The result would no longer be self-describing, and
+   two results run under different global filters would be
+   incomparable while appearing comparable. This is the strongest
+   correctness argument in the phase and is why the exemption is
+   architectural rather than incidental.
+
+6. The active filter is a viewing preference, not user data. Persisting
+   it would require a new storage key, a Class A/B decision (AD-011,
+   AD-014), and an answer for what happens when a persisted lens
+   references a saved filter the user has since deleted. Matching the
+   existing in-memory semantics of accFilter/mktFilter avoids all three
+   and keeps the phase invisible to persistence.
+
+7. The chip is attached to the strategy filter and names it. Clearing
+   more than the control names would be a surprise, and the two filter
+   surfaces are conceptually independent — the global bar answers
+   "which account/market am I looking at", the chip answers "through
+   which strategy".
+
+---
+
+## Tradeoff
+
+1. AccountFilter ('all' | string) and MarketFilter ('all' | 'forex' |
+   'futures') moved into the calculations layer with the predicate that
+   consumes them. 'all' is a presentation convention meaning "this
+   control is unset", so a pure business-logic module now carries a
+   vocabulary that originated in the filter bar. A future change to how
+   the UI represents "unset" would require editing calculations/.
+
+2. Fixing the composition order means the cost characteristics are
+   fixed too. A future filter type cheaper than the account check would
+   not automatically run first.
+
+3. selectVisibleTrades() returns the input array BY REFERENCE when
+   accFilter and mktFilter are both 'all' and activeGroup is null. This
+   is the original early-return behavior, preserved verbatim, and it
+   means the function is not uniformly "always returns a new array".
+   Callers must not mutate the result. Every filtering path does return
+   a new array.
+
+4. The clone means the active lens can drift from its source: a user
+   who edits a saved filter sees no change in the active view until
+   they re-apply it. This is deliberate but is a real discoverability
+   cost.
+
+5. The Backtest page is the one place in the application where the
+   global filter visibly does nothing, which can read as a bug to a
+   user who does not know the reason. The chip remains visible on that
+   tab, which makes the discrepancy observable rather than hidden.
+
+6. The active filter is lost on reload. A user with a habitual filter
+   must re-apply it each session.
+
+---
+
+## Alternatives Considered
+
+A. Keep the composed rule inside useFilters.ts as an exported helper.
+   REJECTED: it puts decision logic in the state layer, contradicting
+   the calculations/hooks split this codebase already follows, and
+   leaves a pure function in a module whose other exports are all
+   React-bound.
+
+B. Give selectVisibleTrades a domain-level signature
+   (accountId: string | null, market: 'forex' | 'futures' | null) with
+   the hook translating 'all' to null.
+   REJECTED: it adds a translation layer whose only purpose is
+   vocabulary purity, creates a second encoding of "unset", and moves
+   the predicate further from the verbatim form the phase required it
+   to preserve. The sentinel has been stable since Phase 2B.
+
+C. Store the active filter as a reference (sourceId only) and look the
+   group up from savedFilters on each render.
+   REJECTED: it makes the active view mutable by unrelated actions —
+   deleting the saved filter would blank the application with no
+   explanation, and editing it would silently change what the user is
+   looking at.
+
+D. Apply the global lens to the Backtest page for consistency.
+   REJECTED: see Reason 5. Consistency is the wrong objective when it
+   breaks the self-describing-result contract.
+
+E. Give the Backtest page its own copy of the filtering logic so it can
+   explicitly opt out.
+   REJECTED: a second implementation of the rule, which is exactly what
+   Decision 3 exists to prevent. Passing the unfiltered array is a
+   one-line invariant with no duplicated logic.
+
+F. Persist the active filter to LocalStorage.
+   REJECTED for this phase: see Reason 6. Revisitable — see below.
+
+---
+
+## Consequences
+
+- FilterGroup now has three uses rather than one: it is the strategy
+  definition for backtesting (AD-015), the live viewing lens (this AD),
+  and the natural scope object for any future feature that needs to
+  reason about a subset of trades.
+- Any future consumer wanting "the trades the user is looking at" calls
+  selectVisibleTrades() or reads the derived array from App.jsx. There
+  is no second answer.
+- Pages became narrower-array consumers with no code change of their
+  own. None was modified in Phase 22.
+- Fixed-threshold analyses (pages/Insights.tsx in particular) can now
+  receive arbitrarily small samples. No minimum-sample guard exists.
+  Recorded as a known risk, not addressed.
+
+---
+
+## Spec References
+
+AD-011 (SavedFilter is Class B, unsynced — the entity this lens
+applies); AD-014 (Class B backtest results); AD-015 (FilterGroup is the
+strategy definition for v1 backtesting — the decision this AD extends
+from "definition of a backtest" to "definition of a view").
+
+---
+
+## Revisit Only If
+
+- The account or market filter gains a third state (e.g. multi-select),
+  at which point the 'all' sentinel stops being expressive and
+  alternative B's translation layer becomes justified.
+- Users report losing their filter across reloads often enough to
+  justify the persistence decision deferred in Reason 6 — which would
+  reopen the Class A/B question and require an answer for a persisted
+  lens whose source filter no longer exists.
+- A future phase has a concrete requirement for the Backtest page to
+  respect the global lens, which would first have to resolve how a
+  stored BacktestResult remains self-describing (AD-015).

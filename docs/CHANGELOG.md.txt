@@ -1,0 +1,516 @@
+# Phase 22 — Global Strategy Filter
+
+Status:
+COMPLETE
+
+Summary:
+Connected the Advanced Filters capability (Phase 14) to the
+application's shared trades pipeline. Before this phase a user could
+build a multi-condition AND/OR filter, preview its match count, name
+it, save it and favorite it — and clicking "Apply" did nothing, because
+SettingsModal passed an empty function to SavedFiltersList's onApply.
+A saved FilterGroup is now an active global lens that reshapes every
+consuming page.
+
+What shipped:
+
+- GLOBAL STRATEGY FILTER. New pure L3 module calculations/
+  visibleTrades.ts exporting selectVisibleTrades(trades, accFilter,
+  mktFilter, activeGroup). It holds the account/market predicate moved
+  VERBATIM out of useFilters.applyFilters, composed with the existing
+  applyFilterGroup(). Composition order is fixed: account → market →
+  group. useFilters() keeps only state and delegates; it no longer
+  decides anything itself. applyFilters()'s signature is unchanged, so
+  App.jsx's trades memo needed no edit.
+
+- ACTIVE FILTER CHIP. FilterBar gained four additive optional props
+  (activeFilter, visibleTradeCount, totalTradeCount,
+  onClearActiveFilter) rendering the filter name, an "N of M trades"
+  count and a ✕ clear control. Deliberately NOT labelled "N matches":
+  the number is account ∩ market ∩ group, a different quantity from
+  the group's own match count shown by FilterPanel's builder preview.
+
+- SNAPSHOT SEMANTICS. Applying stores structuredClone(f.group) plus
+  the filter's name and sourceId. Deleting or editing the source
+  SavedFilter afterwards cannot change what the user is viewing.
+
+- BACKTEST ISOLATION. pages/Backtest.tsx still receives UNFILTERED
+  allTrades. A globally-filtered Backtest would silently break every
+  stored result's self-describing contract. Verified statically and by
+  runtime measurement.
+
+- SAVED FILTERS. SavedFiltersList's Apply is now live via a new
+  optional SettingsModal prop onApplyFilter, forwarded from App.jsx,
+  which sets the lens and closes the modal. The prop is optional, so
+  omitting it reproduces the previous inert behavior exactly.
+
+- EMPTY-STATE BEHAVIOR. A filter matching nothing renders the chip as
+  "0 of M trades" — the chip never hides itself — and every page falls
+  back to its own empty state. Confirmed with no crashes and no
+  console errors.
+
+- CLEAR IS SCOPED. clearActiveFilter() removes the active group only;
+  the account and market filters are untouched.
+
+Files Changed
+- calculations/visibleTrades.ts (new)
+- calculations/visibleTrades.test.ts (new)
+- calculations/filterEngine.test.ts (new)
+- calculations/index.ts (one export line)
+- hooks/useFilters.ts (active-filter state; predicate moved out;
+  applyFilters delegates)
+- components/layout/FilterBar.tsx (four optional props + chip)
+- components/settings/SettingsModal.tsx (one optional prop replacing
+  the dead onApply no-op)
+- App.jsx (owns the lens; threads chip props and onApplyFilter)
+
+Eight files, exactly matching the phase's Allowed Files list — proven
+by a SHA-256 integrity-manifest diff taken before and after, since this
+workspace is not a git repository and its filesystem timestamps were
+found unreliable in an earlier phase.
+
+Test Coverage Added
+- test count 34 → 61 (4 files → 6)
+- filterEngine.test.ts: the engine had ZERO coverage before this phase,
+  which promoted it from "used by the Backtest page only" to "runs on
+  every page". Covers all 7 operators, AND/OR, empty-condition groups,
+  a default untouched condition row, and absent-field behavior.
+- visibleTrades.test.ts: the identity guarantee (with activeGroup null,
+  output matches the pre-phase filtering across all four account/market
+  combinations), composition, order-independence and purity.
+- Mutation spot-check: removing the `activeGroup === null` guard failed
+  3 tests; the revert was verified byte-identical against a pre-mutation
+  copy and the suite returned to green. A test that cannot fail proves
+  nothing.
+- Both new test files are plain .test.ts running under the EXISTING
+  vitest configuration (environment: 'node'). No test infrastructure
+  was added or changed: no jsdom, no testing-library, no setup file,
+  no config edit, no new dependency.
+
+Verification
+- typecheck: 0 errors
+- lint: 0 errors, exactly 7 pre-existing warnings (not 6, not 8 — the
+  unused useMemo import in useFilters.ts was deliberately left in
+  place, since removing it would fail the baseline gate)
+- test: 61/61 passing
+- verify: green
+- build: succeeds, 994 modules
+- Static call-graph verification: applyFilters has exactly ONE call
+  site in src/ (App.jsx), comments stripped before matching;
+  <BacktestPage> receives the identifier destructured from useTrades(),
+  not the one bound by the trades memo.
+- Predicate-move evidence: the moved account/market predicate diffed
+  against a pre-move source snapshot is byte-identical after whitespace
+  and parameter-rename normalization; the early return differs only by
+  the added `activeGroup === null` conjunct.
+
+Manual Verification (completed)
+Performed in a running browser against a real authenticated account
+with 74 trades. All six scenarios passed:
+- (a) applying a saved filter narrowed the header subtitle and all six
+  pages (Dashboard, Raw, Equity, Calendar, Strategy, Insights) to 16,
+  matching the chip's "16 of 74 trades".
+- (b) BACKTEST ISOLATION, MEASURED: with that filter still active, the
+  Backtest strategy builder previewed "Matches 74 of 74 trades" and a
+  no-condition backtest recorded 74 matched trades — the full
+  unfiltered history — while the UI remained at 16.
+- (c) deleting the source saved filter left the chip and all counts
+  unchanged, confirming snapshot semantics.
+- (d) a filter matching nothing rendered "0 of 74 trades" with every
+  page showing its empty state; no crashes, no console errors.
+- (e) ✕ restored the 74-trade baseline.
+- (f) with the market filter set to Forex, applying and then clearing a
+  group filter returned to the Forex-filtered total with Forex still
+  selected — clearing is scoped to the group only.
+
+Known Blockers
+- None.
+
+Notes
+- The "985 modules" figure carried by earlier entries was already stale
+  before this phase: it was recorded during Backtesting Foundation,
+  while the backtest code was still unreachable from the runtime import
+  graph. The Backtesting UI phase then wired 8 modules in (→ 993), and
+  this phase adds exactly 1 (visibleTrades.ts) → 994. Historical
+  entries below are left as written; they were accurate on their date.
+- Scenario (f) used the market filter rather than the account filter
+  the phase definition named, because the verification account has a
+  single account and an account filter therefore could not narrow. Same
+  class of global-bar filter, identical property under test. Recorded
+  as a data-driven substitution, not a specification change.
+- In that dataset the Green set and the Forex set are the same 16
+  trades, so (f) did not additionally exercise a group narrowing within
+  an already-bar-narrowed set at runtime. That composition is covered
+  by visibleTrades.test.ts.
+
+Next Phase
+Not yet selected. See docs/CURRENT_PHASE.md.txt.
+
+---
+
+# Backtesting UI
+
+Status:
+COMPLETE
+
+Summary:
+Backfilled entry — this phase completed but was never recorded here,
+which was discovered during Phase 22's pre-implementation review. It
+wired the Backtesting Foundation (calculations/backtest.ts +
+hooks/useBacktests.ts, both built and tested a phase earlier and
+reachable from nowhere) into a real, navigable Backtest tab across 22
+atomic steps.
+
+Files Added
+- pages/Backtest.tsx
+- components/backtest/BacktestRunner.tsx
+- components/backtest/BacktestResultsList.tsx
+- components/backtest/BacktestResultView.tsx
+- components/backtest/BacktestComparison.tsx
+- components/backtest/index.ts
+- components/charts/BacktestComparisonChart.tsx
+- App.jsx (new 🧪 Backtest tab; receives UNFILTERED allTrades)
+
+Notes
+- This phase moved the runtime module count from 985 to 993 by making
+  the previously-unreachable backtest modules reachable.
+- It added no automated tests. That gap is partly addressed by Phase
+  22, which covers filterEngine.ts and the shared filtering pipeline
+  but does not cover the backtest components themselves.
+- Details of this entry were reconstructed from the source tree during
+  Phase 22, not from a contemporaneous report.
+
+---
+
+# Backtesting Foundation
+
+Status:
+COMPLETE
+
+Summary:
+Stood up the L4 backtesting engine (calculations/backtest.ts) as a
+pure composition of existing L3 analytics functions, its BacktestResult
+type (types/backtest.ts), Class-B persistence (services/storage.js,
+per AD-014), and a CRUD hook (hooks/useBacktests.ts) mirroring
+useAdvancedFilters.ts. v1 backtesting applies an existing FilterGroup
+(Phase 14) to real historical trades — no synthetic trade generation,
+no new statistical formula, no UI wiring (see AD-015). The phase's sole
+pre-implementation Blocking finding (persisting the full equity-curve
+array) was resolved before any code was written: BacktestResult stores
+only the derived drawdown summary, not the raw per-trade sequence,
+which is recomputable on demand from matchedTradeIds + startingCapital.
+
+Files Changed
+- types/backtest.ts (new)
+- calculations/backtest.ts (new)
+- calculations/backtest.test.ts (new)
+- calculations/index.ts (one export line)
+- services/storage.js (additive: STORAGE_KEYS.BACKTEST_RESULTS,
+  loadBacktestResults, saveBacktestResults)
+- hooks/useBacktests.ts (new)
+
+Verification
+- tsc baseline: 0 errors throughout (unchanged from Phase 6h)
+- lint: 0 errors, 7 pre-existing warnings, 0 new
+- test: 26 -> 34 (8 new characterization tests, composition-focused,
+  not arithmetic)
+- verify (typecheck+lint+test chained): green
+- build: unaffected (985 modules, same pre-existing chunk-size
+  warning) — module count unchanged since nothing in the app's runtime
+  import graph consumes the new code yet
+- Zero circular dependencies (import-edge review; no new tooling
+  installed)
+- Zero references to localDatabase.ts, backupService.ts,
+  SYNC_ARCHITECTURE_SPEC.md, or any Sync Engine / Atomic Storage
+  Cutover file anywhere in the new code (content-level grep, not
+  filesystem-timestamp-based — timestamps proved unreliable in this
+  workspace)
+- DATABASE_VERSION confirmed unchanged (1)
+
+Known Blockers
+- None. The phase's one Blocking finding (equitySequence persistence)
+  was resolved before implementation began.
+
+Next Phase
+Not yet selected. Wiring Backtesting Foundation into a page's UI is
+the most obvious candidate, per the useAdvancedAnalytics/
+useAdvancedFilters precedent — requires its own scoping pass before
+any code is written.
+
+---
+
+# Phase 6h
+
+Status:
+COMPLETE
+
+Summary:
+Backtesting Foundation readiness fixes (G-1, G-2, G-4 from the
+2026-08-03 gap analysis). Repointed the analytics layer's input type
+off the sync layer's RawTrade onto persistence-independent
+RawTradeContent (G-1/G-5). Stood up the project's first verification
+harness: working lint (previously had no config, did not run),
+typecheck script, and 26 vitest characterization tests for the
+calculation layer (G-2). Decided and recorded backtest results as
+unsynced Class B local data (AD-014, G-4). Fixed the 6 pre-existing
+backupService.ts tsc errors (G-7) as a byproduct, since G-2's verify
+gate cannot pass cleanly with a non-zero tsc baseline.
+
+Files Changed
+- calculations/tradeCalc.ts
+- calculations/tradeCalc.test.ts (new)
+- calculations/drawdown.test.ts (new)
+- calculations/streaks.test.ts (new)
+- services/backupService.ts
+- components/ErrorBoundary.tsx
+- components/auth/ForgotPasswordForm.tsx
+- components/auth/SignUpForm.tsx
+- pages/Insights.tsx
+- package.json
+- .eslintrc.cjs (new)
+- vitest.config.ts (new)
+- docs/ARCHITECTURE_DECISIONS.md.txt (AD-014)
+
+Verification
+- tsc baseline: 7 -> 0
+- lint: did not run -> 0 errors, 7 pre-existing warnings
+- test: 0 -> 26/26 passing
+- verify (typecheck+lint+test chained): green
+- build: unaffected (985 modules, unchanged warnings)
+
+Known Blockers
+- None. G-3 (onIndexedDbBlocked subscriber) remains open but dormant —
+  AD-014 confirms this phase does not trigger a schema bump.
+
+Next Phase
+Backtesting Foundation (not yet scoped)
+
+---
+
+# Phase 6f
+
+Status:
+COMPLETE
+
+Summary:
+Offline-first hydration completed.
+Resolver migration completed.
+Circular dependency removed.
+CRUD verified.
+
+Files Changed
+- useTrades.ts
+- useAccounts.ts
+- useLists.ts
+- useSettings.ts
+- syncStores.ts
+- localDatabase.ts
+- App.jsx
+
+Verification
+- Zero cycles
+- Baseline errors = 7
+- Hydration OK
+- CRUD OK
+- LocalStorage preserved
+- StrictMode verified
+- IndexedDB untouched
+
+Known Blockers
+- G-2
+- stamp.ts
+- backupService
+
+Next Phase
+Phase 6g-1
+
+---
+
+# Phase 6g-1
+
+Status:
+COMPLETE
+
+Summary:
+Independent storage-cutover feature flag introduced (decoupled from the
+Sync Engine flag). Leader election extracted from the Sync Engine into a
+standalone coordination layer sharing the same Web Lock. BD-1 (save-path
+rejection handling) and BD-2 (IndexedDB version-change / force-close
+notification) implemented. A new local-persistence notice
+(event bus + UI component) built and wired. `IndexedDbCallError.kind`
+propagation added so failures can be classified. `backupService` migrated
+to read/write the four resolver-backed sections (trades, accounts,
+lists, settings) via the resolver instead of raw LocalStorage, with the
+remaining six sections left untouched.
+
+Files Changed
+- src/services/syncEngineSetup.ts (new independent flag: isStorageCutoverEnabled)
+- src/sync/syncEngine.ts (leader election extracted: startLeaderElection / stopLeaderElection)
+- src/services/indexedDbStores.ts (IndexedDbCallError.kind propagation; all throw sites migrated)
+- src/services/localPersistenceEvents.ts (new — event bus for local-persistence notices)
+- src/components/LocalPersistenceNotice.tsx (new — §3.4 blocking notice UI)
+- src/main.jsx (mount LocalPersistenceNotice)
+- src/hooks/useTrades.ts (BD-1: save-path .catch -> reportLocalPersistenceFailure)
+- src/hooks/useAccounts.ts (BD-1, same pattern)
+- src/hooks/useLists.ts (BD-1, same pattern)
+- src/hooks/useSettings.ts (BD-1, same pattern)
+- src/services/backupService.ts (4 of 10 sections migrated to resolver; buildBackup/restoreBackup and dependents made async)
+- src/hooks/useRestorePoints.ts (create/restore now async)
+- src/components/settings/BackupPanel.tsx (await + error handling)
+- src/components/sync/SyncConflictReview.tsx (await downloadBackup)
+- src/components/settings/RestorePointsPanel.tsx (async onCreate/onRestore + error handling)
+- src/components/settings/SettingsModal.tsx (prop types updated to async)
+
+Architectural Decisions
+- Storage-cutover rollout flag kept independent of the Sync Engine flag (see AD-004).
+- Leader election extracted into its own coordination layer (see AD-005).
+- backupService's AN-014 contravariance defect left unfixed — out of scope, unchanged since Phase 20B.
+
+Verification
+- tsc baseline maintained: 7 errors (all pre-existing, none in touched files)
+- Zero circular dependencies (137 files scanned)
+- Marker-absent parity: resolver targets LocalStorage, IndexedDB business
+  counts {0,0,0,0,0} throughout, notice never appears, zero unhandled
+  rejections
+- BD-1 verified: real IndexedDB failure -> notice raised with correct
+  errorKind; quota case shows corrective guidance, no fake retry
+- BD-2 verified: a genuine browser versionchange event (not simulated)
+  triggers the reload prompt end-to-end
+- backupService verified both directions: marker absent -> all 10
+  sections read/write LocalStorage, byte-identical format (version 1);
+  marker present -> buildBackup() correctly sources the 4 migrated
+  sections from IndexedDB, diverging from a deliberately stale
+  LocalStorage copy (proves genuine routing, not a cached path)
+- Full CRUD (add/edit/delete) verified for trades, accounts, lists,
+  settings, and cursors, in both backend configurations
+
+Known Blockers / Issues Carried Forward
+- Issue #1 (High, later fixed in 6g-2 pre-fix): hydration load path had
+  no rejection handling — could strand the UI on the loading spinner
+  permanently once IndexedDB becomes authoritative.
+- Issue #2 (Medium, still open): onIndexedDbBlocked has zero subscribers.
+  Unreachable at DATABASE_VERSION = 1; becomes live on the first schema
+  bump.
+- Issue #3 (High, later fixed in 6g-2 pre-fix): a rejecting leader
+  callback poisoned the shared dispatch chain, silently skipping every
+  later-registered callback.
+- Issue #4 (Low): forward-reference comment in syncEngine.ts pointed to
+  wiring that did not exist yet at the time (resolved once 6g-2 wired
+  AuthContext.tsx).
+- Issue #5 (Low): documentation not updated contemporaneously (addressed
+  in this update).
+- stamp.ts still ran only from main.jsx; not yet part of the cutover
+  sequence (addressed in 6g-2).
+
+Next Phase
+Phase 6g-2
+
+---
+
+# Phase 6g-2
+
+Status:
+COMPLETE
+
+Summary:
+Two pre-existing architectural issues from the 6g-1 audit (idempotent
+callback registration, queued-callback cancellation) fixed as
+initialization work, then the storage cutover itself wired end-to-end:
+stamping folded into the cutover sequence (in addition to, not instead
+of, the existing main.jsx call), the approved write-window mitigation
+(Option A: re-read-and-restart, no lock) implemented, and the cutover
+registered through startLeaderElection() behind its own independent
+flag. One mid-implementation architectural conflict was found, reported,
+and resolved by explicit decision before continuing (stamping order
+relative to the initial snapshot).
+
+Files Changed
+- src/sync/syncEngine.ts
+  - leaderCallbacks changed from Array to Set (idempotent registration by reference)
+  - dispatchEpoch counter added (queued-callback cancellation on stop)
+  - per-callback try/catch already present from 6g-1, retained
+- src/services/storageCutover.ts
+  - runSyncMetadataStampingPass() invoked immediately before the initial
+    readSource() snapshot (moved here after the conflict below was
+    resolved)
+  - source re-check added immediately before the marker write: re-reads
+    LocalStorage, compares against the original snapshot, restarts the
+    whole attempt (discard -> stamp -> snapshot -> copy -> verify) on any
+    difference, bounded at 3 attempts
+  - new CutoverOutcome variant: 'source_changed'
+- src/contexts/AuthContext.tsx
+  - cutover registered via startLeaderElection(), gated on
+    isStorageCutoverEnabled() and a non-null session, independent of
+    isSyncEngineEnabled()
+  - cutover registers before startSyncEngine() (ordering is load-bearing:
+    the cutover must settle before the engine's first cycle)
+  - stopLeaderElection() added to the sign-out path alongside
+    stopSyncEngine()
+- src/main.jsx: unchanged (explicitly preserved, per approved design)
+
+Architectural Decisions
+- Set-based idempotent callback registration (see AD-006)
+- Epoch-based callback cancellation (see AD-007)
+- Stamping strategy: same single implementation, two call sites, stamp
+  runs before the cutover's snapshot (see AD-008)
+- Source re-check strategy: Option A only, no lock (see AD-009)
+
+Mid-Implementation Conflict (found, reported, resolved)
+Initial placement called stamping immediately before the FINAL
+readSource() (the re-check), per the literal first instruction. Testing
+proved this unreachable for its own purpose: IndexedDB business stores
+key on syncId, so an unstamped record fails the copy phase before
+stamping ever runs. Reported before continuing; resolved by explicit
+approval to move the call before the INITIAL snapshot instead. Re-tested
+completely after the move.
+
+Verification
+- Pre-fix (idempotency): same callback reference registered 3x ->
+  executed exactly once; Web Lock acquisitions: 1
+- Pre-fix (cancellation): callback queued behind a slow one -> suppressed
+  after stopLeaderElection() was called mid-flight
+- Ordering + isolation retained after both fixes: 3 callbacks, one
+  throwing, executed in registration order, later callbacks unaffected
+- Unstamped legacy data (previously failed with a keyPath error):
+  cutover now completes; all 4 stores stamped/wrapped; business fields
+  preserved
+- Already-stamped data: completes on the first attempt, no restart
+- Source re-check: a concurrent write injected mid-copy was detected;
+  cutover restarted and the concurrent write is present in the final
+  IndexedDB state (would otherwise have been silently lost)
+- Restart path verified via the above
+- Exhaustion path: source changed on every attempt -> bounded at 3 ->
+  {kind:'source_changed'}, marker NOT written, LocalStorage untouched
+- Stamping verified in both call sites: one implementation (stamp.ts),
+  two callers (main.jsx, storageCutover.ts)
+- Marker-absent parity (both flags OFF, the production default):
+  resolver targets LocalStorage, backupService reads/writes all 10
+  LocalStorage sections unchanged, hooks hydrate and persist to
+  LocalStorage, IndexedDB business counts {0,0,0,0,0}, notice silent,
+  zero unhandled rejections
+- Scheduler/sync regression check: coordinatorStart exactly once,
+  coordinatorStop exactly once, single Web Lock acquisition even when
+  registration is repeated (simulating a token-refresh re-run), cutover
+  runs before the engine's first cycle, cutover-only configuration
+  creates no scheduler/timer/network activity
+- tsc baseline maintained: 7 errors (unchanged locations)
+- Zero circular dependencies (137 files)
+
+Known Issues (none blocking)
+- Low: stopLeaderElection() cannot interrupt an already-EXECUTING
+  callback (only queued ones). No abort mechanism exists in this
+  codebase (AN-015 item 3); benign for the cutover since its only
+  durable write is the completion marker, written solely after a
+  successful copy+verify.
+- Low: read failures are still labelled "save failed" in the
+  local-persistence notice (carried over from 6g-1, unchanged).
+- Medium: onIndexedDbBlocked still has no subscriber. More reachable now
+  that the cutover is live, but still unreachable at
+  DATABASE_VERSION = 1.
+
+Next Phase
+Not yet selected. Candidates: a small cleanup phase for the Medium/Low
+items above, or Step 7 (VirtualizedList wiring into the Raw trade table
+— independent per SYNC_ARCHITECTURE_SPEC.md §13, "can happen at any
+point"). Selection requires the standard re-derivation-and-approval
+workflow before scope is set.

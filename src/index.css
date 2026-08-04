@@ -1,0 +1,123 @@
+/* ─── Reset ─────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ─── Root ──────────────────────────────────────────────────── */
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background: #0D1421;
+  color: #C8D6E8;
+  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Form elements ─────────────────────────────────────────── */
+select,
+input,
+textarea,
+button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+select,
+input,
+textarea {
+  background: #0D1421;
+  color: #C8D6E8;
+  border: 1px solid #243350;
+  border-radius: 6px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+select:focus,
+input:focus,
+textarea:focus {
+  border-color: #3B82F6;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* ─── Links ─────────────────────────────────────────────────── */
+a {
+  color: #60A5FA;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0D1421;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #243350;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3B82F6;
+}
+
+/* ─── Tab buttons ───────────────────────────────────────────── */
+.tab-btn {
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 9px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: #6B82A0;
+  transition: color 0.12s, background 0.12s;
+}
+
+.tab-btn.active {
+  background: #1A3A6B;
+  color: #60A5FA;
+  border-bottom-color: #3B82F6;
+}
+
+.tab-btn:hover:not(.active) {
+  color: #C8D6E8;
+  background: #111D2E;
+}
+
+/* ─── Chart backgrounds ─────────────────────────────────────── */
+.recharts-wrapper,
+.recharts-surface {
+  background: transparent !important;
+}
+
+/* ─── Checkbox styling ──────────────────────────────────────── */
+input[type="checkbox"] {
+  accent-color: #3B82F6;
+  cursor: pointer;
+}

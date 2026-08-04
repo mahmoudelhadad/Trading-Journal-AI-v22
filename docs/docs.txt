@@ -1,0 +1,31 @@
+# Decisions
+
+## 2026-08-02
+
+Decision:
+Separate Leader Election from Sync Engine.
+
+Reason:
+Storage Cutover should not require cloud sync.
+
+Status:
+Approved
+
+-------------------
+
+Decision:
+stamp.ts moves during 6g-2 only.
+
+Reason:
+Prevent unstamped lists.
+
+Status:
+Approved
+
+-------------------
+
+Decision:
+backupService migrates before marker flip.
+
+Status:
+Approved

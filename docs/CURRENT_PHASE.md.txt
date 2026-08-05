@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 24 — Recovery Factor Wiring
+Phase 25 — Insights Evidence Transparency
 
 Status:
 
@@ -14,168 +14,217 @@ COMPLETE
 
 ## Objective
 
-Make newly computed BacktestResult objects populate core.recoveryFactor
-by calling the already-existing, already-tested withRecoveryFactor()
-helper, using the drawdown computeBacktestResult() already computes.
+Make the Insights page honest about the evidence behind each card,
+without changing what any card says numerically or whether it appears.
 
-Before this phase the Backtest result card's "Recovery Factor" row
-rendered "—" permanently, and had done since Backtesting Foundation.
+Two defects, and only two. The empty state promised "at least 5 trades
+with full data", a minimum nothing enforced — rules fire at n=1, and
+the 5 existed nowhere as a constant, test, or architecture decision.
+And the page header advertised "based on N trades" above cards resting
+on much smaller populations: a setup/session/hour bucket gated at 2, a
+plan-followed subset, a paired planned/actual-R subset, or two
+different populations compared inside one sentence.
+
+Everything else about the current rule behaviour is unqualified, not
+incorrect. So this phase introduces no threshold, suppresses nothing,
+and scores nothing.
 
 ---
 
 ## Scope (as delivered)
 
-1. calculations/backtest.ts — four lines. The analytics import was
-   extended to include withRecoveryFactor; the existing inline
-   computeDrawdown(equitySequence) call was hoisted into a single
-   `const drawdown`; that same object is returned by shorthand; and
-   `core` is now
-   withRecoveryFactor(computeCoreAnalytics(matched),
-                      drawdown.maxDrawdownDollar).
-   computeDrawdown() is still called exactly ONCE, so the value feeding
-   recoveryFactor and the value stored in result.drawdown are the same
-   object and cannot diverge.
-2. calculations/backtest.test.ts — T-2 and T-3 added BEFORE the
-   production change; T-1's existing oracle updated to the composed
-   form afterwards.
+Nine string-literal replacements in pages/Insights.tsx — lines 213,
+215, 217, 218, 224, 232, 243, 256, 271 — and nothing else.
 
-Nothing else. No formula, no type, no storage, no migration.
+1. R-01 header — "Automated analysis across ${n} visible trades ·
+   individual insights may cover a smaller subset · Updated in real
+   time". Deliberately hedged with "may", so it stays true for the
+   cards genuinely backed by the whole population.
+2. R-02 empty state — "Add more trades with relevant setup, session,
+   plan, and R data to generate more insights". "Relevant", not
+   "complete": different rules use different eligible populations, so
+   a universal completeness claim would have recreated the removed
+   falsehood in new words. No number replaces the 5.
+3. R-03 Avoid Setup, R-04 Best Session, R-05 Best Entry Hour, R-06
+   Risky Hour — each gained "across ${...n} trades" for its own
+   bucket.
+4. R-07 Plan Adherence — gained both subset sizes, planYes.length and
+   planNo.length.
+5. R-08 Execution Ratio — gained "across ${execPairs.length} trades
+   with both a planned and an actual R".
+6. R-09 Planned vs Real R — names BOTH populations: planned "across
+   trades that have a planned R", actual "across all ${n} trades".
+
+Every identifier interpolated was ALREADY in scope in the same useMemo
+closure. No variable, expression, import, or type was added — which is
+what made the change provably string-only.
+
+Two cards were deliberately left untouched because they already
+disclosed their population: Best Setup (line 212) and Overall Negative
+P/L (line 247). The win-rate and avg-R cards were also left alone —
+their population is the header's n, already named per AD-017 — as were
+the streak cards, whose displayed number is the finding itself rather
+than an estimate from a sample.
 
 ---
 
 ## Files Changed
 
-Modified (2):
-- src/calculations/backtest.ts
-- src/calculations/backtest.test.ts
+Modified (1):
+- src/pages/Insights.tsx
 
 Documentation, at phase close only (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Four files, exactly matching the phase's Allowed Files list — proven by
-SHA-256 manifest diff against a 169-entry pre-flight baseline, not by
-inspection. No AD-018: this phase implements an already-established
-contract rather than making a new architectural decision (see Approved
-Decisions).
+Three files, exactly matching the frozen RFC's Allowed Files list —
+proven by SHA-256 manifest diff against a 170-entry pre-flight
+baseline, not by inspection. No AD-018: no architectural decision was
+made (see Approved Decisions).
 
 ---
 
 ## Out of Scope (respected)
 
-- No Recovery Factor formula change. It remains
-  netProfit / Math.abs(maxDrawdownDollar).
-- calculations/analytics.ts and calculations/drawdown.ts were NOT edited
-  at all. Proven by hash.
-- computeCoreAnalytics() still returns recoveryFactor: null. No drawdown
-  knowledge was moved into analytics.ts and no circular dependency was
-  introduced.
-- No change to BacktestResultView.tsx — it already rendered the field.
-- No change to CoreAnalytics or BacktestResult types.
+- No minimum sample threshold, global or per-rule. None was invented,
+  and the repository establishes none.
+- No gating, suppression, or hiding of any insight.
+- No confidence qualifier system, level, or statistical score.
+- No trigger, threshold, formula, title, card type/colour, or ordering
+  change. The values 0.6, 0.4, 0.5, 0, 2, 3, -0.5 and 10 are all
+  unchanged.
+- No filtering, hook, or analytics-input change. calculations/
+  analytics.ts, rolling.ts, streaks.ts and visibleTrades.ts were not
+  edited at all.
 - No storage key, no DATABASE_VERSION bump (still 1), no migration, no
-  backfill, no recomputation of stored results.
-- No change to hooks, services, or persistence.
-- No test-infrastructure change, no new dependency.
-- Insights Sample-Size Discipline (Phase 25) and the rule-12 issues
-  found during re-derivation were not touched.
-- The 7 pre-existing lint warnings and KI-001..KI-005 remain.
-- calculations/backtest.ts's stale composition header was deliberately
-  NOT corrected — see Known Risks.
+  backfill, no dependency.
+- No test file, and no component-test infrastructure — no jsdom, no
+  testing-library.
+- Rule 12's mixed-population comparison and its avgPlanned <= 0 type
+  selector were NOT corrected; R-09 discloses the mismatch in words
+  only.
+- The dead avgR !== null guard, Best Setup's inline win-rate
+  denominator under AD-017, the Best/Avoid and Best/Risky same-bucket
+  behaviour, the unused bestDay/worstDay computation, and the
+  conditional hook call with its eslint suppressions were all left
+  untouched.
+- The 7 pre-existing lint warnings remain, including the two in
+  Insights.tsx itself.
 
 ---
 
 ## Verification (all performed)
 
 Automated:
-- npm run typecheck — 0 errors, at every step.
+- git diff --check — clean.
+- npm run typecheck — 0 errors.
 - npm run lint — 0 errors, exactly 7 pre-existing warnings.
-- npm run test — 114 -> 116 passing, still across 8 files.
+- npm run test — 116/116 passing across 8 files, unchanged.
 - npm run verify — full chain green.
-- npm run build — succeeds, 994 modules (a composition change adds no
+- npm run build — succeeds, 994 modules (a string change adds no
   module to the runtime import graph).
-- git diff --check — clean, no whitespace errors.
+- All six gates were re-measured on the untouched tree at pre-flight
+  before any edit, and matched the Phase 24 documented figures exactly,
+  so the baseline was measured rather than assumed.
 
 Evidence-based, not inspection-based:
-- RED-THEN-GREEN. T-2 was written and run BEFORE any production change.
-  It failed with "expected null to be 4" at backtest.test.ts:158. The
-  failure landed on the LAST of four assertions, proving the three
-  before it passed — tradeCount 5, maxDrawdownDollar 50, netProfit 200 —
-  which confirms both inputs to the Recovery Factor were already correct
-  at runtime and isolates the red result to the missing composition
-  rather than to a fixture error. At that checkpoint analytics.ts,
-  drawdown.ts and backtest.ts were all verified byte-identical to
-  pre-flight.
-- Frozen-file proof: analytics.ts SHA-256
-  868053B3F9D5A7788ABFAA78D7FD17A7D13E94EC1C015AD0873CE99EDB21703D
-  and drawdown.ts SHA-256
-  F7E62E29D070582E766A2CCF593AEA9594403A9C7912D826BBCD48D8848F1711
-  are identical at pre-flight and at close.
-- Phase 23 contract intact: computeCoreAnalytics(...).recoveryFactor
-  === null still holds; analytics.test.ts is unmodified and green.
-- SHA-256 manifest diff: the 169-entry pre-flight manifest of src/ +
-  docs/ + root config differs at close on exactly the 4 Allowed Files.
+- V-diff PASS. git diff --numstat reported exactly "9 9" — nine line
+  replacements, nothing inserted or removed; 277 lines before and
+  after. No operator, condition, ternary, threshold literal, push
+  order, function call, import, hook call or dependency array appears
+  in the diff. The type: selectors (lines 222, 230, 241) and the Best
+  Setup push (line 212) appear only as unchanged context.
+- V-trigger PASS. A line-by-line comparison against the HEAD blob gave
+  the differing line numbers as exactly 213 215 217 218 224 232 243
+  256 271. Reconstructing the file by restoring ONLY those nine lines
+  from HEAD reproduced the pre-flight SHA-256 byte-for-byte:
+    pre-flight    ec99006cfe2ee99290903bae93dd5fad9b45eff6384dcaac1bb0d23a54aca9f9
+    reconstructed ec99006cfe2ee99290903bae93dd5fad9b45eff6384dcaac1bb0d23a54aca9f9
+    post-change   330d132a7c9656c5d6940ef2be420c98abfdebf929c51c3e5dedf369937df29a
+  Every other byte of the file is therefore provably untouched.
+- V-scope PASS. The 170-entry pre-flight manifest differed, after the
+  production edit, at exactly one entry: src/pages/Insights.tsx.
+- The two Insights.tsx lint warnings (149:11 'bestDay', 150:11
+  'worstDay') survived at the same line numbers. Holding at 7 rather
+  than falling to 5 is positive evidence the deferred dead-computation
+  finding was not opportunistically fixed.
+- Line endings unchanged (LF before and after).
 
-Manual, in a running browser against a real authenticated account with
-74 trades, after a hard reload to guarantee post-fix code:
-- V-1 PASS: a NEW result, "P24 Recovery Check", previewed "Matches 74 of
-  74 trades" and recorded 74 trades, Max Drawdown -$17,383 (-53.2%),
-  Net Profit +$5,286.75, Recovery Factor 0.30 — numeric, not "—". That
-  Net Profit equals the Dashboard "Net P/L" from Phase 23's V-14 to the
-  cent, confirming the match-all captured the whole journal.
-- V-2 PASS: Max Drawdown renders at 0 decimals, so the underlying value
-  lies in [17382.5, 17383.5). Carried through
-  netProfit / |maxDrawdownDollar| that interval is
-  [0.3041246, 0.3041421], whose entire range renders as 0.30. No
-  alternative denominator fits (maxDrawdownPercent 99.38,
-  startingCapital 0.53, ending equity 0.35), and the unsigned result
-  confirms Math.abs is in force.
-- V-3 PASS: the pre-existing snapshot "V12 Label Check", timestamp
-  8/5/2026 12:59:09 PM — created hours before this phase's change —
-  still displays "—". Same journal, same strategy, same trades; only the
-  computation time differs. Class B snapshots were neither migrated nor
-  recomputed on read.
-- V-4 NOT RUNTIME-OBSERVED: the zero-drawdown case is covered by T-3
-  only. Producing it live would have required altering journal data or
-  hunting for an all-winning subset filter, both outside the frozen RFC,
-  which designated V-4 opportunistic.
+Manual, in a running browser against the real authenticated account
+with 74 trades, after a hard reload. The "before" captures were
+recorded against the untouched baseline BEFORE any edit was delegated,
+so the comparison is a true diff rather than a recollection.
+- V-1 PASS: unfiltered, 74 trades. 12 cards before, 12 after,
+  identical order, every pre-existing number unchanged, no card added
+  or removed, types/colours/emoji unchanged.
+- V-2 PASS: narrowed to 16 of 74 via the EXISTING saved filter
+  "Green f". 8 cards before, 8 after, identical order, every
+  pre-existing number unchanged, no card added or removed. Applying
+  the filter is a pure in-memory lens and wrote nothing.
+- V-3 PASS: newly disclosed counts checked wherever reachable — Avoid
+  IFVG 15, Best Session NY am 74, Best Entry Hour 10:00 11, Risky Hour
+  8:00 13, Execution Ratio 67; and under the lens, Best Session 16,
+  Best Entry Hour 9:00 9, Execution Ratio 16. The two Best Session
+  figures are cross-consistent at 74 of 74 and 16 of 16.
+- V-4 PASS: the header count matched the active visible population in
+  both captures — 74 and 16, the latter agreeing with the FilterBar
+  chip's "16 of 74".
+- V-6 PASS: card ordering unchanged in both captures.
+- V-5 NOT RUNTIME-OBSERVED: R-02's EmptyState needs at least one trade
+  AND zero insights, a state not safely reachable from existing
+  journal data or filters. Reaching it would have required altering
+  journal data, which the frozen RFC forbids. Recorded as
+  diff-verified only.
+- R-07 NOT RUNTIME-OBSERVED: the Plan Adherence card rendered in
+  NEITHER population, because the journal holds no planFollowed
+  Yes/No pair. Its interpolations are type-checked and its identifiers
+  verified in scope, but the card has not been seen to render.
+  Recorded as diff-verified only.
 
 ---
 
 ## Exit Criteria
 
-- [x] computeBacktestResult composes withRecoveryFactor over
-      computeCoreAnalytics using its single existing computeDrawdown
-      result.
-- [x] analytics.ts and drawdown.ts SHA-256-identical to baseline.
-- [x] computeCoreAnalytics(...).recoveryFactor === null still holds;
-      Phase 23 tests untouched and green.
-- [x] T-1 updated; T-2 and T-3 present with hand-derived values; T-2
-      proven able to fail, before the fix, for the right reason.
-- [x] No type, storage key, DATABASE_VERSION, migration, or dependency
-      change.
-- [x] npm run verify green: 0 errors, exactly 7 warnings; build 994
-      modules.
-- [x] Manifest diff equals the Allowed Files list exactly.
-- [x] V-1..V-3 performed and numbers recorded.
-- [x] V-4 explicitly recorded as test-only rather than claimed.
-- [x] Documentation states plainly that pre-existing results keep "—"
-      and that zero-drawdown runs still show "—".
+- [x] Changed-file set equals the Allowed Files list exactly, proven by
+      manifest diff rather than inspection.
+- [x] Insights.tsx changes are presentation-only; V-diff passes.
+- [x] V-trigger passes — no trigger, threshold, type: selector, title,
+      or ordering change, proven by byte-identity reconstruction.
+- [x] The "at least 5 trades" promise is removed, and the replacement
+      contains no numeric threshold.
+- [x] R-03..R-09 disclose their populations accurately where reachable
+      (V-3); R-02 and R-07 recorded as diff-verified only, by name.
+- [x] The header no longer implies the global count backs every card.
+- [x] No card appeared, disappeared, reordered, or changed a rendered
+      number versus the before captures.
+- [x] All six automated gates green at the pre-flight baseline.
+- [x] No storage key, schema, DATABASE_VERSION, migration, or
+      dependency change.
+- [x] No test file and no test infrastructure added.
+- [x] Documentation updated only at close, only the two files above.
+- [x] No new AD created.
 
-All exit criteria passed. Phase 24 is closed.
+All exit criteria passed. Phase 25 is closed.
 
 ---
 
 ## Approved Decisions
 
 None. No new architectural decision was made, so no ADR was written and
-docs/ARCHITECTURE_DECISIONS.md.txt was not modified. This phase
-implements the ALREADY-ESTABLISHED Recovery Factor contract: it upholds
-AD-015's composition model and the existing acyclic-import rationale
-documented in analytics.ts (lines 156-163). Playbook §9 requires an ADR
-for architectural decisions, and there is none here; precedent confirms
-phases close without one — the Backtesting UI and Phase 6f entries carry
-no Architectural Decisions section. AD-001 through AD-017 unchanged, not
+docs/ARCHITECTURE_DECISIONS.md.txt was not modified. This phase changes
+presentation text only. Declining to add a component-test harness
+inside a text-only phase is a scoping choice rather than an
+architectural decision: adding jsdom + testing-library would have been
+larger and riskier than the change it protected, and would have
+introduced a new module class to a suite that is entirely pure-function
+tests under calculations/. Playbook §9 requires an ADR for
+architectural decisions and there is none here; Phase 24 set the
+precedent of closing without one. AD-001 through AD-017 unchanged, not
 reopened.
+
+Note that AD-016 recorded small samples reaching fixed-threshold
+analyses as "a known risk, not addressed". Phase 25 does not overturn
+that acceptance — it makes the samples visible without gating them.
 
 ---
 
@@ -183,37 +232,58 @@ reopened.
 
 Introduced by this phase:
 
-- Low: calculations/backtest.ts's file header enumerates the L3
-  functions it composes and does not mention withRecoveryFactor(), so
-  that list is now incomplete. Documentation drift inside a production
-  file. Correcting it would have been a fifth edit to backtest.ts beyond
-  the four the frozen RFC authorised, so it was recorded rather than
-  taken as an unapproved scope expansion. Safe to fix in any future
-  phase that legitimately opens this file.
-- Low: the fix does not guarantee a visible value. A backtest whose
-  matched set never draws down still yields recoveryFactor null and
-  still renders "—". Pinned by T-3.
+- Low: R-02 and R-07 carry diff-verification only, not runtime
+  observation. Their correctness rests on the V-trigger byte-identity
+  proof plus typecheck. R-02's state is close to unreachable by
+  construction — any population with at least one trade produces a
+  win rate of 0% or 100% at n=1, which fires rule 1 — so it is
+  unlikely ever to be observed without editing data.
+- Low: disclosure does not soften imperative wording. "Consider
+  removing it from your playbook" still reads as an instruction even
+  when it now says "across 2 trades". This phase makes evidence
+  visible; it does not adjudicate it.
+- Low: the new header wording is itself a claim. It is deliberately
+  hedged ("may cover a smaller subset") so that cards genuinely backed
+  by the whole population do not make it false. Strengthening it to a
+  universal promise would recreate the defect this phase removed.
 
-Carried forward, unchanged and unrelated:
+Carried forward, unchanged:
 
-- Low/Medium: fixed-threshold analyses (pages/Insights.tsx) run against
-  arbitrarily small filtered samples with no minimum-sample guard. Only
-  1 of 13 rules gates on total n; 5 gate on an inlined per-group n >= 2
-  duplicated three times; 5 have no guard at all. Insights.tsx:271
-  already promises "need at least 5 trades", a minimum nothing enforces.
-  This is Phase 25's subject.
+- DEFERRED PRODUCT DECISION: minimum sample-size policy, and whether
+  under-threshold rules should be suppressed or qualified. Phase 25
+  deliberately does not settle this and must not be cited as having
+  done so. Discovery established that a global gate over the visible
+  trade count would be the wrong axis, since a large visible set can
+  still contain a 2-trade bucket, a 1-vs-1 plan comparison, or a
+  single execution pair.
 - Low: rule 12's avgR / avgPlanned type selector misbehaves when
-  avgPlanned is 0 or negative, while its body defensively prints 0%; and
-  its avgR !== null guard is dead.
+  avgPlanned is 0 or negative, while its body defensively prints 0%;
+  and its avgR !== null guard is dead. R-09 discloses the mixed
+  populations in words but corrects nothing.
+- Low: Best Setup's inline "% win rate" uses an all-trades denominator
+  without naming it — an AD-017 clause-1 gap at a site outside that
+  AD's six-entry label map.
+- Low: Best/Avoid Setup and Best/Risky Hour can name the same bucket
+  when only one is eligible. Confirmed live twice: "Best Session: NY
+  am" now reads "across 74 trades" unfiltered and "across 16 trades"
+  filtered — in both cases the entire visible population, because only
+  one session bucket clears n >= 2. Invisible before this phase,
+  legible now; correcting the rule is out of scope.
+- Low: bestDay / worstDay are computed and never consumed, producing
+  two of the seven lint warnings.
+- Low: the conditional hook call in Insights.tsx and its two eslint
+  suppressions.
 - Low: the same all-trades quantity renders as 22% on Insights
-  (Math.round) and 21.6% in the Backtest table (fr.pct, toFixed(1)) — a
-  display precision difference, not a formula or denominator difference.
+  (Math.round) and 21.6% in the Backtest table (fr.pct, toFixed(1)) —
+  a display precision difference, not a formula or denominator
+  difference.
 - Low: getWinLossBreakdown's `closed` means DECISIVE, not closed;
   payoffRatio also returns null when avgLoserDollar is exactly 0;
   avgCommission's parseFloat tolerance; getWeekKey's timezone
   dependency at UTC offsets >= +12 or <= -12.
 - Low: the FilterBar chip's "N of M" denominator is the total
   unfiltered count (Phase 22).
+- Low: calculations/backtest.ts's stale composition header (Phase 24).
 - Medium: onIndexedDbBlocked has no subscriber (G-3, Phase 6h).
   Unreachable at DATABASE_VERSION = 1, confirmed still 1.
 - Low/Medium items from Phase 6g-2/6h.
@@ -231,25 +301,25 @@ Carried forward, unchanged and unrelated:
 - Production build: 994 modules transformed
 - tsc: 0 errors · eslint: 0 errors, 7 warnings
 
-Phase 23 closed at 157 src files and 114 tests. This phase adds no file
-and no module; the only delta is the two new assertions in an existing
-test file.
+Identical to Phase 24's close on every figure. This phase adds no file,
+no module, and no test; the only production delta is nine string
+literals inside one existing file.
 
 ---
 
 ## Next Phase
 
 Not yet selected — requires the standard re-derivation-and-approval
-workflow before any scope is set.
+workflow before any scope is set. No Phase 26 scope has been defined or
+implied.
 
-PROPOSED, NOT APPROVED: Phase 25 — Insights Sample-Size Discipline. It
-remains DEFERRED and UNIMPLEMENTED; no work has begun. Carried context
-for its re-derivation: only 1 of 13 Insights rules gates on total sample
-size, 5 gate on an inlined per-group n >= 2 duplicated three times, and
-5 have no guard at all, while Insights.tsx:271 already promises a
-5-trade minimum that nothing enforces. The phase needs one decision the
-repository cannot supply — the threshold, and whether under-threshold
-rules are suppressed or rendered with a confidence qualifier.
+Statistical-confidence thresholds and rule-specific minimum-sample
+policy remain an open product decision, unchanged by Phase 25 and
+requiring separate approval before any future phase acts on them. The
+adjacent Insights findings listed under Known Risks — rule 12's mixed
+populations, the dead guard, the AD-017 denominator label, the
+same-bucket behaviour, and the dead bestDay/worstDay computation — are
+separable and remain unscoped.
 
 Also still open and unscoped, unchanged: Trade Review integration
 (components/trade/TradeReview.tsx remains a dead-end capability with its

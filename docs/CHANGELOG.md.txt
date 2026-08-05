@@ -1,3 +1,211 @@
+# Phase 25 — Insights Evidence Transparency
+
+Status:
+COMPLETE
+
+Summary:
+Made the Insights page honest about the evidence behind each card,
+without changing what any card says numerically or whether it appears.
+
+Two things were wrong, and only two. First, the empty state promised
+"at least 5 trades with full data" — a minimum nothing enforced.
+Discovery established that 5 existed nowhere in the repository as a
+constant, a test, or an architecture decision; it was copy only, and
+rules fire at n=1. Second, the page header advertised "based on N
+trades" above cards that rest on far smaller populations: a setup,
+session or hour bucket gated at 2, a plan-followed subset, a paired
+planned/actual-R subset, or — in Rule 12's case — two DIFFERENT
+populations compared inside one sentence.
+
+Everything else about the current rule behaviour is unqualified, not
+incorrect. So this phase adds no threshold, suppresses nothing, and
+scores nothing. It changes nine strings.
+
+What shipped:
+
+- NINE STRING-LITERAL REPLACEMENTS in pages/Insights.tsx, and nothing
+  else. Lines 213, 215, 217, 218, 224, 232, 243, 256, 271.
+    R-01 header      -> "Automated analysis across ${n} visible trades ·
+                        individual insights may cover a smaller subset ·
+                        Updated in real time"
+    R-02 empty state -> "Add more trades with relevant setup, session,
+                        plan, and R data to generate more insights"
+    R-03 Avoid Setup      -> + "across ${worstSetup[1].n} trades"
+    R-04 Best Session     -> + "across ${bestSess[1].n} trades"
+    R-05 Best Entry Hour  -> + "across ${bestHour[1].n} trades"
+    R-06 Risky Hour       -> + "across ${worstHour[1].n} trades"
+    R-07 Plan Adherence   -> + "across ${planYes.length} trades" and
+                             "across ${planNo.length} trades"
+    R-08 Execution Ratio  -> + "across ${execPairs.length} trades with
+                             both a planned and an actual R"
+    R-09 Planned vs Real  -> names BOTH populations: planned "across
+                             trades that have a planned R", actual
+                             "across all ${n} trades"
+
+- R-02 SAYS "RELEVANT", NOT "COMPLETE". The replacement deliberately
+  avoids asserting that every trade needs all four kinds of data —
+  different rules use different eligible populations, so a universal
+  completeness claim would have recreated the very failure being
+  removed, in new words. No numeric threshold replaces the 5.
+
+- NO NEW COMPUTATION. Every identifier interpolated above was ALREADY
+  in scope inside the same useMemo closure (worstSetup, bestSess,
+  bestHour, worstHour, planYes, planNo, execPairs, n). No variable, no
+  expression, no import, and no type was added. This is what kept the
+  change provably string-only.
+
+- TWO CARDS DELIBERATELY UNTOUCHED because they already disclosed
+  their population: Best Setup ("across N trades", line 212) and
+  Overall Negative P/L ("across N trades", line 247, whose population
+  genuinely IS the global count it already gates on). Strong/Low
+  All-Trade Win Rate and Solid/Negative Avg R were also left alone —
+  their population is the header's n, already named per AD-017 — as
+  were the two streak cards, whose displayed number is the finding
+  itself rather than an estimate drawn from a sample.
+
+- NO THRESHOLD, NO GATING, NO SUPPRESSION, NO CONFIDENCE SCORE. No
+  formula, trigger, threshold, title, card type/colour, ordering,
+  filtering, persistence, schema, migration, dependency or test-
+  infrastructure change.
+
+Files Changed
+- pages/Insights.tsx (9 string literals)
+- docs/CHANGELOG.md.txt (this entry)
+- docs/CURRENT_PHASE.md.txt
+
+Three files, exactly matching the frozen RFC's Allowed Files list. No
+docs/ARCHITECTURE_DECISIONS.md.txt change — see Notes.
+
+Test Coverage Added
+- NONE, deliberately. Test count is unchanged at 116 across 8 files.
+  The scope is presentation-only; adding jsdom + testing-library would
+  have been a larger and riskier change than the change it protected,
+  and would have introduced a new module class to a suite that is
+  entirely pure-function tests under calculations/. Strict structural
+  diff proof plus runtime observation was adopted as the proportionate
+  mechanism instead. Recorded as a scoping decision, not an ADR.
+
+Structural Verification (evidence, not inspection)
+- V-diff PASS. git diff --numstat reported exactly "9 9" — nine line
+  replacements, nothing inserted or removed. The 277-line file still
+  has 277 lines. No operator, condition, ternary, threshold literal,
+  push order, function call, import, hook call or dependency array
+  appears anywhere in the diff. The type: selectors (lines 222, 230,
+  241) and the Best Setup push (line 212) appear only as unchanged
+  context.
+- V-trigger PASS, byte-identity proved rather than asserted. A
+  line-by-line comparison against the HEAD blob reported the differing
+  line numbers as exactly:
+      213 215 217 218 224 232 243 256 271
+  Reconstructing the file by restoring ONLY those nine lines from HEAD
+  reproduced the pre-flight hash exactly:
+      pre-flight    ec99006cfe2ee99290903bae93dd5fad9b45eff6384dcaac1bb0d23a54aca9f9
+      reconstructed ec99006cfe2ee99290903bae93dd5fad9b45eff6384dcaac1bb0d23a54aca9f9
+      post-change   330d132a7c9656c5d6940ef2be420c98abfdebf929c51c3e5dedf369937df29a
+  Every other byte of the file is therefore provably untouched.
+- V-scope PASS. The 170-entry pre-flight SHA-256 manifest of src/ +
+  docs/ + root config differed, after the production edit, at exactly
+  one entry: src/pages/Insights.tsx.
+
+Verification
+- git diff --check: clean
+- typecheck: 0 errors
+- lint: 0 errors, exactly 7 pre-existing warnings
+- test: 116/116 passing across 8 files
+- verify: green
+- build: succeeds, 994 modules — unchanged, as a string change adds no
+  module to the runtime import graph
+- The two Insights.tsx lint warnings (149:11 'bestDay', 150:11
+  'worstDay', both unused) SURVIVED at the same line numbers. Had they
+  been "tidied up" the count would have fallen to 5; holding at 7 is
+  positive evidence that the deferred dead-computation finding was not
+  opportunistically fixed.
+- Line endings unchanged (LF before and after). Git's CRLF advisory
+  concerns a future checkout, not this change.
+
+Manual Verification (completed)
+Performed in a running browser against the real authenticated account
+(74 trades, 1 account), after a hard reload to guarantee post-change
+code. "Before" captures were recorded against the untouched baseline
+BEFORE any edit was delegated, so the comparison is a true diff rather
+than a recollection.
+- V-1 PASS — unfiltered population, 74 trades. 12 cards before, 12
+  cards after, in identical order, with every pre-existing rendered
+  number unchanged (-1.45R, 22%, -0.02R, +$5287, 3 wins, 17 losses,
+  6.72R/35/23%, -5.14R, 1.98R, -3.51R, 1%, +25.03R, -0%). No card
+  appeared or disappeared. Types, colours and emoji unchanged. Header
+  rendered the new wording.
+- V-2 PASS — narrowed population via the EXISTING saved filter
+  "Green f", 16 of 74 trades. 8 cards before, 8 cards after, identical
+  order, every pre-existing number unchanged (+43.82R, 100%, +2.74R,
+  +$40955, 16 wins, 0 losses, 26.18R/8/100%, 27.72R, 65%, +4.33R,
+  63%). No card appeared or disappeared. Applying the filter is a pure
+  in-memory lens (useFilters.ts: activeFilter is not persisted) and
+  wrote nothing.
+- V-3 PASS — the newly disclosed counts were checked wherever
+  reachable: Avoid IFVG 15 trades; Best Session NY am 74 trades; Best
+  Entry Hour 10:00 11 trades; Risky Hour 8:00 13 trades; Execution
+  Ratio 67 trades. Under the "Green f" lens: Best Session 16 trades;
+  Best Entry Hour 9:00 9 trades; Execution Ratio 16 trades. The two
+  Best Session figures are cross-consistent — 74 of 74 and 16 of 16 —
+  and independently explain why that card's R has always equalled the
+  whole population's Total R.
+- V-4 PASS — the header count matched the active visible population in
+  both captures: 74 and 16, the latter agreeing with the FilterBar
+  chip's "16 of 74".
+- V-6 PASS — card ordering unchanged in both captures.
+- V-5 NOT RUNTIME-OBSERVED. R-02's EmptyState requires at least one
+  trade AND zero insights. That state was not safely reachable from
+  existing journal data or filters, and reaching it would have meant
+  altering journal data, which the frozen RFC forbids. Recorded as
+  diff-verified only, by name, rather than implied.
+- R-07 NOT RUNTIME-OBSERVED. The Plan Adherence card rendered in
+  NEITHER population, because the journal contains no planFollowed
+  Yes/No pair, so its trigger never fired. Its interpolations are
+  type-checked and its identifiers verified in scope, but no one has
+  seen the card render. Recorded as diff-verified only.
+
+Persistence / Backward Compatibility
+- No persisted shape change of any kind. No storage key, no
+  DATABASE_VERSION bump (still 1), no migration, no backfill.
+- No data was read differently, written, imported, seeded or restored
+  at any point during this phase, including during verification.
+- Rollback is string-only: reverting the single production file fully
+  restores prior behaviour. No data rollback is possible or needed.
+
+Known Blockers
+- None.
+
+Notes
+- NO AD-018. No architectural decision was made. This phase changes
+  presentation text only; declining to add a component-test harness
+  inside a text-only phase is a scoping choice, not an architecture
+  decision. Playbook §9 requires ADR content for architectural
+  decisions and there is none here. AD-001 through AD-017 unchanged
+  and not reopened.
+- WHAT THIS PHASE DOES NOT SETTLE. Minimum sample-size policy and
+  confidence thresholds/qualifiers remain a DEFERRED product decision.
+  Phase 25 makes evidence visible; it does not adjudicate it, and must
+  not later be cited as having resolved it.
+- STILL DEFERRED, NOT FIXED: Rule 12's mixed-population comparison and
+  its avgPlanned <= 0 type selector; the dead avgR !== null guard; Best
+  Setup's inline win-rate denominator under AD-017; Best/Avoid Setup
+  and Best/Risky Hour potentially naming the same bucket; the unused
+  bestDay/worstDay computation; the conditional hook call and its
+  eslint suppressions.
+- CONFIRMED LIVE, TWICE, AND LEFT ALONE: "Best Session: NY am" now
+  reads "across 74 trades" unfiltered and "across 16 trades" filtered —
+  in both cases the ENTIRE visible population. Only one session bucket
+  clears n >= 2, so "your strongest session" is a comparison against
+  nothing. This was invisible before and is legible now, which is
+  precisely the phase's purpose; correcting the rule itself is out of
+  scope.
+
+Next Phase
+Not yet selected. See docs/CURRENT_PHASE.md.txt.
+
+---
+
 # Phase 24 — Recovery Factor Wiring
 
 Status:

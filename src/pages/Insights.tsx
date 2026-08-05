@@ -210,18 +210,18 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     else if (avgR < 0) insights.push({ type: 'bad', title: `Negative Avg R (${avgR.toFixed(2)}R)`, body: "Average trade is losing money. Check if you're cutting winners too early or letting losers run." });
 
     if (bestSetup) insights.push({ type: 'good', title: `Best Setup: ${bestSetup[0]}`, body: `${bestSetup[0]} generated ${bestSetup[1].totalR.toFixed(2)}R across ${bestSetup[1].n} trades (${Math.round((bestSetup[1].green / bestSetup[1].n) * 100)}% win rate). Prioritize this setup.` });
-    if (worstSetup && worstSetup[1].totalR < 0) insights.push({ type: 'bad', title: `Avoid: ${worstSetup[0]}`, body: `${worstSetup[0]} generated ${worstSetup[1].totalR.toFixed(2)}R. Consider removing it from your playbook or reviewing your execution.` });
+    if (worstSetup && worstSetup[1].totalR < 0) insights.push({ type: 'bad', title: `Avoid: ${worstSetup[0]}`, body: `${worstSetup[0]} generated ${worstSetup[1].totalR.toFixed(2)}R across ${worstSetup[1].n} trades. Consider removing it from your playbook or reviewing your execution.` });
 
-    if (bestSess) insights.push({ type: 'good', title: `Best Session: ${bestSess[0]}`, body: `${bestSess[0]} is your strongest session with ${bestSess[1].totalR.toFixed(2)}R total. Focus your energy here.` });
+    if (bestSess) insights.push({ type: 'good', title: `Best Session: ${bestSess[0]}`, body: `${bestSess[0]} is your strongest session with ${bestSess[1].totalR.toFixed(2)}R total across ${bestSess[1].n} trades. Focus your energy here.` });
 
-    if (bestHour) insights.push({ type: 'good', title: `Best Entry Hour: ${bestHour[0]}:00`, body: `Your best performing entries happen around ${bestHour[0]}:00 with ${bestHour[1].totalR.toFixed(2)}R total.` });
-    if (worstHour && worstHour[1].totalR < -0.5) insights.push({ type: 'warn', title: `Risky Hour: ${worstHour[0]}:00`, body: `Entries at ${worstHour[0]}:00 produced ${worstHour[1].totalR.toFixed(2)}R. Be extra selective or avoid this hour.` });
+    if (bestHour) insights.push({ type: 'good', title: `Best Entry Hour: ${bestHour[0]}:00`, body: `Your best performing entries happen around ${bestHour[0]}:00 with ${bestHour[1].totalR.toFixed(2)}R total across ${bestHour[1].n} trades.` });
+    if (worstHour && worstHour[1].totalR < -0.5) insights.push({ type: 'warn', title: `Risky Hour: ${worstHour[0]}:00`, body: `Entries at ${worstHour[0]}:00 produced ${worstHour[1].totalR.toFixed(2)}R across ${worstHour[1].n} trades. Be extra selective or avoid this hour.` });
 
     if (planYesR !== null && planNoR !== null) {
       insights.push({
         type: planYesR > planNoR ? 'good' : 'bad',
         title: 'Plan Adherence Impact',
-        body: `When you follow the plan: avg ${planYesR.toFixed(2)}R. When you don't: avg ${planNoR.toFixed(2)}R. ${planYesR > planNoR ? 'Following the plan pays off!' : 'Review your plan — execution issues may exist.'}`,
+        body: `When you follow the plan: avg ${planYesR.toFixed(2)}R across ${planYes.length} trades. When you don't: avg ${planNoR.toFixed(2)}R across ${planNo.length} trades. ${planYesR > planNoR ? 'Following the plan pays off!' : 'Review your plan — execution issues may exist.'}`,
       });
     }
 
@@ -229,7 +229,7 @@ export function InsightsPage({ trades }: InsightsPageProps) {
       insights.push({
         type: execRatio > 0.5 ? 'good' : 'warn',
         title: `Execution Ratio: ${(execRatio * 100).toFixed(0)}%`,
-        body: `You captured ${(execRatio * 100).toFixed(0)}% of your planned R on average. ${execRatio < 0.5 ? 'Work on holding trades to target.' : 'Good trade management.'}`,
+        body: `You captured ${(execRatio * 100).toFixed(0)}% of your planned R on average, across ${execPairs.length} trades with both a planned and an actual R. ${execRatio < 0.5 ? 'Work on holding trades to target.' : 'Good trade management.'}`,
       });
     }
 
@@ -240,7 +240,7 @@ export function InsightsPage({ trades }: InsightsPageProps) {
       insights.push({
         type: avgR / avgPlanned > 0.5 ? 'good' : 'warn',
         title: 'Planned vs Real R',
-        body: `Planned: +${avgPlanned.toFixed(2)}R avg. Actual: ${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R avg. You achieve ${avgPlanned > 0 ? (avgR / avgPlanned * 100).toFixed(0) : 0}% of your plan.`,
+        body: `Planned: +${avgPlanned.toFixed(2)}R avg across trades that have a planned R. Actual: ${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R avg across all ${n} trades. You achieve ${avgPlanned > 0 ? (avgR / avgPlanned * 100).toFixed(0) : 0}% of your plan.`,
       });
     }
 
@@ -253,7 +253,7 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     <div>
       <div style={{ marginBottom: 16 }}>
         <div style={{ color: C.white, fontWeight: 800, fontSize: 15, marginBottom: 4 }}>🤖 AI-Powered Insights</div>
-        <div style={{ color: C.dim, fontSize: 11 }}>{`Automated analysis based on ${n} trades · Updated in real time`}</div>
+        <div style={{ color: C.dim, fontSize: 11 }}>{`Automated analysis across ${n} visible trades · individual insights may cover a smaller subset · Updated in real time`}</div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
@@ -268,7 +268,7 @@ export function InsightsPage({ trades }: InsightsPageProps) {
       <div style={{ marginBottom: 8, color: C.dim, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Insights & Recommendations</div>
 
       {insights.length === 0 ? (
-        <EmptyState message="Add more trades to generate insights (need at least 5 trades with full data)" padding={30} fontSize={12} />
+        <EmptyState message="Add more trades with relevant setup, session, plan, and R data to generate more insights" padding={30} fontSize={12} />
       ) : (
         insights.map((ins, i) => <InsightCard key={i} type={ins.type} title={ins.title} body={ins.body} />)
       )}

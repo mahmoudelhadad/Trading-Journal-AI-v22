@@ -92,9 +92,9 @@ export function BacktestResultView({ result, equityData, currentEquity, unresolv
     ['Best Day',            core.largestWinningDay ? `${core.largestWinningDay.date} (${fr.usd(core.largestWinningDay.netPL)})` : '—'],
     ['Worst Day',           core.largestLosingDay  ? `${core.largestLosingDay.date} (${fr.usd(core.largestLosingDay.netPL)})`  : '—'],
 
-    ['Win %',               fr.pct(core.winPct)],
-    ['Loss %',              fr.pct(core.lossPct)],
-    ['Breakeven %',         fr.pct(core.bePct)],
+    ['Win % (all trades)',       fr.pct(core.winPct)],
+    ['Loss % (all trades)',      fr.pct(core.lossPct)],
+    ['Breakeven % (all trades)', fr.pct(core.bePct)],
 
     ['Net Profit',          fr.usd(core.netProfit)],
     ['Gross Profit',        fr.usd(core.grossProfit)],
@@ -133,7 +133,7 @@ export function BacktestResultView({ result, equityData, currentEquity, unresolv
           color={getSignColor(summary.netPL)}
         />
         <KPI
-          label="Win Rate"
+          label="Win Rate (W/L only)"
           value={summary.wr !== null ? `${(summary.wr * 100).toFixed(1)}%` : '—'}
           color={C.blue}
           sub={`${summary.green}W / ${summary.red}L`}

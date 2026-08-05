@@ -203,8 +203,8 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     // ── Build insights list — every rule/threshold/message preserved exactly ──
     const insights: Insight[] = [];
 
-    if (wr > 0.6) insights.push({ type: 'good', title: 'Strong Win Rate', body: `Win rate ${Math.round(wr * 100)}% — excellent. Focus on maintaining trade quality.` });
-    else if (wr < 0.4) insights.push({ type: 'bad', title: `Low Win Rate (${Math.round(wr * 100)}%)`, body: 'Less than 40% of trades are winning. Review your entry criteria and wait for A+ setups only.' });
+    if (wr > 0.6) insights.push({ type: 'good', title: 'Strong All-Trade Win Rate', body: `All-trade win rate ${Math.round(wr * 100)}% — excellent. Focus on maintaining trade quality.` });
+    else if (wr < 0.4) insights.push({ type: 'bad', title: `Low All-Trade Win Rate (${Math.round(wr * 100)}%)`, body: 'Less than 40% of trades are winning. Review your entry criteria and wait for A+ setups only.' });
 
     if (avgR > 0.5) insights.push({ type: 'good', title: `Solid Avg R: +${avgR.toFixed(2)}R`, body: 'Average return per trade is healthy. Keep protecting your winners.' });
     else if (avgR < 0) insights.push({ type: 'bad', title: `Negative Avg R (${avgR.toFixed(2)}R)`, body: "Average trade is losing money. Check if you're cutting winners too early or letting losers run." });
@@ -258,7 +258,7 @@ export function InsightsPage({ trades }: InsightsPageProps) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
         <StatBox label="Total R" value={`${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)}R`} color={totalR >= 0 ? C.green : C.red} />
-        <StatBox label="Win Rate" value={`${Math.round(wr * 100)}%`} color={wr > 0.5 ? C.green : C.red} />
+        <StatBox label="Win Rate (all trades)" value={`${Math.round(wr * 100)}%`} color={wr > 0.5 ? C.green : C.red} />
         <StatBox label="Avg R / Trade" value={`${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R`} color={avgR >= 0 ? C.green : C.red} />
         <StatBox label="Net P/L" value={`${netPL >= 0 ? '+$' : '-$'}${Math.abs(netPL).toFixed(0)}`} color={netPL >= 0 ? C.green : C.red} />
         <StatBox label="Best Streak" value={`${maxWin} wins`} color={C.green} />

@@ -1,3 +1,208 @@
+# Phase 23 — Analytics Integrity & Metric Vocabulary
+
+Status:
+COMPLETE
+
+Summary:
+Made the metric layer provable and its outputs unambiguously named,
+without changing a single formula. Two slices.
+
+Before this phase, calculations/analytics.ts (573 lines, 34 returned
+fields) and calculations/rolling.ts had NO value-level test coverage —
+they appeared in backtest.test.ts only as self-referential oracles
+(`expect(result.summary).toEqual(summarizeTrades(matched))`), which
+proves composition but never a value. And two different quantities were
+rendered under the identical label "Win Rate": summarizeTrades().wr =
+green/(green+red) and computeCoreAnalytics().winPct = green/n. On the
+live journal the same account simultaneously displayed 26.2%, 23%, 22%
+and 21.6% for what a user reads as one concept — with two of those
+contradictions inside a single view.
+
+What shipped:
+
+- SLICE 1 — CHARACTERIZATION TESTS. Two new files under the EXISTING
+  vitest configuration (environment: 'node'). Every expected value
+  hand-derived from the documented FORMULA blocks; none produced by
+  executing the function under test. The fixture makes the derivation
+  checkable by hand: symbol 'US100' (f=1, pv=1), entryPrice 100,
+  stopLoss 90, positionSize 1, so _r = (exit-100)/10, _pl = exit-100,
+  _rv = 10.
+  - rolling.test.ts covers summarizeTrades (all 9 fields, empty
+    baseline, all-Breakeven, all-blank, null-field handling),
+    groupTradesBy (bucketing + falsy-key exclusion + key
+    stringification), and aggregateByPeriod ('day' and 'month' fully;
+    'week' shape/sort/conservation only).
+  - analytics.test.ts covers getWinLossBreakdown, the full empty-input
+    baseline of all 34 fields, the 29 Class-A fields of
+    computeCoreAnalytics with their null/empty edges, the daily rollup,
+    the risk/quality scores, the undefined-denominator cases,
+    withRecoveryFactor, and the Class-C aliases as IDENTITY assertions
+    only (avgRR === avgPlannedR, expectancyScore === expectancyR,
+    recoveryFactor === null).
+  - THE DIVERGENCE GUARD. One test asserts winPct !== wr on a set
+    containing Breakeven and blank outcomes, pinning both values
+    exactly, and a sibling asserts they agree when every trade is
+    decisive.
+
+- SLICE 2 — METRIC LABEL DISAMBIGUATION. Six string-literal changes
+  (L-1..L-6) across three files. No formula, threshold, condition, rule
+  ordering, import, prop, JSX structure or layout was touched.
+    Dashboard KPI              -> "Win Rate (W/L only)"
+    Insights StatBox           -> "Win Rate (all trades)"
+    Backtest result KPI        -> "Win Rate (W/L only)"
+    Backtest core table        -> "Win % (all trades)",
+                                  "Loss % (all trades)",
+                                  "Breakeven % (all trades)"
+    Insights rule titles       -> "Strong All-Trade Win Rate",
+                                  "Low All-Trade Win Rate (N%)"
+    Insights good-rule body    -> "All-trade win rate N% ..."
+  "(W/L only)" rather than "(excl. BE)": the decisive-trade denominator
+  excludes blank/non-decisive outcomes as well as Breakeven, so
+  "(excl. BE)" would have named only one of two exclusions.
+
+- DASHBOARD OUTCOME PIE UNCHANGED. Its legend ("Green N (P%)", over
+  green+red+be) is a composition display in a card already titled
+  "Win / Loss / BE", not a win-rate label. Recorded as RFC open
+  question OQ-2 and approved as "leave unchanged".
+
+- ANALYTICS.TS AND ROLLING.TS WERE NOT EDITED. Not one character,
+  not even a comment.
+
+Files Changed
+- calculations/analytics.test.ts (new)
+- calculations/rolling.test.ts (new)
+- pages/Dashboard.tsx (one label string)
+- pages/Insights.tsx (three label/title/body strings)
+- components/backtest/BacktestResultView.tsx (four label strings)
+- docs/ARCHITECTURE_DECISIONS.md.txt (AD-017, appended)
+- docs/CHANGELOG.md.txt (this entry)
+- docs/CURRENT_PHASE.md.txt
+
+Eight files, exactly matching the phase's Allowed Files list. The three
+source files together changed 8 lines: 8 insertions, 8 deletions, every
+one a string literal in a label position.
+
+Test Coverage Added
+- test count 61 -> 114 (6 files -> 8); +53 assertions
+- analytics.ts and rolling.ts had ZERO value-level coverage before this
+  phase. Both are now pinned against independently derived expectations.
+- Class-B functions deliberately NOT covered: getTradeFrequency,
+  getRollingStats, getStandardRollingWindows, and getWeekKey's
+  Monday-start semantics. None carries a Formula/Source/Assumptions
+  block, so a test would manufacture a contract rather than verify one.
+  getTradeFrequency and getStandardRollingWindows are additionally
+  computed by useAdvancedAnalytics but destructured by no page.
+- One authored expectation was wrong and was corrected: summing
+  2/6 + 2/6 + 1/6 left-to-right in IEEE-754 yields 0.8333333333333333
+  while the literal 5/6 is 0.8333333333333334. An artifact of the test
+  expression's addition order, not of the values under test. Changed to
+  toBeCloseTo plus an explicit toBeLessThan(1); each percentage is
+  still asserted exactly. No production code was involved.
+
+Mutation Spot-Checks (both performed, both reverted byte-identically)
+- A: summarizeTrades().wr switched to the all-trades denominator ->
+  5 tests failed, including the divergence guard. aggregateByPeriod's
+  'month' test correctly did NOT fail, because in both month buckets
+  the two denominators coincide (2/3 vs 2/3, and 0/3 vs 0/1).
+- B: computeCoreAnalytics().winPct switched to the decisive-trade
+  denominator -> 3 tests failed, again including the divergence guard.
+- The guard therefore fails when EITHER formula is moved toward the
+  other. Both files were restored from pristine copies and confirmed
+  SHA-256 identical to their pre-flight hashes.
+
+Verification
+- typecheck: 0 errors
+- lint: 0 errors, exactly 7 pre-existing warnings (not 6, not 8)
+- test: 114/114 passing across 8 files
+- verify: green
+- build: succeeds, 994 modules — unchanged, since test files are
+  outside the runtime import graph and string literals add no module
+- Frozen-file proof: analytics.ts SHA-256
+  868053B3F9D5A7788ABFAA78D7FD17A7D13E94EC1C015AD0873CE99EDB21703D
+  and rolling.ts SHA-256
+  4510805943F2AC0304BDA784D75D80761C9885212B6F5C724B6310FFAAA6D0CA
+  are identical before and after the phase, including across both
+  mutation cycles.
+- Scope proof: a 167-entry SHA-256 manifest of src/ + docs/ + root
+  config taken at pre-flight, re-compared at close, differs on exactly
+  the 8 Allowed Files and nothing else.
+- Slice 2 diff audit: every changed line is a string literal in a
+  `label=` position, a coreRows row name, or an Insights rule
+  title/body. `${Math.round(wr * 100)}%` is byte-identical in both
+  Insights sites.
+
+Manual Verification (completed)
+Performed in a running browser against the real authenticated account.
+Live dataset: 74 trades — 16 Green, 45 Red, 10 Breakeven, 3 blank
+(non-decisive) outcomes. All five checks passed:
+- V-11 PASS. Dashboard "Win Rate (W/L only)" = 26.2% (16/61 = 26.2295,
+  toFixed(1)); Insights "Win Rate (all trades)" = 22%
+  (16/74 = 21.6216, Math.round). The Dashboard outcome pie, unchanged,
+  independently reconciled at 23% (16/71 = 22.5352, toFixed(0)). Three
+  denominators, three different live numbers.
+- V-12 PASS. A no-condition backtest matched 74 of 74 trades and
+  rendered "Win Rate (W/L only)" = 26.2% in the KPI row and
+  "Win % (all trades)" = 21.6% in the table of the SAME card, with
+  "Loss % (all trades)" = 60.8% and "Breakeven % (all trades)" = 13.5%.
+  Those three sum to 95.9%, not 100% — the missing 4.1% is exactly the
+  3 blank-outcome trades (3/74 = 4.054%). That is the documented
+  behavior of winPct/lossPct/bePct observed in production, and it is
+  the same property pinned by analytics.test.ts.
+- V-13 PASS. No label wraps, clips, truncates or overlaps at default
+  window width, and no horizontal scrollbar appears. This closes the
+  one risk the phase itself introduced.
+- V-14 PASS. Numbers unchanged: header, Dashboard "Total Trades" and
+  Insights "based on N trades" all read 74; Total R is -1.45R on both
+  Dashboard and Insights; Avg R is -0.02R on both and reconciles with
+  -1.45/74 = -0.019594 (toFixed(2)); Net P/L is +$5286.75 / +$5287, the
+  same amount at 2dp and 0dp. Return 52.9% and Capital $15,287
+  independently reconcile against a $10,000 starting capital.
+- V-15 PASS. The Insights rule cards render the renamed titles with
+  identical trigger behavior: card 1 is "Low All-Trade Win Rate (22%)"
+  with its body unchanged, "Strong All-Trade Win Rate" is correctly
+  ABSENT (0.216 is not > 0.6), card 2 is "Negative Avg R (-0.02R)",
+  and "Overall Negative P/L" is last. All 12 cards appear in their
+  source-declared order, with "Plan Adherence Impact" correctly not
+  firing because planFollowed is unset throughout the journal. None of
+  the three pre-phase strings appears anywhere.
+
+Known Blockers
+- None.
+
+Notes
+- L-6 IS DIFF-VERIFIED, NOT RUNTIME-OBSERVED. The renamed good-rule
+  body ("All-trade win rate N% ...") only renders when the all-trades
+  win rate exceeds 60%; the live value is 22%, so that branch cannot
+  execute. Its correctness rests on the diff (a single string literal,
+  with the embedded expression byte-identical), a clean typecheck, and
+  the fact that its sibling branch in the same if/else is confirmed
+  rendering correctly by V-15. Filters and journal data were NOT
+  altered to force the branch, since the frozen RFC did not require it.
+- PRE-EXISTING, OUT OF SCOPE, NOT A PHASE 23 REGRESSION: the Backtest
+  result card's "Recovery Factor" row renders "—" permanently, because
+  calculations/backtest.ts calls computeCoreAnalytics() without
+  withRecoveryFactor(), whose only call site is
+  hooks/useAdvancedAnalytics.ts. Confirmed live during V-12. Phase 23
+  pins the current behavior with an identity assertion and does not fix
+  it. Deferred.
+- PRE-EXISTING, OUT OF SCOPE, NOT A PHASE 23 REGRESSION: the same
+  all-trades quantity renders as 22% on Insights (Math.round) and 21.6%
+  in the Backtest table (fr.pct, toFixed(1)). This is a display
+  PRECISION difference, NOT a difference of formula or denominator.
+  Unchanged by this phase.
+- The 89-vs-74 trade-count question raised during the Phase 23 research
+  pass is resolved: the live journal holds 74 trades, matching the
+  figure recorded during Phase 22; the 2026-07-31 CSV export used as
+  early evidence captured a larger, older 89-trade state. The apparent
+  coincidence noted at the time (green+red = 74 in that export) was
+  coincidence — live, green+red = 61 and the total is 74.
+- No production calculation or formula changed anywhere in this phase.
+
+Next Phase
+Not yet selected. See docs/CURRENT_PHASE.md.txt.
+
+---
+
 # Phase 22 — Global Strategy Filter
 
 Status:

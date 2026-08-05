@@ -205,7 +205,7 @@ const n = trades.length;
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
         <KPI label="Total Trades" value={n} color={C.blue} sub={`FX: ${fxCount} | Fut: ${futCount}`} />
         <KPI label="Avg R" value={avgR !== null ? fr.r(avgR) : '—'} color={(avgR ?? 0) >= 0 ? C.green : C.red} />
-        <KPI label="Win Rate" value={wr} color={C.green} sub={`${green}W / ${red}L / ${be}BE`} />
+        <KPI label="Win Rate (W/L only)" value={wr} color={C.green} sub={`${green}W / ${red}L / ${be}BE`} />
         <KPI label="Net P/L" value={fr.usd(totalNPL)} color={totalNPL >= 0 ? C.green : C.red} sub={`Return: ${ret}`} />
         <KPI label="Total R" value={`${totalR.toFixed(2)}R`} color={totalR >= 0 ? C.green : C.red} />
         <KPI

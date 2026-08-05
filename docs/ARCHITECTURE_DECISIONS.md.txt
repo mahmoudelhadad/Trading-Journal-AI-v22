@@ -1512,3 +1512,258 @@ from "definition of a backtest" to "definition of a view").
 - A future phase has a concrete requirement for the Backtest page to
   respect the global lens, which would first have to resolve how a
   stored BacktestResult remains self-describing (AD-015).
+
+---
+
+# AD-017
+
+## Title
+
+Win-rate and outcome-percentage labels state their denominator. Both
+win-rate definitions are retained, not consolidated; the Dashboard
+outcome pie is a composition display and keeps its own labelling.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-05
+
+---
+
+## Context
+
+Two different quantities were rendered under one word.
+
+calculations/rolling.ts's summarizeTrades().wr divides by the decisive
+trades only — green / (green + red). calculations/analytics.ts's
+computeCoreAnalytics().winPct divides by every logged trade —
+green / n. The divergence was deliberate and has been documented since
+Phase 8 (analytics.ts, the winPct entry: "Deliberately different
+denominator from the existing Win Rate KPI on the Dashboard page").
+
+What was never documented, and never noticed, is that both reached the
+user under the identical label "Win Rate". They diverge whenever any
+trade is Breakeven or has a blank outcome — a structural property of
+calcOutcome() (tradeCalc.ts), where _outcome is '' exactly when _r is
+null and 'Breakeven' when |r| <= 0.2.
+
+Two surfaces contradicted themselves within a single view:
+
+- pages/Dashboard.tsx rendered the KPI "Win Rate" from summary.wr and,
+  directly beneath it, an outcome pie whose legend divides by
+  green + red + be — a third denominator.
+- components/backtest/BacktestResultView.tsx rendered a KPI "Win Rate"
+  from summary.wr and, in the table below it in the same card, a row
+  "Win %" from core.winPct.
+
+Measured on the live authenticated journal during Phase 23 runtime
+verification — 74 trades: 16 Green, 45 Red, 10 Breakeven, 3 blank —
+the same journal simultaneously displayed 26.2% (16/61), 23% (16/71),
+22% (16/74) and 21.6% (16/74).
+
+Phase 23 also found that neither analytics.ts nor rolling.ts had any
+value-level test coverage, so no formula in either module was pinned
+against an independently derived expectation.
+
+---
+
+## Decision
+
+1. CANONICAL VOCABULARY. Every rendered metric derived from an outcome
+   count names its denominator. Three canonical names exist:
+
+     Win Rate (W/L only)
+       = Green / (Green + Red)
+       Excludes Breakeven AND blank/non-decisive outcomes.
+       Source: summarizeTrades().wr (rolling.ts). Null when
+       Green + Red is 0.
+
+     Win Rate (all trades)
+       = Green / total trades
+       Source: computeCoreAnalytics().winPct (analytics.ts). Null when
+       the trade set is empty.
+
+     Win % / Loss % / Breakeven % (all trades)
+       = each outcome count / total trades
+       Source: winPct / lossPct / bePct (analytics.ts). These
+       deliberately do NOT sum to 100% when blank-outcome trades
+       exist, since such trades are counted in the denominator but
+       match no outcome bucket.
+
+2. LABEL MAP. The vocabulary is applied at exactly six sites, as text:
+
+     Dashboard KPI                  -> "Win Rate (W/L only)"
+     Insights StatBox               -> "Win Rate (all trades)"
+     Backtest result KPI            -> "Win Rate (W/L only)"
+     Backtest core table rows       -> "Win % (all trades)",
+                                       "Loss % (all trades)",
+                                       "Breakeven % (all trades)"
+     Insights rule titles           -> "Strong All-Trade Win Rate",
+                                       "Low All-Trade Win Rate (N%)"
+     Insights good-rule body        -> "All-trade win rate N% ..."
+
+3. BOTH DEFINITIONS ARE RETAINED. Neither formula is changed, removed,
+   or redirected. calculations/analytics.ts and calculations/rolling.ts
+   were not edited at all in Phase 23 — proven by SHA-256 comparison
+   before and after, including across two mutation spot-checks.
+
+4. THE DASHBOARD OUTCOME PIE IS EXEMPT. Its legend keeps the form
+   "Green N (P%)" over the denominator green + red + be, unchanged.
+   It sits in a card already titled "Win / Loss / BE" and answers
+   "what was the composition of my classified trades", not "what is my
+   win rate".
+
+5. THE DIVERGENCE IS ENFORCED BY TEST, NOT BY CONVENTION.
+   calculations/analytics.test.ts asserts that winPct and
+   summarizeTrades().wr differ on a set containing Breakeven and blank
+   outcomes, and that they agree when every trade is decisive. Both
+   values are pinned exactly.
+
+---
+
+## Reason
+
+1. A label is a claim about what a number means. Two numbers under one
+   word is not a naming inconvenience — on the Dashboard and in the
+   Backtest result card a user could read 26.2% and 22% within one
+   screen and have no way to learn that the difference is the
+   denominator rather than an error. Naming the denominator is the
+   smallest change that makes each number self-describing.
+
+2. Both definitions are legitimate and answer different questions.
+   "Of the trades that resolved decisively, how many won" is the right
+   denominator for expectancy, Kelly and risk-of-ruin, which are all
+   computed over closed trades. "Of everything I logged, how many won"
+   is the right denominator for judging a journal including its
+   incomplete entries. Consolidating would have silently changed one
+   page's long-standing output and destroyed information, and it is a
+   formula change — forbidden by Playbook §4 without explicit approval.
+
+3. "(W/L only)" rather than "(excl. BE)". The decisive-trade
+   denominator excludes TWO categories, not one: Breakeven trades and
+   blank/non-decisive outcomes (_r === null). "(excl. BE)" was
+   proposed, reviewed and rejected during RFC finalisation precisely
+   because it names only one of the two exclusions and would have
+   substituted a subtler mislabel for the original one.
+
+4. The pie is a different kind of object. A composition chart's slices
+   are shares of what was classified; forcing win-rate vocabulary onto
+   it would imply it is a fourth win-rate reading rather than a
+   breakdown, which is the opposite of the phase's goal.
+
+5. Tests before vocabulary. A naming decision about a metric layer that
+   nothing verifies is a decision about a moving target. Phase 23 added
+   value-level characterization tests for both modules first, with every
+   expectation hand-derived from the documented FORMULA blocks, so the
+   vocabulary now describes behavior that is pinned rather than assumed.
+
+---
+
+## Tradeoff
+
+Labels are longer, and two names now exist for what users colloquially
+call one thing, which is a small ongoing cost in UI density and in
+explaining the product. Accepted because the alternative is a number
+that cannot be interpreted without reading source.
+
+Retaining both formulas also means the codebase permanently carries two
+win-rate definitions. That is a real maintenance surface: any future
+metric or AI narration layer must choose one deliberately. AD-017 exists
+so that choice is made against a written vocabulary instead of by
+picking whichever function is nearest.
+
+A residual, deliberately untouched inconsistency remains: the same
+all-trades quantity renders as 22% on Insights (Math.round) and 21.6%
+in the Backtest table (fr.pct, toFixed(1)). This is display PRECISION,
+not a difference of formula or denominator. It predates Phase 23 and was
+left unchanged, since altering it is a rendering change beyond a label.
+
+---
+
+## Alternatives Considered
+
+A. Consolidate onto one win-rate definition and delete the other.
+   REJECTED: a formula change (Playbook §4), silently altering a
+   page's output that has been stable since Phase 6/8, and destroying
+   the distinction that expectancy/Kelly/risk-of-ruin depend on.
+
+B. Change only the labels that collide, leaving the Insights rule
+   titles ("Strong Win Rate", "Low Win Rate (N%)") ambiguous.
+   REJECTED during RFC finalisation: the rule cards restate the same
+   metric in prose directly beneath the StatBox, so leaving them would
+   have preserved the exact ambiguity the phase exists to remove.
+
+C. Relabel the Dashboard outcome pie legend as well.
+   REJECTED: see Reason 4. Recorded as RFC open question OQ-2 and
+   explicitly approved as "leave unchanged".
+
+D. Use "(excl. BE)" for the decisive-trade denominator.
+   REJECTED: see Reason 3 — it names only one of the two exclusions.
+
+E. Add a tooltip or help icon explaining each denominator instead of
+   changing labels.
+   REJECTED: introduces a new interaction and component surface for
+   what a longer label solves, and hides the disambiguation behind a
+   hover the user must first suspect they need.
+
+F. Unify the display precision of the all-trades percentage across
+   Insights and the Backtest table.
+   REJECTED for this phase: out of the approved text-only scope. See
+   Tradeoff and Revisit Only If.
+
+---
+
+## Consequences
+
+- Every rendered outcome-derived percentage in the application now
+  states its denominator, except the outcome pie, which is exempt by
+  decision 4.
+- calculations/analytics.ts and calculations/rolling.ts gained their
+  first automated coverage: 53 new assertions across two test files,
+  taking the suite from 61 to 114 tests over 6 to 8 files.
+- The divergence between the two definitions is now a tested property.
+  A future change that collapses either formula into the other fails
+  the suite: verified by mutation, in both directions.
+- A future AI or narration layer that reports "win rate" must pick a
+  canonical name from decision 1 and say which it means. There is no
+  longer an undocumented default.
+- Class-B functions in rolling.ts (getTradeFrequency, getRollingStats,
+  getStandardRollingWindows, and getWeekKey's Monday-start semantics)
+  remain untested by deliberate decision — they carry no
+  Formula/Source/Assumptions block, so a test would manufacture a
+  contract rather than verify one.
+
+---
+
+## Spec References
+
+AD-015 (BacktestResult composes CoreAnalytics directly — the reason 26
+of the 34 core fields are reachable only through the Backtest tab, and
+why the Backtest card is where the two definitions met in one view);
+AD-016 (the global lens, which made the visible trade set
+user-narrowable and so raised the cost of an ambiguous metric).
+
+---
+
+## Revisit Only If
+
+- A future phase has a concrete requirement to report a single
+  authoritative win rate — for example an AI narration layer or an
+  exported report — which would reopen alternative A and require an
+  explicit decision about which definition is canonical for that
+  consumer, rather than a silent choice.
+- The display-precision inconsistency recorded under Tradeoff (22% vs
+  21.6%) is judged worth correcting, which is a rendering change and
+  needs its own approval (alternative F).
+- The outcome pie is redesigned or moved out of its "Win / Loss / BE"
+  card, at which point decision 4's justification no longer holds.
+- A Class-B function in rolling.ts gains a documented contract, at
+  which point it becomes eligible for the coverage this phase
+  deliberately withheld.

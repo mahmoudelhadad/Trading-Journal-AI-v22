@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 22 — Global Strategy Filter
+Phase 23 — Analytics Integrity & Metric Vocabulary
 
 Status:
 
@@ -14,83 +14,113 @@ COMPLETE
 
 ## Objective
 
-Connect the fully-built Advanced Filters capability (Phase 14) to the
-application's shared trades pipeline, so a saved FilterGroup becomes an
-active global lens applied on top of the existing account/market
-filters across every consuming page.
+Make the metric layer provable and its outputs unambiguously named,
+without changing a single formula.
 
-Before this phase, SettingsModal passed an empty function to
-SavedFiltersList's onApply: a user could build a multi-condition AND/OR
-filter, preview its match count, name it, save it and favorite it, and
-clicking "Apply" did nothing. That is now a working feature.
+Two problems, both live and user-visible before this phase:
 
-The phase's central safety property — with no active filter the visible
-trade set is identical to before — was established by three independent
-mechanisms rather than asserted (see Verification below).
+1. calculations/analytics.ts (573 lines, 34 returned fields) and
+   calculations/rolling.ts had NO value-level test coverage. They
+   appeared in backtest.test.ts only as self-referential oracles
+   (`expect(result.summary).toEqual(summarizeTrades(matched))`), which
+   proves composition but never a value. summarizeTrades() is the
+   most-called calculation in the application.
+
+2. Two different quantities reached the user under the identical label
+   "Win Rate": summarizeTrades().wr = green/(green+red) and
+   computeCoreAnalytics().winPct = green/n. The divergence has been
+   documented in analytics.ts since Phase 8; the label collision never
+   was. Two surfaces contradicted themselves inside a single view —
+   the Dashboard KPI against its own outcome pie, and the Backtest
+   result card's KPI against its own table.
 
 ---
 
 ## Scope (as delivered)
 
-1. calculations/visibleTrades.ts (new, pure L3) —
-   selectVisibleTrades(trades, accFilter, mktFilter, activeGroup).
-   Holds the account/market predicate moved VERBATIM out of
-   useFilters.applyFilters, composed with the existing
-   applyFilterGroup(). Fixed composition order: account → market →
-   group.
-2. One-line barrel addition to calculations/index.ts.
-3. useFilters() gained activeFilter / setActiveFilter /
-   clearActiveFilter. In-memory only, matching the existing
-   account/market filter semantics. applyFilters() is now a thin
-   useCallback delegating to selectVisibleTrades(); its exported
-   signature is unchanged.
-4. SettingsModal gained an optional onApplyFilter, replacing the dead
-   no-op. App.jsx supplies it: snapshot the group, close the modal.
-5. Snapshot semantics via structuredClone — deleting or editing the
-   source SavedFilter cannot change the active view.
-6. FilterBar gained four additive optional props rendering the active
-   filter chip: name, "N of M trades", and a ✕ clear control.
-7. pages/Backtest.tsx continues to receive UNFILTERED allTrades.
+SLICE 1 — Characterization tests, purely additive:
+
+1. calculations/rolling.test.ts (new) — summarizeTrades (all 9 fields,
+   empty baseline, all-Breakeven, all-blank, null-field handling),
+   groupTradesBy (bucketing, falsy-key exclusion, key stringification),
+   aggregateByPeriod ('day' and 'month' fully; 'week' shape, sort and
+   conservation only).
+2. calculations/analytics.test.ts (new) — getWinLossBreakdown, the full
+   34-field empty-input baseline, the 29 Class-A fields of
+   computeCoreAnalytics with their null/empty edges, the daily rollup,
+   the risk/quality scores, the undefined-denominator cases,
+   withRecoveryFactor, and the Class-C aliases as identity assertions
+   only.
+3. The divergence guard — winPct !== wr on a set containing Breakeven
+   and blank outcomes, both values pinned exactly, plus a sibling
+   asserting they agree when every trade is decisive.
+
+Every expected value was hand-derived from the documented FORMULA
+blocks. None was produced by executing the function under test.
+
+SLICE 2 — Metric label disambiguation, text only (L-1..L-6):
+
+4. Dashboard KPI -> "Win Rate (W/L only)".
+5. Insights StatBox -> "Win Rate (all trades)".
+6. Backtest result KPI -> "Win Rate (W/L only)".
+7. Backtest core table -> "Win % (all trades)", "Loss % (all trades)",
+   "Breakeven % (all trades)".
+8. Insights rule titles -> "Strong All-Trade Win Rate",
+   "Low All-Trade Win Rate (N%)".
+9. Insights good-rule body -> "All-trade win rate N% ...".
+
+The Dashboard outcome pie legend is deliberately unchanged (RFC open
+question OQ-2, approved): it is a composition display in a card already
+titled "Win / Loss / BE", not a win-rate label.
 
 ---
 
 ## Files Changed
 
-Modified (5):
-- src/hooks/useFilters.ts
-- src/calculations/index.ts
-- src/components/layout/FilterBar.tsx
-- src/components/settings/SettingsModal.tsx
-- src/App.jsx
+Modified — string literals only (3):
+- src/pages/Dashboard.tsx
+- src/pages/Insights.tsx
+- src/components/backtest/BacktestResultView.tsx
 
-New (3):
-- src/calculations/visibleTrades.ts
-- src/calculations/visibleTrades.test.ts
-- src/calculations/filterEngine.test.ts
+New (2):
+- src/calculations/analytics.test.ts
+- src/calculations/rolling.test.ts
+
+Documentation, at phase close only (3):
+- docs/ARCHITECTURE_DECISIONS.md.txt (AD-017, appended)
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
 
 Eight files, exactly matching the phase's Allowed Files list — proven
-by SHA-256 integrity-manifest diff, not by inspection. Zero changes to
-vitest.config.ts, package.json, any page file, any other calculations
-module, services/storage.js, or any sync file.
+by SHA-256 manifest diff against a 167-entry pre-flight baseline, not
+by inspection. The three source files changed 8 lines total: 8
+insertions, 8 deletions, every one a string literal in a label
+position.
 
 ---
 
 ## Out of Scope (respected)
 
-- No change to calculations/filterEngine.ts logic. (Its stale
-  ASSUMPTIONS comment block was corrected in the documentation pass
-  after the phase closed — a comment-only edit, no code change.)
-- No new storage key, no migration, no DATABASE_VERSION bump. The
-  active filter is in-memory only and resets on reload.
+- No formula change anywhere. Both win-rate definitions survive
+  byte-identical.
+- calculations/analytics.ts and calculations/rolling.ts were NOT edited
+  at all — not one character, not even a comment. Proven by hash.
+- No threshold, rule condition, rule ordering, or layout change.
+  `${Math.round(wr * 100)}%` is byte-identical at both Insights sites.
+- No new storage key, no DATABASE_VERSION bump, no persistence-class
+  decision, no migration.
 - No test-infrastructure change: no jsdom, no testing-library, no setup
   file, no vitest config edit, no new dependency.
-- No change to Raw's own 4-field filter, Strategy's Multi-Filter
-  Comparison tool, or any page's internal filter UI.
-- No page file modified. Pages simply receive a narrower array.
-- No AI, Prop Firm, Position Calculator, Sync, or Backtest v2 work.
-- The 7 pre-existing lint warnings were left untouched, including the
-  unused useMemo import in useFilters.ts — a file this phase edits.
-  Removing it would have failed the exactly-7 baseline gate.
+- No component, hook, or page test.
+- No AI, Prop Firm, Position Calculator, Sync, Backtest v2, or
+  TradeReview work.
+- The 7 pre-existing lint warnings were left untouched.
+- KI-001..KI-005 remain preserved.
+- Class-B functions in rolling.ts (getTradeFrequency, getRollingStats,
+  getStandardRollingWindows, getWeekKey's Monday-start semantics) were
+  deliberately left untested and untouched: none carries a
+  Formula/Source/Assumptions block, so a test would manufacture a
+  contract rather than verify one.
 
 ---
 
@@ -99,83 +129,100 @@ module, services/storage.js, or any sync file.
 Automated:
 - npm run typecheck — 0 errors, at every step.
 - npm run lint — 0 errors, exactly 7 pre-existing warnings.
-- npm run test — 34 → 61 passing (4 files → 6).
+- npm run test — 61 -> 114 passing (6 files -> 8).
 - npm run verify — full chain green.
-- npm run build — succeeds, 994 modules.
+- npm run build — succeeds, 994 modules (unchanged: test files are
+  outside the runtime import graph and string literals add no module).
 
 Evidence-based, not inspection-based:
-- Predicate-move diff: the moved account/market predicate, diffed
-  against a source snapshot captured BEFORE the move, is byte-identical
-  after whitespace and parameter-rename normalization; the early return
-  differs only by the added `activeGroup === null` conjunct.
-- Mutation spot-check: removing that guard failed 3 tests; the revert
-  was verified byte-identical and the suite returned to green.
-- Static call-graph verification (comments stripped first):
-  applyFilters has exactly ONE call site in src/, in App.jsx;
-  <BacktestPage> receives the identifier destructured from useTrades(),
-  not the one bound by the trades memo.
-- SHA-256 manifest diff: changed-file set equals the Allowed Files list
-  exactly — no more, no fewer.
+- Frozen-file proof: analytics.ts SHA-256
+  868053B3F9D5A7788ABFAA78D7FD17A7D13E94EC1C015AD0873CE99EDB21703D
+  and rolling.ts SHA-256
+  4510805943F2AC0304BDA784D75D80761C9885212B6F5C724B6310FFAAA6D0CA
+  are identical at pre-flight and at close, including across both
+  mutation cycles.
+- Mutation spot-check A: summarizeTrades().wr switched to the
+  all-trades denominator -> 5 tests failed, including the divergence
+  guard. aggregateByPeriod's 'month' test correctly did NOT fail,
+  because in both month buckets the two denominators coincide.
+- Mutation spot-check B: computeCoreAnalytics().winPct switched to the
+  decisive-trade denominator -> 3 tests failed, again including the
+  guard. The guard therefore fails when EITHER formula is moved toward
+  the other. Both files were restored from pristine copies and
+  hash-verified.
+- SHA-256 manifest diff: a 167-entry manifest of src/ + docs/ + root
+  config, taken at pre-flight and re-compared at close, differs on
+  exactly the 8 Allowed Files and nothing else.
+- Slice 2 diff audit: every changed line is a string literal in a
+  `label=` position, a coreRows row name, or an Insights rule
+  title/body. No expression, operator, threshold, condition, prop,
+  import, or JSX structure was touched.
 
 Manual, in a running browser against a real authenticated account with
-74 trades — all six scenarios passed:
-- (a) applying a saved filter narrowed the header subtitle and all six
-  pages to 16, matching the chip's "16 of 74 trades".
-- (b) Backtest isolation, MEASURED: with the filter active, the
-  Backtest builder previewed "Matches 74 of 74 trades" and a
-  no-condition backtest recorded 74 matched trades while the UI showed
-  16.
-- (c) deleting the source saved filter left the chip and counts
-  unchanged — snapshot semantics confirmed.
-- (d) a filter matching nothing rendered "0 of 74 trades" with every
-  page showing its empty state; no crashes, no console errors.
-- (e) ✕ restored the 74-trade baseline.
-- (f) with the market filter set to Forex, applying then clearing a
-  group returned to the Forex-filtered total with Forex still selected.
-
-Scenario (f) used the market filter rather than the account filter the
-phase definition named: the verification account has a single account,
-so an account filter could not narrow and the assertion would have been
-vacuous. Same class of global-bar filter, identical property under
-test. Recorded as a data-driven substitution, not a spec change.
+74 trades (16 Green, 45 Red, 10 Breakeven, 3 blank) — all five
+scenarios passed:
+- V-11 PASS: Dashboard "Win Rate (W/L only)" 26.2% (16/61) against
+  Insights "Win Rate (all trades)" 22% (16/74), with the unchanged
+  outcome pie independently reconciling at 23% (16/71).
+- V-12 PASS: a no-condition backtest matched 74 of 74 and showed
+  "Win Rate (W/L only)" 26.2% and "Win % (all trades)" 21.6% in the
+  SAME card, plus 60.8% / 13.5%. Those three sum to 95.9%, the missing
+  4.1% being exactly the 3 blank-outcome trades — the documented
+  behavior observed in production.
+- V-13 PASS: no label wraps, clips, truncates or overlaps at default
+  window width; no horizontal scrollbar.
+- V-14 PASS: numbers unchanged. 74 everywhere; Total R -1.45R and
+  Avg R -0.02R identical on Dashboard and Insights and mutually
+  consistent; Net P/L the same amount at 2dp and 0dp; Return and
+  Capital independently reconcile.
+- V-15 PASS: renamed Insights rule titles with identical trigger
+  behavior — "Low All-Trade Win Rate (22%)" first, "Strong All-Trade
+  Win Rate" correctly absent, all 12 cards in source-declared order,
+  no pre-phase string anywhere.
 
 ---
 
 ## Exit Criteria
 
-- [x] selectVisibleTrades() lives in calculations/visibleTrades.ts,
-      imports nothing from hooks/components/pages/services/sync, and is
-      the only place the lens is computed.
-- [x] Predicate diff empty apart from the permitted differences.
-- [x] Applying a saved filter narrows all six pages — verified in a
-      running browser.
-- [x] Chip shows name, "N of M trades", and a working ✕; the zero case
-      renders "0 of M trades" and every page shows its empty state.
-- [x] ✕ clears only the active group; global bar filters survive.
-- [x] Backtest isolation proven by measurement.
-- [x] Static call-graph verification passed both checks.
-- [x] Identity guarantee proven by test, and that test proven to fail
-      under mutation.
-- [x] Applying is snapshot-based.
-- [x] filterEngine.ts has automated coverage — it had none before.
-- [x] Each slice's tests were written and passing before the next slice
-      began.
-- [x] Manifest diff equals the Allowed Files list exactly.
-- [x] Zero changes to test config, package.json, docs/ (during
-      implementation), any existing calculations module, or any page.
+- [x] analytics.test.ts and rolling.test.ts exist, run under the
+      existing vitest config, and cover the named surface.
+- [x] Every expected value hand-derived from a documented FORMULA
+      block; none produced by running the function under test.
+- [x] The divergence guard exists, pins both exact values, and is
+      proven able to fail — in both directions.
+- [x] Mutation spot-check performed and reverted byte-identically
+      (twice).
+- [x] analytics.ts and rolling.ts SHA-256-identical to baseline.
+- [x] All six label sites L-1..L-6 updated; Dashboard pie legend
+      confirmed unchanged.
+- [x] No surface displays a bare "Win Rate" / "Win %" / "Win rate"
+      without a denominator qualifier.
+- [x] Slice 2 diff proven text-only; no threshold, condition, rule
+      logic, ordering or layout changed.
+- [x] Every Class-B function remains untested and untouched.
+- [x] AD-017 recorded with the three canonical definitions verbatim,
+      plus Reason / Tradeoff / Alternatives Considered / Why Rejected.
 - [x] npm run verify green: 0 errors, exactly 7 warnings, all tests
-      passing.
-- [x] Every behavior in scope has an automated test or a recorded
-      runtime measurement.
+      passing; build 994 modules.
+- [x] Manifest diff equals the Allowed Files list exactly.
+- [x] Manual verification V-11..V-15 performed and numbers recorded.
+- [x] Zero formula changes, zero storage changes, zero new
+      dependencies.
 
-All exit criteria passed. Phase 22 is closed.
+One qualification, recorded rather than waived: L-6 is DIFF-VERIFIED,
+NOT RUNTIME-OBSERVED. Its branch requires an all-trades win rate above
+60%; the live value is 22%, so it cannot execute. Filters and journal
+data were not altered to force it, since the frozen RFC did not require
+that. See Known Risks.
+
+All exit criteria passed. Phase 23 is closed.
 
 ---
 
 ## Approved Decisions
 
-See docs/ARCHITECTURE_DECISIONS.md.txt, AD-016 (new, this phase).
-AD-001 through AD-015 unchanged, not reopened.
+See docs/ARCHITECTURE_DECISIONS.md.txt, AD-017 (new, this phase).
+AD-001 through AD-016 unchanged, not reopened.
 
 ---
 
@@ -183,41 +230,69 @@ AD-001 through AD-015 unchanged, not reopened.
 
 Introduced by this phase:
 
-- Low/Medium: fixed-threshold analyses — notably pages/Insights.tsx —
-  now run against arbitrarily small filtered samples. Its thresholds
-  and messages carry identical visual confidence at 3 trades as at 300.
-  A foreseeable consequence of making the trade set user-narrowable;
-  no minimum-sample guard exists. Out of scope for this phase.
-- Low: the chip's "N of M" denominator is the TOTAL unfiltered count,
-  so when an account or market filter is also active the ratio
-  understates how much of the reduction came from the chip's own
-  filter. Behaviorally correct, cosmetically imprecise. Observed
-  directly during manual scenario (f).
+- Low: L-6's renamed good-rule body is diff-verified only. The diff
+  shows a single string literal changed with the embedded expression
+  byte-identical, typecheck is clean, and its sibling branch in the
+  same if/else is confirmed rendering correctly by V-15 — but the
+  branch itself has not been seen at runtime.
+- Low: two names now exist for what users colloquially call one thing.
+  A future metric or narration layer must choose deliberately. AD-017
+  exists so that choice is made against a written vocabulary.
+
+Confirmed during this phase, PRE-EXISTING and explicitly deferred —
+not regressions:
+
+- Medium: the Backtest result card's "Recovery Factor" row renders "—"
+  permanently. calculations/backtest.ts calls computeCoreAnalytics()
+  without withRecoveryFactor(), whose only call site is
+  hooks/useAdvancedAnalytics.ts; conversely the three pages where it IS
+  computed never read it. Observed live during V-12. Phase 23 pins the
+  current behavior with an identity assertion and does not fix it.
+- Low: the same all-trades quantity renders as 22% on Insights
+  (Math.round) and 21.6% in the Backtest table (fr.pct, toFixed(1)).
+  A display PRECISION difference, not a formula or denominator
+  difference.
+- Low: getWinLossBreakdown's `closed` means DECISIVE, not closed — a
+  Breakeven trade is closed in the ordinary sense but is excluded.
+  Four metrics key off this name.
+- Low: payoffRatio also returns null when avgLoserDollar is exactly 0;
+  undocumented.
+- Low: avgCommission uses parseFloat, so "12abc" is included as 12,
+  contradicting its doc's "non-numeric ... excluded".
+- Low, environment-dependent: getWeekKey builds a LOCAL date from
+  `${dateStr}T12:00` then reads toISOString(). At UTC offsets >= +12 or
+  <= -12 the Monday-start key lands on the wrong day. The 'week' test
+  deliberately asserts shape and sort only, so this behavior is not
+  frozen.
 
 Carried forward, unchanged and unrelated:
 
+- Low/Medium: fixed-threshold analyses (pages/Insights.tsx) still run
+  against arbitrarily small filtered samples with no minimum-sample
+  guard (Phase 22).
+- Low: the FilterBar chip's "N of M" denominator is the total
+  unfiltered count (Phase 22).
 - Medium: onIndexedDbBlocked has no subscriber (G-3, Phase 6h).
   Unreachable at DATABASE_VERSION = 1, confirmed still 1.
-- Low/Medium items from Phase 6g-2/6h (stopLeaderElection cannot
-  interrupt an executing callback; local-persistence notice
-  read-failure labelling).
+- Low/Medium items from Phase 6g-2/6h.
 - The 7 pre-existing lint warnings.
 
 ---
 
 ## Repository Statistics (measured at phase close)
 
-- src/ files: 155
-- .ts files: 75 · .tsx files: 70 · .test.ts files: 6
-- Tests: 61 passing across 6 files
+- src/ files: 157
+- .ts files: 77 · .tsx files: 70 · .test.ts files: 8
+  (the .test.ts files are a subset of the .ts count, matching the
+  convention used in earlier entries)
+- Tests: 114 passing across 8 files
 - Production build: 994 modules transformed
 - tsc: 0 errors · eslint: 0 errors, 7 warnings
 
-Note on the historical "985 modules" figure: it was recorded during
-Backtesting Foundation, while the backtest code was still unreachable
-from the runtime import graph. The Backtesting UI phase then wired 8
-modules in (→ 993), and Phase 22 adds exactly 1 (→ 994). Earlier
-CHANGELOG entries retain 985 because it was accurate on their date.
+Phase 22 closed at 155 src files, 75 .ts, 6 .test.ts and 61 tests. The
+deltas are exactly the two new test files and their 53 assertions; the
+module count is unchanged because test files are outside the runtime
+import graph and Slice 2 added only string literals.
 
 ---
 
@@ -226,23 +301,16 @@ CHANGELOG entries retain 985 because it was accurate on their date.
 Not yet selected — requires the standard re-derivation-and-approval
 workflow before any scope is set.
 
-Recommended candidate: AI Insights Layer. Phase 22 was sequenced ahead
-of it deliberately, and the reason now holds concretely: an AI feature
-needs a defined subset of trades to reason about, and FilterGroup is
-now that subset object — one concept the user can view through,
-backtest, and (in a future phase) ask questions about. Establishing the
-single composed filtering pipeline first also removes the pressure for
-an AI layer to grow its own trade-selection logic, which would violate
-Playbook §3.
+PROPOSED, NOT APPROVED: a Phase 24 pairing the Insights minimum-sample
+guard (the Phase 22 carried risk above) with the Recovery Factor wiring
+defect confirmed during V-12. Both are small rendered-behavior
+corrections in the same neighborhood, and both touch the metric layer
+Phase 23 has now pinned. No scope has been defined and no work has
+begun.
 
-Alternative candidate, smaller: wire components/trade/TradeReview.tsx.
-It remains the project's second dead-end capability — a user can define
-checklist templates and custom fields in Settings but cannot apply them
-to any trade, because TradeReview.tsx has zero importers. Narrower in
-value than the AI layer and more intrusive (it requires modifying
-TradeForm.tsx or TradeRow.tsx and adding a persistence decision), but
-it closes a visible gap.
-
-Neither is approved. Also still open and unscoped: Prop Firm Tracker
-and Position Size Calculator (never migrated from the original app),
-and Sync Engine enablement (built, flagged off).
+Also still open and unscoped, unchanged from Phase 22: Trade Review
+integration (components/trade/TradeReview.tsx remains the project's
+dead-end capability, with its persistence layer already built and
+unused), Prop Firm Tracker and Position Size Calculator (never migrated
+from the original app), Sync Engine enablement (built, flagged off), and
+the AI Insights Layer.

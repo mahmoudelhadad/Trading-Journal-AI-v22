@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 23 — Analytics Integrity & Metric Vocabulary
+Phase 24 — Recovery Factor Wiring
 
 Status:
 
@@ -14,113 +14,73 @@ COMPLETE
 
 ## Objective
 
-Make the metric layer provable and its outputs unambiguously named,
-without changing a single formula.
+Make newly computed BacktestResult objects populate core.recoveryFactor
+by calling the already-existing, already-tested withRecoveryFactor()
+helper, using the drawdown computeBacktestResult() already computes.
 
-Two problems, both live and user-visible before this phase:
-
-1. calculations/analytics.ts (573 lines, 34 returned fields) and
-   calculations/rolling.ts had NO value-level test coverage. They
-   appeared in backtest.test.ts only as self-referential oracles
-   (`expect(result.summary).toEqual(summarizeTrades(matched))`), which
-   proves composition but never a value. summarizeTrades() is the
-   most-called calculation in the application.
-
-2. Two different quantities reached the user under the identical label
-   "Win Rate": summarizeTrades().wr = green/(green+red) and
-   computeCoreAnalytics().winPct = green/n. The divergence has been
-   documented in analytics.ts since Phase 8; the label collision never
-   was. Two surfaces contradicted themselves inside a single view —
-   the Dashboard KPI against its own outcome pie, and the Backtest
-   result card's KPI against its own table.
+Before this phase the Backtest result card's "Recovery Factor" row
+rendered "—" permanently, and had done since Backtesting Foundation.
 
 ---
 
 ## Scope (as delivered)
 
-SLICE 1 — Characterization tests, purely additive:
+1. calculations/backtest.ts — four lines. The analytics import was
+   extended to include withRecoveryFactor; the existing inline
+   computeDrawdown(equitySequence) call was hoisted into a single
+   `const drawdown`; that same object is returned by shorthand; and
+   `core` is now
+   withRecoveryFactor(computeCoreAnalytics(matched),
+                      drawdown.maxDrawdownDollar).
+   computeDrawdown() is still called exactly ONCE, so the value feeding
+   recoveryFactor and the value stored in result.drawdown are the same
+   object and cannot diverge.
+2. calculations/backtest.test.ts — T-2 and T-3 added BEFORE the
+   production change; T-1's existing oracle updated to the composed
+   form afterwards.
 
-1. calculations/rolling.test.ts (new) — summarizeTrades (all 9 fields,
-   empty baseline, all-Breakeven, all-blank, null-field handling),
-   groupTradesBy (bucketing, falsy-key exclusion, key stringification),
-   aggregateByPeriod ('day' and 'month' fully; 'week' shape, sort and
-   conservation only).
-2. calculations/analytics.test.ts (new) — getWinLossBreakdown, the full
-   34-field empty-input baseline, the 29 Class-A fields of
-   computeCoreAnalytics with their null/empty edges, the daily rollup,
-   the risk/quality scores, the undefined-denominator cases,
-   withRecoveryFactor, and the Class-C aliases as identity assertions
-   only.
-3. The divergence guard — winPct !== wr on a set containing Breakeven
-   and blank outcomes, both values pinned exactly, plus a sibling
-   asserting they agree when every trade is decisive.
-
-Every expected value was hand-derived from the documented FORMULA
-blocks. None was produced by executing the function under test.
-
-SLICE 2 — Metric label disambiguation, text only (L-1..L-6):
-
-4. Dashboard KPI -> "Win Rate (W/L only)".
-5. Insights StatBox -> "Win Rate (all trades)".
-6. Backtest result KPI -> "Win Rate (W/L only)".
-7. Backtest core table -> "Win % (all trades)", "Loss % (all trades)",
-   "Breakeven % (all trades)".
-8. Insights rule titles -> "Strong All-Trade Win Rate",
-   "Low All-Trade Win Rate (N%)".
-9. Insights good-rule body -> "All-trade win rate N% ...".
-
-The Dashboard outcome pie legend is deliberately unchanged (RFC open
-question OQ-2, approved): it is a composition display in a card already
-titled "Win / Loss / BE", not a win-rate label.
+Nothing else. No formula, no type, no storage, no migration.
 
 ---
 
 ## Files Changed
 
-Modified — string literals only (3):
-- src/pages/Dashboard.tsx
-- src/pages/Insights.tsx
-- src/components/backtest/BacktestResultView.tsx
+Modified (2):
+- src/calculations/backtest.ts
+- src/calculations/backtest.test.ts
 
-New (2):
-- src/calculations/analytics.test.ts
-- src/calculations/rolling.test.ts
-
-Documentation, at phase close only (3):
-- docs/ARCHITECTURE_DECISIONS.md.txt (AD-017, appended)
+Documentation, at phase close only (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Eight files, exactly matching the phase's Allowed Files list — proven
-by SHA-256 manifest diff against a 167-entry pre-flight baseline, not
-by inspection. The three source files changed 8 lines total: 8
-insertions, 8 deletions, every one a string literal in a label
-position.
+Four files, exactly matching the phase's Allowed Files list — proven by
+SHA-256 manifest diff against a 169-entry pre-flight baseline, not by
+inspection. No AD-018: this phase implements an already-established
+contract rather than making a new architectural decision (see Approved
+Decisions).
 
 ---
 
 ## Out of Scope (respected)
 
-- No formula change anywhere. Both win-rate definitions survive
-  byte-identical.
-- calculations/analytics.ts and calculations/rolling.ts were NOT edited
-  at all — not one character, not even a comment. Proven by hash.
-- No threshold, rule condition, rule ordering, or layout change.
-  `${Math.round(wr * 100)}%` is byte-identical at both Insights sites.
-- No new storage key, no DATABASE_VERSION bump, no persistence-class
-  decision, no migration.
-- No test-infrastructure change: no jsdom, no testing-library, no setup
-  file, no vitest config edit, no new dependency.
-- No component, hook, or page test.
-- No AI, Prop Firm, Position Calculator, Sync, Backtest v2, or
-  TradeReview work.
-- The 7 pre-existing lint warnings were left untouched.
-- KI-001..KI-005 remain preserved.
-- Class-B functions in rolling.ts (getTradeFrequency, getRollingStats,
-  getStandardRollingWindows, getWeekKey's Monday-start semantics) were
-  deliberately left untested and untouched: none carries a
-  Formula/Source/Assumptions block, so a test would manufacture a
-  contract rather than verify one.
+- No Recovery Factor formula change. It remains
+  netProfit / Math.abs(maxDrawdownDollar).
+- calculations/analytics.ts and calculations/drawdown.ts were NOT edited
+  at all. Proven by hash.
+- computeCoreAnalytics() still returns recoveryFactor: null. No drawdown
+  knowledge was moved into analytics.ts and no circular dependency was
+  introduced.
+- No change to BacktestResultView.tsx — it already rendered the field.
+- No change to CoreAnalytics or BacktestResult types.
+- No storage key, no DATABASE_VERSION bump (still 1), no migration, no
+  backfill, no recomputation of stored results.
+- No change to hooks, services, or persistence.
+- No test-infrastructure change, no new dependency.
+- Insights Sample-Size Discipline (Phase 25) and the rule-12 issues
+  found during re-derivation were not touched.
+- The 7 pre-existing lint warnings and KI-001..KI-005 remain.
+- calculations/backtest.ts's stale composition header was deliberately
+  NOT corrected — see Known Risks.
 
 ---
 
@@ -129,100 +89,93 @@ position.
 Automated:
 - npm run typecheck — 0 errors, at every step.
 - npm run lint — 0 errors, exactly 7 pre-existing warnings.
-- npm run test — 61 -> 114 passing (6 files -> 8).
+- npm run test — 114 -> 116 passing, still across 8 files.
 - npm run verify — full chain green.
-- npm run build — succeeds, 994 modules (unchanged: test files are
-  outside the runtime import graph and string literals add no module).
+- npm run build — succeeds, 994 modules (a composition change adds no
+  module to the runtime import graph).
+- git diff --check — clean, no whitespace errors.
 
 Evidence-based, not inspection-based:
+- RED-THEN-GREEN. T-2 was written and run BEFORE any production change.
+  It failed with "expected null to be 4" at backtest.test.ts:158. The
+  failure landed on the LAST of four assertions, proving the three
+  before it passed — tradeCount 5, maxDrawdownDollar 50, netProfit 200 —
+  which confirms both inputs to the Recovery Factor were already correct
+  at runtime and isolates the red result to the missing composition
+  rather than to a fixture error. At that checkpoint analytics.ts,
+  drawdown.ts and backtest.ts were all verified byte-identical to
+  pre-flight.
 - Frozen-file proof: analytics.ts SHA-256
   868053B3F9D5A7788ABFAA78D7FD17A7D13E94EC1C015AD0873CE99EDB21703D
-  and rolling.ts SHA-256
-  4510805943F2AC0304BDA784D75D80761C9885212B6F5C724B6310FFAAA6D0CA
-  are identical at pre-flight and at close, including across both
-  mutation cycles.
-- Mutation spot-check A: summarizeTrades().wr switched to the
-  all-trades denominator -> 5 tests failed, including the divergence
-  guard. aggregateByPeriod's 'month' test correctly did NOT fail,
-  because in both month buckets the two denominators coincide.
-- Mutation spot-check B: computeCoreAnalytics().winPct switched to the
-  decisive-trade denominator -> 3 tests failed, again including the
-  guard. The guard therefore fails when EITHER formula is moved toward
-  the other. Both files were restored from pristine copies and
-  hash-verified.
-- SHA-256 manifest diff: a 167-entry manifest of src/ + docs/ + root
-  config, taken at pre-flight and re-compared at close, differs on
-  exactly the 8 Allowed Files and nothing else.
-- Slice 2 diff audit: every changed line is a string literal in a
-  `label=` position, a coreRows row name, or an Insights rule
-  title/body. No expression, operator, threshold, condition, prop,
-  import, or JSX structure was touched.
+  and drawdown.ts SHA-256
+  F7E62E29D070582E766A2CCF593AEA9594403A9C7912D826BBCD48D8848F1711
+  are identical at pre-flight and at close.
+- Phase 23 contract intact: computeCoreAnalytics(...).recoveryFactor
+  === null still holds; analytics.test.ts is unmodified and green.
+- SHA-256 manifest diff: the 169-entry pre-flight manifest of src/ +
+  docs/ + root config differs at close on exactly the 4 Allowed Files.
 
 Manual, in a running browser against a real authenticated account with
-74 trades (16 Green, 45 Red, 10 Breakeven, 3 blank) — all five
-scenarios passed:
-- V-11 PASS: Dashboard "Win Rate (W/L only)" 26.2% (16/61) against
-  Insights "Win Rate (all trades)" 22% (16/74), with the unchanged
-  outcome pie independently reconciling at 23% (16/71).
-- V-12 PASS: a no-condition backtest matched 74 of 74 and showed
-  "Win Rate (W/L only)" 26.2% and "Win % (all trades)" 21.6% in the
-  SAME card, plus 60.8% / 13.5%. Those three sum to 95.9%, the missing
-  4.1% being exactly the 3 blank-outcome trades — the documented
-  behavior observed in production.
-- V-13 PASS: no label wraps, clips, truncates or overlaps at default
-  window width; no horizontal scrollbar.
-- V-14 PASS: numbers unchanged. 74 everywhere; Total R -1.45R and
-  Avg R -0.02R identical on Dashboard and Insights and mutually
-  consistent; Net P/L the same amount at 2dp and 0dp; Return and
-  Capital independently reconcile.
-- V-15 PASS: renamed Insights rule titles with identical trigger
-  behavior — "Low All-Trade Win Rate (22%)" first, "Strong All-Trade
-  Win Rate" correctly absent, all 12 cards in source-declared order,
-  no pre-phase string anywhere.
+74 trades, after a hard reload to guarantee post-fix code:
+- V-1 PASS: a NEW result, "P24 Recovery Check", previewed "Matches 74 of
+  74 trades" and recorded 74 trades, Max Drawdown -$17,383 (-53.2%),
+  Net Profit +$5,286.75, Recovery Factor 0.30 — numeric, not "—". That
+  Net Profit equals the Dashboard "Net P/L" from Phase 23's V-14 to the
+  cent, confirming the match-all captured the whole journal.
+- V-2 PASS: Max Drawdown renders at 0 decimals, so the underlying value
+  lies in [17382.5, 17383.5). Carried through
+  netProfit / |maxDrawdownDollar| that interval is
+  [0.3041246, 0.3041421], whose entire range renders as 0.30. No
+  alternative denominator fits (maxDrawdownPercent 99.38,
+  startingCapital 0.53, ending equity 0.35), and the unsigned result
+  confirms Math.abs is in force.
+- V-3 PASS: the pre-existing snapshot "V12 Label Check", timestamp
+  8/5/2026 12:59:09 PM — created hours before this phase's change —
+  still displays "—". Same journal, same strategy, same trades; only the
+  computation time differs. Class B snapshots were neither migrated nor
+  recomputed on read.
+- V-4 NOT RUNTIME-OBSERVED: the zero-drawdown case is covered by T-3
+  only. Producing it live would have required altering journal data or
+  hunting for an all-winning subset filter, both outside the frozen RFC,
+  which designated V-4 opportunistic.
 
 ---
 
 ## Exit Criteria
 
-- [x] analytics.test.ts and rolling.test.ts exist, run under the
-      existing vitest config, and cover the named surface.
-- [x] Every expected value hand-derived from a documented FORMULA
-      block; none produced by running the function under test.
-- [x] The divergence guard exists, pins both exact values, and is
-      proven able to fail — in both directions.
-- [x] Mutation spot-check performed and reverted byte-identically
-      (twice).
-- [x] analytics.ts and rolling.ts SHA-256-identical to baseline.
-- [x] All six label sites L-1..L-6 updated; Dashboard pie legend
-      confirmed unchanged.
-- [x] No surface displays a bare "Win Rate" / "Win %" / "Win rate"
-      without a denominator qualifier.
-- [x] Slice 2 diff proven text-only; no threshold, condition, rule
-      logic, ordering or layout changed.
-- [x] Every Class-B function remains untested and untouched.
-- [x] AD-017 recorded with the three canonical definitions verbatim,
-      plus Reason / Tradeoff / Alternatives Considered / Why Rejected.
-- [x] npm run verify green: 0 errors, exactly 7 warnings, all tests
-      passing; build 994 modules.
+- [x] computeBacktestResult composes withRecoveryFactor over
+      computeCoreAnalytics using its single existing computeDrawdown
+      result.
+- [x] analytics.ts and drawdown.ts SHA-256-identical to baseline.
+- [x] computeCoreAnalytics(...).recoveryFactor === null still holds;
+      Phase 23 tests untouched and green.
+- [x] T-1 updated; T-2 and T-3 present with hand-derived values; T-2
+      proven able to fail, before the fix, for the right reason.
+- [x] No type, storage key, DATABASE_VERSION, migration, or dependency
+      change.
+- [x] npm run verify green: 0 errors, exactly 7 warnings; build 994
+      modules.
 - [x] Manifest diff equals the Allowed Files list exactly.
-- [x] Manual verification V-11..V-15 performed and numbers recorded.
-- [x] Zero formula changes, zero storage changes, zero new
-      dependencies.
+- [x] V-1..V-3 performed and numbers recorded.
+- [x] V-4 explicitly recorded as test-only rather than claimed.
+- [x] Documentation states plainly that pre-existing results keep "—"
+      and that zero-drawdown runs still show "—".
 
-One qualification, recorded rather than waived: L-6 is DIFF-VERIFIED,
-NOT RUNTIME-OBSERVED. Its branch requires an all-trades win rate above
-60%; the live value is 22%, so it cannot execute. Filters and journal
-data were not altered to force it, since the frozen RFC did not require
-that. See Known Risks.
-
-All exit criteria passed. Phase 23 is closed.
+All exit criteria passed. Phase 24 is closed.
 
 ---
 
 ## Approved Decisions
 
-See docs/ARCHITECTURE_DECISIONS.md.txt, AD-017 (new, this phase).
-AD-001 through AD-016 unchanged, not reopened.
+None. No new architectural decision was made, so no ADR was written and
+docs/ARCHITECTURE_DECISIONS.md.txt was not modified. This phase
+implements the ALREADY-ESTABLISHED Recovery Factor contract: it upholds
+AD-015's composition model and the existing acyclic-import rationale
+documented in analytics.ts (lines 156-163). Playbook §9 requires an ADR
+for architectural decisions, and there is none here; precedent confirms
+phases close without one — the Backtesting UI and Phase 6f entries carry
+no Architectural Decisions section. AD-001 through AD-017 unchanged, not
+reopened.
 
 ---
 
@@ -230,46 +183,35 @@ AD-001 through AD-016 unchanged, not reopened.
 
 Introduced by this phase:
 
-- Low: L-6's renamed good-rule body is diff-verified only. The diff
-  shows a single string literal changed with the embedded expression
-  byte-identical, typecheck is clean, and its sibling branch in the
-  same if/else is confirmed rendering correctly by V-15 — but the
-  branch itself has not been seen at runtime.
-- Low: two names now exist for what users colloquially call one thing.
-  A future metric or narration layer must choose deliberately. AD-017
-  exists so that choice is made against a written vocabulary.
-
-Confirmed during this phase, PRE-EXISTING and explicitly deferred —
-not regressions:
-
-- Medium: the Backtest result card's "Recovery Factor" row renders "—"
-  permanently. calculations/backtest.ts calls computeCoreAnalytics()
-  without withRecoveryFactor(), whose only call site is
-  hooks/useAdvancedAnalytics.ts; conversely the three pages where it IS
-  computed never read it. Observed live during V-12. Phase 23 pins the
-  current behavior with an identity assertion and does not fix it.
-- Low: the same all-trades quantity renders as 22% on Insights
-  (Math.round) and 21.6% in the Backtest table (fr.pct, toFixed(1)).
-  A display PRECISION difference, not a formula or denominator
-  difference.
-- Low: getWinLossBreakdown's `closed` means DECISIVE, not closed — a
-  Breakeven trade is closed in the ordinary sense but is excluded.
-  Four metrics key off this name.
-- Low: payoffRatio also returns null when avgLoserDollar is exactly 0;
-  undocumented.
-- Low: avgCommission uses parseFloat, so "12abc" is included as 12,
-  contradicting its doc's "non-numeric ... excluded".
-- Low, environment-dependent: getWeekKey builds a LOCAL date from
-  `${dateStr}T12:00` then reads toISOString(). At UTC offsets >= +12 or
-  <= -12 the Monday-start key lands on the wrong day. The 'week' test
-  deliberately asserts shape and sort only, so this behavior is not
-  frozen.
+- Low: calculations/backtest.ts's file header enumerates the L3
+  functions it composes and does not mention withRecoveryFactor(), so
+  that list is now incomplete. Documentation drift inside a production
+  file. Correcting it would have been a fifth edit to backtest.ts beyond
+  the four the frozen RFC authorised, so it was recorded rather than
+  taken as an unapproved scope expansion. Safe to fix in any future
+  phase that legitimately opens this file.
+- Low: the fix does not guarantee a visible value. A backtest whose
+  matched set never draws down still yields recoveryFactor null and
+  still renders "—". Pinned by T-3.
 
 Carried forward, unchanged and unrelated:
 
-- Low/Medium: fixed-threshold analyses (pages/Insights.tsx) still run
-  against arbitrarily small filtered samples with no minimum-sample
-  guard (Phase 22).
+- Low/Medium: fixed-threshold analyses (pages/Insights.tsx) run against
+  arbitrarily small filtered samples with no minimum-sample guard. Only
+  1 of 13 rules gates on total n; 5 gate on an inlined per-group n >= 2
+  duplicated three times; 5 have no guard at all. Insights.tsx:271
+  already promises "need at least 5 trades", a minimum nothing enforces.
+  This is Phase 25's subject.
+- Low: rule 12's avgR / avgPlanned type selector misbehaves when
+  avgPlanned is 0 or negative, while its body defensively prints 0%; and
+  its avgR !== null guard is dead.
+- Low: the same all-trades quantity renders as 22% on Insights
+  (Math.round) and 21.6% in the Backtest table (fr.pct, toFixed(1)) — a
+  display precision difference, not a formula or denominator difference.
+- Low: getWinLossBreakdown's `closed` means DECISIVE, not closed;
+  payoffRatio also returns null when avgLoserDollar is exactly 0;
+  avgCommission's parseFloat tolerance; getWeekKey's timezone
+  dependency at UTC offsets >= +12 or <= -12.
 - Low: the FilterBar chip's "N of M" denominator is the total
   unfiltered count (Phase 22).
 - Medium: onIndexedDbBlocked has no subscriber (G-3, Phase 6h).
@@ -285,14 +227,13 @@ Carried forward, unchanged and unrelated:
 - .ts files: 77 · .tsx files: 70 · .test.ts files: 8
   (the .test.ts files are a subset of the .ts count, matching the
   convention used in earlier entries)
-- Tests: 114 passing across 8 files
+- Tests: 116 passing across 8 files
 - Production build: 994 modules transformed
 - tsc: 0 errors · eslint: 0 errors, 7 warnings
 
-Phase 22 closed at 155 src files, 75 .ts, 6 .test.ts and 61 tests. The
-deltas are exactly the two new test files and their 53 assertions; the
-module count is unchanged because test files are outside the runtime
-import graph and Slice 2 added only string literals.
+Phase 23 closed at 157 src files and 114 tests. This phase adds no file
+and no module; the only delta is the two new assertions in an existing
+test file.
 
 ---
 
@@ -301,16 +242,17 @@ import graph and Slice 2 added only string literals.
 Not yet selected — requires the standard re-derivation-and-approval
 workflow before any scope is set.
 
-PROPOSED, NOT APPROVED: a Phase 24 pairing the Insights minimum-sample
-guard (the Phase 22 carried risk above) with the Recovery Factor wiring
-defect confirmed during V-12. Both are small rendered-behavior
-corrections in the same neighborhood, and both touch the metric layer
-Phase 23 has now pinned. No scope has been defined and no work has
-begun.
+PROPOSED, NOT APPROVED: Phase 25 — Insights Sample-Size Discipline. It
+remains DEFERRED and UNIMPLEMENTED; no work has begun. Carried context
+for its re-derivation: only 1 of 13 Insights rules gates on total sample
+size, 5 gate on an inlined per-group n >= 2 duplicated three times, and
+5 have no guard at all, while Insights.tsx:271 already promises a
+5-trade minimum that nothing enforces. The phase needs one decision the
+repository cannot supply — the threshold, and whether under-threshold
+rules are suppressed or rendered with a confidence qualifier.
 
-Also still open and unscoped, unchanged from Phase 22: Trade Review
-integration (components/trade/TradeReview.tsx remains the project's
-dead-end capability, with its persistence layer already built and
-unused), Prop Firm Tracker and Position Size Calculator (never migrated
-from the original app), Sync Engine enablement (built, flagged off), and
-the AI Insights Layer.
+Also still open and unscoped, unchanged: Trade Review integration
+(components/trade/TradeReview.tsx remains a dead-end capability with its
+persistence layer already built and unused), Prop Firm Tracker and
+Position Size Calculator (never migrated from the original app), Sync
+Engine enablement (built, flagged off), and the AI Insights Layer.

@@ -25,7 +25,7 @@ import { applyFilterGroup, createFilterCondition, createFilterGroup } from './fi
 import { summarizeTrades } from './rolling.js';
 import { buildEquitySequence, computeDrawdown } from './drawdown.js';
 import { computeStreaks, getAverageStreaks, getLongestStreaks } from './streaks.js';
-import { computeCoreAnalytics } from './analytics.js';
+import { computeCoreAnalytics, withRecoveryFactor } from './analytics.js';
 import { computeBacktestResult } from './backtest.js';
 import type { Account } from '@apptypes/account.js';
 import type { RawTradeContent } from '@apptypes/trade.js';
@@ -74,7 +74,23 @@ describe('computeBacktestResult', () => {
     expect(result.streaks).toEqual(computeStreaks(matched));
     expect(result.averageStreaks).toEqual(getAverageStreaks(matched));
     expect(result.longestStreaks).toEqual(getLongestStreaks(matched));
-    expect(result.core).toEqual(computeCoreAnalytics(matched));
+    // Phase 24: `core` is now computeCoreAnalytics() composed with
+    // withRecoveryFactor(). The max drawdown fed to the oracle is
+    // recomputed independently here — NOT read from result.drawdown or
+    // result.core, which would make this assertion self-referential.
+    //
+    // NOTE: this oracle passes both before and after the Phase 24 fix,
+    // because `greenOnly` matches three winners whose equity curve only
+    // rises, so maxDrawdownDollar is 0 and withRecoveryFactor() leaves
+    // recoveryFactor null either way. It documents intent; it is NOT a
+    // regression signal for the wiring. The load-bearing coverage is
+    // the non-zero-drawdown test at the end of this file.
+    expect(result.core).toEqual(
+      withRecoveryFactor(
+        computeCoreAnalytics(matched),
+        computeDrawdown(buildEquitySequence(matched, STARTING_CAPITAL)).maxDrawdownDollar,
+      ),
+    );
   });
 
   it('produces the same documented empty baselines as the underlying L3 functions when the filter matches nothing', () => {
@@ -117,5 +133,57 @@ describe('computeBacktestResult', () => {
   it('does not persist a full equity-curve array — regression guard for the resolved blocking item', () => {
     const result = computeBacktestResult(greenOnly, trades, STARTING_CAPITAL);
     expect(result).not.toHaveProperty('equitySequence');
+  });
+
+  // ── Phase 24 — Recovery Factor wiring ──────────────────────
+  //
+  // T-2 (load-bearing) and T-3 below pin the composition of
+  // withRecoveryFactor() into the stored result's `core`.
+  //
+  // Every expected value is HAND-DERIVED from the module fixture, not
+  // read from any function under test. With symbol 'US100' (f=1, pv=1),
+  // entryPrice 100, stopLoss 90, positionSize 1 and commission 0:
+  //   exitPrice 200 -> _r = +10, _pl = _netPL = +100  (Green)
+  //   exitPrice  50 -> _r =  -5, _pl = _netPL =  -50  (Red)
+  // The module fixture is [200, 200, 50, 200, 50].
+
+  const matchesEverything = createFilterGroup('AND', []);
+
+  it('populates recoveryFactor as netProfit / |maxDrawdown| when the matched set has a real drawdown', () => {
+    // An empty conditions array matches every trade (see backtest.ts's
+    // header), so `matched` is all five fixture trades in input order.
+    //
+    // Equity from a starting capital of 1000, adding _netPL per trade:
+    //   1000 -> 1100 -> 1200 -> 1150 -> 1250 -> 1200
+    // Running peak:
+    //   1000    1100    1200    1200    1250    1250
+    // Peak-to-trough declines: 1200->1150 = 50, and 1250->1200 = 50.
+    //   => maxDrawdownDollar = 50
+    // netProfit = sum(_netPL) = 100 + 100 - 50 + 100 - 50 = 200
+    //   => recoveryFactor = 200 / |50| = 4
+    const result = computeBacktestResult(matchesEverything, trades, STARTING_CAPITAL);
+
+    // Asserted first so a fixture error is distinguishable from a
+    // wiring error: if these two hold, the arithmetic feeding the
+    // Recovery Factor is sound and only the composition can be wrong.
+    expect(result.tradeCount).toBe(5);
+    expect(result.drawdown.maxDrawdownDollar).toBe(50);
+    expect(result.core.netProfit).toBe(200);
+
+    // The behavior this phase exists to fix.
+    expect(result.core.recoveryFactor).toBe(4);
+  });
+
+  it('leaves recoveryFactor null when the matched set never draws down', () => {
+    // greenOnly matches the three winners, whose equity curve rises
+    // monotonically: 1000 -> 1100 -> 1200 -> 1300.
+    //   => maxDrawdownDollar = 0
+    // withRecoveryFactor() returns null for a zero max drawdown
+    // (analytics.ts), so the row legitimately stays empty. Fixing the
+    // wiring does NOT guarantee a number appears.
+    const result = computeBacktestResult(greenOnly, trades, STARTING_CAPITAL);
+
+    expect(result.drawdown.maxDrawdownDollar).toBe(0);
+    expect(result.core.recoveryFactor).toBeNull();
   });
 });

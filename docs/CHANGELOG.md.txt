@@ -1,3 +1,185 @@
+# Phase 24 — Recovery Factor Wiring
+
+Status:
+COMPLETE
+
+Summary:
+Fixed a wiring defect that made the Backtest result card's "Recovery
+Factor" row render "—" permanently, ever since Backtesting Foundation.
+
+The cause was an exact inversion. computeCoreAnalytics() returns
+recoveryFactor: null BY DESIGN (analytics.ts:515) — max drawdown needs
+the full equity SEQUENCE, which lives in drawdown.ts, so filling it
+there would create an analytics.ts <-> drawdown.ts circular import. The
+field is meant to be filled afterwards by withRecoveryFactor(). But
+withRecoveryFactor() had exactly ONE call site in the whole tree,
+hooks/useAdvancedAnalytics.ts:64 — a path consumed by Insights,
+Strategy and Equity, none of which render the metric. Meanwhile
+calculations/backtest.ts, whose result IS rendered with a Recovery
+Factor row, never called it, despite computing the drawdown one line
+earlier. The path that renders never filled; the path that filled never
+rendered.
+
+What shipped:
+
+- PRODUCTION FIX (calculations/backtest.ts, 4 lines).
+  computeBacktestResult() now composes the already-existing, already-
+  tested withRecoveryFactor() helper over computeCoreAnalytics(), using
+  the SAME drawdown object it returns in the result:
+    const drawdown = computeDrawdown(equitySequence);   // hoisted
+    ...
+    drawdown,                                            // shorthand
+    core: withRecoveryFactor(computeCoreAnalytics(matched),
+                             drawdown.maxDrawdownDollar),
+  computeDrawdown() is still called exactly ONCE, so the value feeding
+  recoveryFactor and the value stored in result.drawdown are the same
+  object and cannot diverge. This reproduces the composition already
+  proven in hooks/useAdvancedAnalytics.ts:62-64.
+
+- NO FORMULA CHANGED. Recovery Factor remains
+  netProfit / Math.abs(maxDrawdownDollar), unchanged in analytics.ts.
+
+- ARCHITECTURAL REASON PRESERVED. computeCoreAnalytics() still returns
+  recoveryFactor: null. No drawdown knowledge moved into analytics.ts
+  and no circular dependency was introduced. Phase 23's contract test
+  (analytics.test.ts:357) is untouched and still green.
+
+- FROZEN FILES. calculations/analytics.ts and calculations/drawdown.ts
+  were not edited at all. Proven by SHA-256 comparison against the
+  pre-flight baseline:
+    analytics.ts
+      868053B3F9D5A7788ABFAA78D7FD17A7D13E94EC1C015AD0873CE99EDB21703D
+    drawdown.ts
+      F7E62E29D070582E766A2CCF593AEA9594403A9C7912D826BBCD48D8848F1711
+
+Files Changed
+- calculations/backtest.ts (4 lines: import, hoisted const, shorthand,
+  composed core)
+- calculations/backtest.test.ts (T-1 oracle updated; T-2 and T-3 added)
+- docs/CHANGELOG.md.txt (this entry)
+- docs/CURRENT_PHASE.md.txt
+
+Four files, exactly matching the phase's Allowed Files list. No
+docs/ARCHITECTURE_DECISIONS.md.txt change — see Notes.
+
+Test Coverage Added
+- test count 114 -> 116, still across 8 files.
+- T-2 (load-bearing, added BEFORE the production fix) uses an empty-
+  condition FilterGroup, which matches every fixture trade. All values
+  hand-derived from the existing module fixture, capital 1000:
+    equity  1000 -> 1100 -> 1200 -> 1150 -> 1250 -> 1200
+    two peak-to-trough declines of 50 => maxDrawdownDollar = 50
+    netProfit = 100 + 100 - 50 + 100 - 50 = 200
+    => recoveryFactor = 200 / |50| = 4
+- T-3 pins the zero-drawdown contract: greenOnly matches three winners
+  whose equity only rises, so maxDrawdownDollar = 0 and recoveryFactor
+  stays null. Fixing the wiring does NOT guarantee a number appears.
+- T-1's existing oracle was updated to the composed form, with the max
+  drawdown recomputed independently rather than read from result.drawdown
+  or result.core. IMPORTANT: that oracle passes both before and after
+  the fix, because greenOnly has zero drawdown — it documents intent and
+  is NOT a regression signal. This corrected an incorrect prediction made
+  during the Phase 24 discovery pass, which had expected it to break.
+
+Red -> Green Proof
+- BEFORE the production change, with only the test file modified, T-2
+  failed exactly as intended:
+    AssertionError: expected null to be 4 // Object.is equality
+    Expected: 4    Received: null
+    at backtest.test.ts:158  expect(result.core.recoveryFactor).toBe(4)
+- The failure landed on the LAST of four assertions, which proves the
+  three before it passed: tradeCount = 5, maxDrawdownDollar = 50,
+  netProfit = 200. Both inputs to the Recovery Factor were therefore
+  confirmed correct at runtime, isolating the red result to the missing
+  composition rather than to a fixture or arithmetic mistake.
+- At that checkpoint analytics.ts, drawdown.ts AND backtest.ts were all
+  verified byte-identical to pre-flight; only the test file had changed.
+- AFTER the fix the same test passes with all four assertions holding.
+
+Verification
+- typecheck: 0 errors
+- lint: 0 errors, exactly 7 pre-existing warnings
+- test: 116/116 passing across 8 files
+- verify: green
+- build: succeeds, 994 modules — unchanged, since a composition change
+  adds no module to the runtime import graph
+- Phase 23 contract confirmed intact: computeCoreAnalytics(...)
+  .recoveryFactor === null still holds and its test is unmodified.
+- Manifest: the 169-entry pre-flight SHA-256 manifest of src/ + docs/ +
+  root config differs at close on exactly the 4 Allowed Files.
+
+Manual Verification (completed)
+Performed in a running browser against the real authenticated account,
+after a hard reload to guarantee post-fix code.
+- V-1 PASS. A NEW backtest named "P24 Recovery Check", run with the
+  default empty condition after the builder previewed "Matches 74 of 74
+  trades", recorded 74 trades, Max Drawdown -$17,383 (-53.2%), Net Profit
+  +$5,286.75, and Recovery Factor 0.30 — NUMERIC, not "—".
+  Cross-phase corroboration: that Net Profit equals, to the cent, the
+  Dashboard "Net P/L" recorded during Phase 23's V-14, confirming the
+  match-all strategy captured the entire journal.
+- V-2 PASS. Max Drawdown displays at 0 decimals, so the underlying value
+  lies in [17382.5, 17383.5). Carrying that interval through
+  netProfit / |maxDrawdownDollar| gives [0.3041246, 0.3041421], whose
+  entire range renders as 0.30 at two decimals — the nearest rounding
+  boundary (0.305) is roughly 50x the interval width away. No alternative
+  denominator fits: maxDrawdownPercent gives 99.38, startingCapital 0.53,
+  ending equity 0.35. The unsigned result also confirms Math.abs is in
+  force; a signed denominator would have rendered -0.30.
+- V-3 PASS. The pre-existing stored result "V12 Label Check", timestamp
+  8/5/2026 12:59:09 PM — created during Phase 23's V-12, hours before
+  this phase's code change — STILL displays Recovery Factor "—" after
+  the fix shipped and after a hard reload. Same journal, same match-all
+  strategy, same trades; the only difference is when the snapshot was
+  computed. This proves Class B snapshots were neither migrated nor
+  recomputed on read.
+- V-4 NOT RUNTIME-OBSERVED. The zero-drawdown case is covered by T-3
+  only. Producing it live would require altering journal data or
+  hunting for an all-winning subset filter, both outside the frozen
+  RFC, which designated V-4 opportunistic. Recorded as test-only rather
+  than implied.
+
+Persistence / Backward Compatibility
+- No persisted shape change. BacktestResult.core is CoreAnalytics, which
+  already declared recoveryFactor: number | null and already serialised
+  it as null.
+- No storage-key change. No DATABASE_VERSION bump (still 1).
+- No migration, no backfill, no recomputation of stored results.
+- Existing snapshots remain immutable historical computed results and
+  may legitimately continue to display "—" forever. Verified live (V-3).
+- Only newly computed backtests receive the corrected Recovery Factor,
+  and only when max drawdown is non-zero.
+- Zero or null max drawdown still yields null and still renders "—".
+  This fix does not guarantee a value appears.
+- Compatible in both directions: an older build reading a populated
+  field sees a valid number; this build reading old records sees null.
+
+Known Blockers
+- None.
+
+Notes
+- NO AD-018. This phase implements the ALREADY-ESTABLISHED Recovery
+  Factor contract rather than creating a new architectural decision: it
+  upholds AD-015's composition model and the existing acyclic-import
+  rationale in analytics.ts. Playbook §9 requires an ADR for
+  architectural decisions, and there is none here. Precedent confirms
+  phases close without one — the Backtesting UI and Phase 6f entries
+  have no Architectural Decisions section.
+- HEADER DRIFT, RECORDED NOT FIXED: calculations/backtest.ts's file
+  header enumerates the L3 functions it composes and does not mention
+  withRecoveryFactor(), so that list is now incomplete. This is
+  documentation drift inside a production file, and correcting it would
+  have been a fifth edit to backtest.ts beyond the four the frozen RFC
+  authorised. Deliberately left for a future phase rather than taken as
+  an unapproved scope expansion.
+- Phase 25 (Insights Sample-Size Discipline) remains DEFERRED and
+  UNIMPLEMENTED. No work was started on it.
+
+Next Phase
+Not yet selected. See docs/CURRENT_PHASE.md.txt.
+
+---
+
 # Phase 23 — Analytics Integrity & Metric Vocabulary
 
 Status:

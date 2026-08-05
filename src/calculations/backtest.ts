@@ -31,7 +31,7 @@ import type { EnrichedTrade } from './tradeCalc.js';
 import { summarizeTrades } from './rolling.js';
 import { buildEquitySequence, computeDrawdown } from './drawdown.js';
 import { computeStreaks, getAverageStreaks, getLongestStreaks } from './streaks.js';
-import { computeCoreAnalytics } from './analytics.js';
+import { computeCoreAnalytics, withRecoveryFactor } from './analytics.js';
 import { nextId } from './idGenerator.js';
 import type { BacktestResult } from '@apptypes/backtest.js';
 
@@ -64,6 +64,7 @@ export function computeBacktestResult(
 ): BacktestResult {
   const matched = applyFilterGroup(trades, filterGroup);
   const equitySequence = buildEquitySequence(matched, startingCapital);
+  const drawdown = computeDrawdown(equitySequence);
 
   return {
     id:        nextId('backtest'),
@@ -77,10 +78,10 @@ export function computeBacktestResult(
     tradeCount:      matched.length,
 
     summary:        summarizeTrades(matched),
-    drawdown:       computeDrawdown(equitySequence),
+    drawdown,
     streaks:        computeStreaks(matched),
     averageStreaks: getAverageStreaks(matched),
     longestStreaks: getLongestStreaks(matched),
-    core:           computeCoreAnalytics(matched),
+    core:           withRecoveryFactor(computeCoreAnalytics(matched), drawdown.maxDrawdownDollar),
   };
 }

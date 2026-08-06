@@ -12,9 +12,10 @@
  * centralized, do not duplicate storage logic): this service contains
  * ZERO new persistence logic. It is pure composition/orchestration —
  * every read and write goes through EXISTING load/save function pairs.
- * All 10 sections are covered: trades, accounts, lists, propRules,
+ * Phase 27 covers 12 sections: trades, accounts, lists, propRules,
  * settings, savedFilters, checklistTemplates, checklistCompletions,
- * customFieldDefs, customFieldValues. Adding an 11th in the future
+ * customFieldDefs, customFieldValues, Recovery Bin, and saved Backtest
+ * Results. Adding another section in the future
  * requires only adding one line to BACKUP_SECTIONS below — this file
  * does not need to know HOW any given key is stored, only that a
  * load/save pair exists for it.
@@ -65,6 +66,8 @@ import {
   loadChecklistCompletions, saveChecklistCompletions,
   loadCustomFieldDefs, saveCustomFieldDefs,
   loadCustomFieldValues, saveCustomFieldValues,
+  loadRecoveryBin, saveRecoveryBin,
+  loadBacktestResults, saveBacktestResults,
   loadRestorePoints, saveRestorePoints,
 } from './storage.js';
 import {
@@ -82,12 +85,16 @@ import type { MaybePromise } from '@sync/localStores.js';
 
 // ─── Backup format ───────────────────────────────────────────
 
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
+const SUPPORTED_BACKUP_VERSIONS = new Set([1, 2]);
+
+type SectionValidator = (data: unknown) => string | null;
 
 interface BackupSection<T = unknown> {
   key:  string;
   load: () => MaybePromise<T>;
   save: (data: T) => MaybePromise<void>;
+  validate: SectionValidator;
   /**
    * Sync architecture rewrite (SYNC_ARCHITECTURE_SPEC.md §13 Step 3
    * follow-up): transforms a restored value before it's written back,
@@ -140,44 +147,155 @@ function defineBackupSection<L, S>(section: {
   key: string;
   load: () => MaybePromise<L>;
   save: (data: S) => MaybePromise<void>;
+  validate: SectionValidator;
   reviveForRestore?: (data: unknown) => unknown;
 }): BackupSection<unknown> {
   return section as unknown as BackupSection<unknown>;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+const validateArrayOf = (
+  value: unknown,
+  validateItem: (item: Record<string, unknown>) => boolean,
+): string | null => {
+  if (!Array.isArray(value)) return 'expected an array.';
+  if (!value.every((item) => isRecord(item) && validateItem(item))) return 'contains an invalid record.';
+  return null;
+};
+
+const validateTrades: SectionValidator = (value) => validateArrayOf(
+  value,
+  (item) => isFiniteNumber(item._tid),
+);
+
+const validateAccounts: SectionValidator = (value) => value === null ? null : validateArrayOf(
+  value,
+  (item) => typeof item.id === 'string'
+    && typeof item.name === 'string'
+    && isFiniteNumber(item.capital)
+    && typeof item.color === 'string',
+);
+
+const validateNullableRecord: SectionValidator = (value) =>
+  value === null || isRecord(value) ? null : 'expected an object or null.';
+
+const validatePropRules: SectionValidator = (value) => {
+  if (!isRecord(value) || !Array.isArray(value.rules)) return 'expected an object with a rules array.';
+  return value.rules.every(isRecord) ? null : 'rules contains an invalid record.';
+};
+
+const validateSavedFilters: SectionValidator = (value) => validateArrayOf(
+  value,
+  (item) => typeof item.id === 'string'
+    && typeof item.name === 'string'
+    && isRecord(item.group)
+    && typeof item.isFavorite === 'boolean'
+    && isFiniteNumber(item.createdAt),
+);
+
+const validateChecklistTemplates: SectionValidator = (value) => validateArrayOf(
+  value,
+  (item) => typeof item.id === 'string'
+    && typeof item.name === 'string'
+    && Array.isArray(item.items)
+    && item.items.every(isRecord),
+);
+
+const validateNestedRecord = (
+  value: unknown,
+  validateLeaf: (leaf: unknown) => boolean,
+): string | null => {
+  if (!isRecord(value)) return 'expected an object.';
+  const valid = Object.values(value).every((nested) =>
+    isRecord(nested) && Object.values(nested).every(validateLeaf));
+  return valid ? null : 'contains an invalid nested value.';
+};
+
+const validateCustomFieldDefs: SectionValidator = (value) => validateArrayOf(
+  value,
+  (item) => typeof item.id === 'string'
+    && typeof item.name === 'string'
+    && (item.type === 'text' || item.type === 'number' || item.type === 'boolean'),
+);
+
+const validateRecoveryBin: SectionValidator = (value) => validateArrayOf(
+  value,
+  (item) => typeof item.id === 'string'
+    && isFiniteNumber(item.deletedAt)
+    && typeof item.label === 'string'
+    && isRecord(item.item),
+);
+
+const validateBacktestResults: SectionValidator = (value) => validateArrayOf(
+  value,
+  (item) => typeof item.id === 'string'
+    && typeof item.name === 'string'
+    && isFiniteNumber(item.createdAt)
+    && isRecord(item.filterGroup)
+    && isFiniteNumber(item.startingCapital)
+    && Array.isArray(item.matchedTradeIds)
+    && item.matchedTradeIds.every(isFiniteNumber)
+    && Number.isInteger(item.tradeCount)
+    && (item.tradeCount as number) >= 0
+    && isRecord(item.summary)
+    && isRecord(item.drawdown)
+    && isRecord(item.streaks)
+    && isRecord(item.averageStreaks)
+    && isRecord(item.longestStreaks)
+    && isRecord(item.core)
+    && (!Object.prototype.hasOwnProperty.call(item, 'equityPath')
+      || (Array.isArray(item.equityPath) && item.equityPath.every(isFiniteNumber))),
+);
+
+const semanticEqual = (left: unknown, right: unknown): boolean => {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((item, index) => semanticEqual(item, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key)
+      && semanticEqual(left[key], right[key]));
+};
 
 /**
  * Every backed-up section, paired with its EXISTING load/save
  * functions. This is the single place a future key needs to be added
  * to be covered by backup/restore — no other file needs to change.
  *
- * PHASE 20 AUDIT NOTE (documented, not silently changed — see
- * MIGRATION_NOTES.md): this list deliberately does NOT include
- * RESTORE_POINTS or RECOVERY_BIN, for two different reasons:
- *   - RESTORE_POINTS is correctly excluded: including a snapshot of
+ * RESTORE_POINTS remains deliberately excluded: including a snapshot of
  *     "all restore points" inside each restore point would be
  *     self-referential (restoring an old backup would overwrite your
  *     CURRENT restore-point list with a stale one, silently discarding
  *     any restore points created afterward). This exclusion is
  *     intentional and should remain.
- *   - RECOVERY_BIN's exclusion is a genuine, low-severity gap
- *     (classified as Technical Debt in the Phase 20 audit): if
- *     restored, an old backup would not bring back the Recovery Bin
- *     state as it was at that time. Currently has ZERO practical
- *     impact, since useTrades().deleteTrade is not yet connected to
- *     softDelete() (see AN-011) — the bin is always empty today. Worth
- *     revisiting in whichever future phase makes that connection.
+ * Recovery Bin and saved Backtest Results are ordinary sections in
+ * Phase 27. Restore Points inherit them through buildBackup(), while
+ * the Restore Point list itself never becomes recursive payload data.
  */
 const BACKUP_SECTIONS: BackupSection<unknown>[] = [
-  defineBackupSection({ key: 'trades',                load: loadTrades,                save: saveTrades,   reviveForRestore: stampCollectionForRestore }),
-  defineBackupSection({ key: 'accounts',              load: loadAccounts,               save: saveAccounts, reviveForRestore: stampCollectionForRestore }),
-  defineBackupSection({ key: 'lists',                 load: loadLists,                  save: saveLists,    reviveForRestore: stampSingletonForRestore }),
-  defineBackupSection({ key: 'propRules',             load: loadPropRules,              save: savePropRules }),
-  defineBackupSection({ key: 'settings',              load: loadSettings,               save: saveSettings, reviveForRestore: stampSingletonForRestore }),
-  defineBackupSection({ key: 'savedFilters',          load: loadSavedFilters,           save: saveSavedFilters }),
-  defineBackupSection({ key: 'checklistTemplates',    load: loadChecklistTemplates,     save: saveChecklistTemplates }),
-  defineBackupSection({ key: 'checklistCompletions',  load: loadChecklistCompletions,   save: saveChecklistCompletions }),
-  defineBackupSection({ key: 'customFieldDefs',       load: loadCustomFieldDefs,        save: saveCustomFieldDefs }),
-  defineBackupSection({ key: 'customFieldValues',     load: loadCustomFieldValues,      save: saveCustomFieldValues }),
+  defineBackupSection({ key: 'trades',               load: loadTrades,               save: saveTrades,               validate: validateTrades,             reviveForRestore: stampCollectionForRestore }),
+  defineBackupSection({ key: 'accounts',             load: loadAccounts,              save: saveAccounts,             validate: validateAccounts,           reviveForRestore: stampCollectionForRestore }),
+  defineBackupSection({ key: 'lists',                load: loadLists,                 save: saveLists,                validate: validateNullableRecord,     reviveForRestore: stampSingletonForRestore }),
+  defineBackupSection({ key: 'propRules',            load: loadPropRules,             save: savePropRules,            validate: validatePropRules }),
+  defineBackupSection({ key: 'settings',             load: loadSettings,              save: saveSettings,             validate: validateNullableRecord,     reviveForRestore: stampSingletonForRestore }),
+  defineBackupSection({ key: 'savedFilters',         load: loadSavedFilters,          save: saveSavedFilters,         validate: validateSavedFilters }),
+  defineBackupSection({ key: 'checklistTemplates',   load: loadChecklistTemplates,    save: saveChecklistTemplates,   validate: validateChecklistTemplates }),
+  defineBackupSection({ key: 'checklistCompletions', load: loadChecklistCompletions,  save: saveChecklistCompletions, validate: (value) => validateNestedRecord(value, (leaf) => typeof leaf === 'boolean') }),
+  defineBackupSection({ key: 'customFieldDefs',      load: loadCustomFieldDefs,       save: saveCustomFieldDefs,      validate: validateCustomFieldDefs }),
+  defineBackupSection({ key: 'customFieldValues',    load: loadCustomFieldValues,     save: saveCustomFieldValues,    validate: (value) => validateNestedRecord(value, (leaf) => typeof leaf === 'string') }),
+  defineBackupSection({ key: 'recoveryBin',          load: loadRecoveryBin,           save: saveRecoveryBin,          validate: validateRecoveryBin }),
+  defineBackupSection({ key: 'backtestResults',      load: loadBacktestResults,       save: saveBacktestResults,      validate: validateBacktestResults }),
 ];
 
 export interface BackupData {
@@ -241,21 +359,37 @@ export interface RestoreResult {
  *          write occurs).
  */
 export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
-  if (!raw || typeof raw !== 'object') {
+  if (!isRecord(raw)) {
     return { success: false, error: 'Invalid backup file: not a JSON object.' };
   }
   const backup = raw as Partial<BackupData>;
-  if (typeof backup.version !== 'number' || !backup.data || typeof backup.data !== 'object') {
+  if (!Number.isInteger(backup.version) || !SUPPORTED_BACKUP_VERSIONS.has(backup.version as number)) {
+    return { success: false, error: 'Invalid backup file: unsupported version.' };
+  }
+  if (typeof backup.exportedAt !== 'string' || !isRecord(backup.data)) {
     return { success: false, error: 'Invalid backup file: missing version or data.' };
+  }
+
+  for (const section of BACKUP_SECTIONS) {
+    if (!Object.prototype.hasOwnProperty.call(backup.data, section.key)) continue;
+    const error = section.validate(backup.data[section.key]);
+    if (error) return { success: false, error: `Invalid backup section '${section.key}': ${error}` };
   }
 
   const restoredKeys: string[] = [];
   for (const section of BACKUP_SECTIONS) {
-    if (Object.prototype.hasOwnProperty.call(backup.data as object, section.key)) {
-      const raw = (backup.data as Record<string, unknown>)[section.key];
-      await section.save(section.reviveForRestore ? section.reviveForRestore(raw) : raw);
-      restoredKeys.push(section.key);
+    if (!Object.prototype.hasOwnProperty.call(backup.data, section.key)) continue;
+    const sectionData = backup.data[section.key];
+    if (sectionData === null) continue;
+    const expected = section.reviveForRestore ? section.reviveForRestore(sectionData) : sectionData;
+    try {
+      await section.save(expected);
+      const persisted = await section.load();
+      if (!semanticEqual(persisted, expected)) throw new Error('read-back mismatch');
+    } catch {
+      return { success: false, error: `Failed to persist backup section '${section.key}'.`, restoredKeys };
     }
+    restoredKeys.push(section.key);
   }
 
   return { success: true, restoredKeys };

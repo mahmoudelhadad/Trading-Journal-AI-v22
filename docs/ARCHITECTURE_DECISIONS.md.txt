@@ -1911,3 +1911,164 @@ decision); the Phase 26 Immutable Backtest Equity Snapshots RFC.
 - A future analytical output requires historical trade attributes not
   derivable from the stored result and equityPath; that output needs its
   own snapshot contract rather than silently reading mutable trades.
+
+---
+
+# AD-019
+
+## Title
+
+Local Durability and Backup Integrity
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-06
+
+---
+
+## Context
+
+AD-014 excluded saved Backtest Results from Backup & Restore because it
+classified them as regenerable derived output. AD-018 later made every
+new result an immutable historical snapshot by persisting its raw equity
+path; that history cannot be faithfully recreated after its source trades
+change. The Recovery Bin exclusion was likewise based on the now-obsolete
+premise that the bin was always empty. The application now soft-deletes
+real trade snapshots into it before removing active trades.
+
+Restore validated only its outer envelope, then wrote present sections
+sequentially. Direct LocalStorage helpers deliberately swallow failures,
+so restore could report success without evidence that a write persisted.
+Saved Backtest creation also silently evicted the oldest result when a
+51st result was added, contradicting the historical-record contract.
+
+---
+
+## Decision
+
+1. Saved Backtest Results belong to Backup & Restore because AD-018 made
+   new results immutable historical records. Recovery Bin belongs because
+   it contains real recoverable records.
+2. Backtest Results remain LocalStorage-only, Class B, unsynced, and
+   outside the resolver, IndexedDB, Sync Engine, and cutover.
+3. Backup format v2 contains 12 centralized sections. Restore accepts
+   supported versions 1 and 2 only.
+4. Restore validates the supported envelope and every present known
+   section before the first write. Every known section is optional; a
+   missing section leaves live state untouched. Unknown sections are
+   ignored, while additive fields on otherwise-valid records are
+   preserved.
+5. Every non-null restore write is reloaded through its registered load
+   path and compared with the once-revived expected semantic state.
+   Detected persistence failure is surfaced, aborts later writes, and
+   cannot produce a success result.
+6. Restore is sequential. Cross-section rollback and transactional
+   atomicity are not guaranteed; earlier verified sections may remain
+   changed after a later failure.
+7. Saved Backtest creation at count 50 or greater is blocked before
+   result computation. Existing results, including restored collections
+   above 50, are preserved without eviction, slicing, trimming, or
+   migration.
+8. Restore Points inherit Recovery Bin and Backtest Results through the
+   centralized `buildBackup()`. Restore Points themselves remain excluded
+   to prevent recursive snapshots and stale-point-list replacement. Sync
+   cursors also remain excluded.
+9. The global `storageSet` contract remains unchanged. Checked persistence
+   is confined to the backup/restore durability boundary.
+
+---
+
+## Supersession
+
+- AD-014 is superseded only where it excludes Backtest Results from
+  Backup & Restore on the former regenerable-results premise. Its Class B,
+  local-only, unsynced, non-resolver storage classification remains in
+  force.
+- AD-018 clause 4 is superseded only where it continues the Backtest
+  Results Backup & Restore exclusion. Its immutable equity snapshot and
+  legacy-result contracts remain unchanged.
+- AD-015 is superseded only where its saved-result cap policy requires
+  evicting the oldest result. Its strategy-definition and BacktestResult
+  composition decisions remain unchanged.
+
+AD-014, AD-015, and AD-018 remain preserved as historical records.
+
+---
+
+## Reason
+
+Data presented as saved, recoverable, or historical must not be omitted
+from a complete backup, silently discarded at a retention boundary, or
+reported as restored without evidence of persistence. Centralized section
+validation and registered-path read-back verification close those gaps
+without redesigning LocalStorage or widening Backtest Results into sync.
+
+---
+
+## Tradeoff
+
+Restore now rejects structurally unsafe files that older code could pass
+to storage helpers. Restore Points consume more LocalStorage because they
+include two additional datasets. Sequential save/reload verification can
+detect and report failure but cannot undo an earlier successful section.
+
+---
+
+## Alternatives Considered
+
+- Change `storageSet` globally to throw or return a result. Rejected: it
+  changes the persistence contract for unrelated workflows and creates a
+  substantially larger regression surface.
+- Add Backup coverage without validation and read-back verification.
+  Rejected: omission would be fixed while false-success and malformed
+  replacement risks remained.
+- Add transactional rollback. Rejected: LocalStorage and IndexedDB do not
+  share a transaction, and a rollback engine would exceed this bounded
+  durability phase.
+- Trim restored Backtest collections to 50. Rejected: it would destroy
+  historical records during restore.
+- Enforce exact schemas. Rejected: it would reject compatible additive
+  historical fields and freeze unrelated domain models at the backup
+  boundary.
+
+---
+
+## Consequences
+
+- New backups and Restore Points cover Recovery Bin and saved Backtest
+  Results; version-1 backups remain restorable.
+- Malformed present known sections reject the complete restore before any
+  write. Missing sections never clear live state.
+- A detected failed or dropped write cannot be reported as successful.
+- Result #51 cannot silently remove an existing historical result.
+- No migration, storage-key change, IndexedDB change, resolver change,
+  sync change, cutover change, or dependency is introduced.
+
+---
+
+## Spec References
+
+AD-014 (Backtest Results Class B classification and historical backup
+exclusion); AD-015 (BacktestResult composition and former eviction cap);
+AD-018 (immutable Backtest equity snapshots); the Phase 27 Local
+Durability & Backup Integrity FINAL RFC.
+
+---
+
+## Revisit Only If
+
+- A concrete product requirement adds cross-device Backtest sync, which
+  would reopen AD-014's Class B decision independently of backup.
+- Restore requires true cross-section rollback, which would require a
+  separately approved transaction/rollback architecture.
+- Restore Point growth becomes impractical under measured browser quota
+  pressure, requiring an independently approved retention or storage
+  policy.

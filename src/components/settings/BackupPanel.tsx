@@ -65,7 +65,7 @@ export function BackupPanel() {
     <Card>
       <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>💾 Backup & Restore</div>
       <div style={{ color: C.dim, fontSize: 11, marginBottom: 12 }}>
-        Download a complete backup of all your data (trades, accounts, lists, settings, filters, checklists) as one file, or restore from a previous backup.
+        Download a complete backup of your journal data, settings, filters, checklists, Recovery Bin, and saved Backtest Results as one file, or restore from a previous backup.
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: message ? 10 : 0 }}>

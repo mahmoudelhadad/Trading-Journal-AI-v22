@@ -60,6 +60,7 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   // Selected result — set from the id runBacktest() returns
   // synchronously, or from a click in the results list.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   // Second result for side-by-side comparison. Added here because the
   // comparison shaping memo below cannot pick a second result without
@@ -71,13 +72,19 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   // the hook. `allTrades` is passed UNFILTERED — see file header.
   function handleRun(filterGroup: FilterGroup, startingCapital: number, name: string) {
     const result = runBacktest(filterGroup, allTrades, startingCapital, name);
-    setSelectedId(result.id);
+    if (!result.success) {
+      setRunError('Saved Backtest limit reached. Delete an existing saved result before running another Backtest.');
+      return;
+    }
+    setRunError(null);
+    setSelectedId(result.result.id);
   }
 
   // Deleting the currently-selected result clears the selection, so
   // the page does not keep pointing at a record that no longer exists.
   function handleDelete(id: string) {
     deleteBacktestResult(id);
+    if (backtestResults.length <= 50) setRunError(null);
     if (id === selectedId) setSelectedId(null);
   }
 
@@ -238,6 +245,9 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   return (
     <div>
       <BacktestRunner allTrades={allTrades} accounts={accounts} onRun={handleRun} />
+      {runError && (
+        <div style={{ color: '#EF4444', fontSize: 11, marginTop: 8 }}>{runError}</div>
+      )}
 
       <div style={{ marginTop: 14 }}>
         {backtestResults.length === 0 ? (

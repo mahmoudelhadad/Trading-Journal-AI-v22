@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 26 — Immutable Backtest Equity Snapshots
+Phase 27 — Local Durability & Backup Integrity
 
 Status:
 
@@ -14,206 +14,186 @@ COMPLETE
 
 ## Objective
 
-Make every newly saved BacktestResult an immutable analytical snapshot
-for the equity outputs that were previously rebuilt from mutable
-journal trades: the Equity Curve, Ending Equity, and comparison return
-series. Preserve old saved results without fabricating a historical
-path, and identify their reconstructed current-data outputs clearly.
+Prevent silent or misleading local-data loss for records the application
+presents as saved, recoverable, or historical. Validate backup contents
+before mutation, make restore persistence failures observable, include
+Recovery Bin and saved Backtest Results in backup snapshots, and stop the
+50-result cap from silently evicting history.
 
 ---
 
 ## Scope (as delivered)
 
-New results persist one additive field:
-
-`equityPath?: number[]`
-
-It contains raw, unrounded cumulative equity after each matched trade,
-in matched order. `startingCapital` is the implicit point zero; `[]`
-means zero matched trades. Presence of the property is the sole frozen-
-result discriminator. Absence — not null and not an empty array — means
-legacy.
-
-`computeBacktestResult()` captures the path from the equity sequence it
-already computes for drawdown. The result page uses it for the Equity
-Curve and Ending Equity. Comparison uses it for each result's
-percentage-return series. Current journal trades remain relevant to new
-results only for existing traceability such as unresolved matched IDs,
-not as the source of these frozen analytical outputs.
-
-Legacy results are not migrated, backfilled, or rewritten. Their
-original paths were never stored and cannot be authenticated or
-recovered. They retain the existing current-trade reconstruction, with
-a prominent notice covering the Equity Curve and Ending Equity; each
-legacy side in a comparison receives its own notice. Stored legacy
-metrics remain unchanged.
-
-AD-018 records the architecture change and supersedes AD-015 clause 2
-only. AD-015 clauses 1 and 3 remain approved. AD-015 is preserved as
-historical record, and AD-014 is untouched.
+- Backup format v2 emits 12 centralized user-data sections.
+- Restore accepts versions 1 and 2 only and rejects invalid or unsupported
+  versions before writes.
+- Recovery Bin and saved Backtest Results are included in Backup & Restore.
+- Restore Points inherit both datasets through `buildBackup()`; Restore
+  Points themselves and sync cursors remain excluded.
+- Every present known section receives minimum-safe, additive-tolerant
+  validation before the first save. Missing sections leave live state
+  untouched; unknown sections are ignored; unknown valid fields survive.
+- Each non-null section is revived at most once, saved through its
+  registered path, reloaded through that same path, and compared by
+  semantic JSON-state equality. Detected persistence failure is surfaced,
+  aborts later sections, and cannot report success.
+- Saved Backtest creation at count 50 or greater is blocked before
+  computation. Existing and restored results are never sliced, evicted,
+  trimmed, migrated, or deleted by the cap.
+- The Backtest page renders the approved inline guidance when creation is
+  blocked. Manual deletion immediately frees capacity once the count falls
+  below 50; rename behavior is unchanged.
+- The global `storageSet` contract remains unchanged.
 
 ---
 
 ## Files Changed
 
-Production and tests (6):
-- src/types/backtest.ts
-- src/calculations/backtest.ts
+Production (4):
+- src/services/backupService.ts
+- src/hooks/useBacktests.ts
 - src/pages/Backtest.tsx
-- src/components/backtest/BacktestResultView.tsx
-- src/components/backtest/BacktestComparison.tsx
-- src/calculations/backtest.test.ts
+- src/components/settings/BackupPanel.tsx
 
-Documentation, at close only (3):
+Tests (2):
+- src/services/backupService.test.ts (new)
+- src/hooks/useBacktests.test.ts (new)
+
+Documentation (3):
 - docs/ARCHITECTURE_DECISIONS.md.txt
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Nine files total, exactly matching the frozen RFC. No tenth file.
+Nine files total, exactly matching the frozen RFC.
 
 ---
 
 ## Out of Scope (respected)
 
-- No migration, lazy backfill, or rewrite of a legacy BacktestResult.
-- No edit, deletion, or re-save of a historical control result.
-- No journal-trade edit, deletion, import, seed, or Futures data.
-- No full matched-trade snapshot and no persisted chart presentation
-  objects or separately rounded/normalised series.
-- No new generic equity helper; accumulation at render disappears for
-  new results and the legacy fallback remains local.
-- No storage-key change, DATABASE_VERSION bump, IndexedDB store,
-  resolver, Sync Engine, cutover, or Backup & Restore expansion.
-- No dependency or test-infrastructure change.
-- No AD-014 amendment. No change to AD-015 clauses 1 or 3.
-- No AD-017 BacktestComparison Win Rate label cleanup.
-- No fix for the pre-existing non-finite Avg Risk JSON-serialization
-  behaviour.
-- No commit, stage, tag, push, or Phase 27 work.
+- No global `storageSet` change or storage-accessor redesign.
+- No resolver, IndexedDB, Sync Engine, cutover, authentication, or sync
+  cursor change.
+- No migration, backfill, repair, normalization, or exact-schema lock.
+- No transaction or rollback engine; restore remains sequential.
+- No Restore Points inside backup payloads and no Recovery Bin merge or
+  `_tid` collision policy.
+- No Backtest cap increase, calculation, formula, equity-path, comparison,
+  result-rendering, rename, or delete behavior change beyond approved cap
+  blocking.
+- No Avg Risk/non-finite-number fix and no changes under calculations/.
+- No Insights, Trade Review, Futures, AI, MCP, Prop Firm Tracker, or
+  Position Calculator work.
+- No dependency or test-configuration change.
+- No staging, commit, tag, push, PR, or Phase 28 implementation.
 
 ---
 
 ## Automated Verification
 
-- git diff --check — clean.
-- npm run typecheck — 0 errors.
-- npm run lint — 0 errors, exactly 7 pre-existing warnings.
-- npm run test — 123/123 passing across 8 files.
-- npm run verify — full chain green.
-- npm run build — succeeds, 994 modules transformed.
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 pre-existing warnings at unchanged sites.
+- Focused Node/Vitest tests: 38/38 across 2 files.
+- Full tests: 161/161 across 10 files.
+- `npm run verify`: green.
+- Production build: succeeds, 994 modules transformed.
+- `git diff --check`: clean.
 
-The test suite contains T-1 through T-8 for the new contract:
-hand-derived raw-path capture; drawdown and endpoint consistency;
-exact JSON round-trip; immutability under source-trade P/L edits;
-immutability when matched trades, including all, are deleted; empty
-matches; null `_netPL`; and the presence-vs-absence legacy
-discriminator.
+The tests cover v1/v2 compatibility, all 12 section types, complete
+pre-write validation, additive-field preservation, nullable historical
+sentinels, resolver revival, semantic read-back, thrown and silently
+dropped writes, partial-failure reporting, Recovery Bin replacement,
+Restore Point inheritance, legacy/new Backtest JSON round-trip, restored
+collections above 50, and the 49/50/51 capacity boundary without invoking
+result computation on failure.
 
 ---
 
 ## Runtime Verification
 
-All frozen steps V-1 through V-6 passed against the real authenticated
-journal without changing journal trades or historical saved results.
+The disposable local application launch and authentication screen were
+observed. Authenticated Backup/Restore and Backtest-cap UI surfaces were
+not safely reachable without authentication. They were verified through
+automated tests, typecheck/build, and source/diff inspection and are not
+claimed as authenticated runtime observations.
 
-- V-1 PASS — new `P26 Immutable Snapshot A` matched 74 trades from a
-  $10,000 start. It rendered Net P&L +$5,286.75, Win Rate (W/L only)
-  26.2% (16W/45L), Profit Factor 1.15, Max Drawdown -$17,383
-  (-53.2%), Ending Equity $15,287, and the complete Equity Curve,
-  Drawdown, Streaks, and Core Analytics. No legacy notice appeared.
-- V-2 PASS — fresh-result values matched the pre-change/Phase 24
-  baseline. Endpoint reconciliation closed exactly before display
-  rounding: $10,000 + $5,286.75 = $15,286.75.
-- V-3 PASS — untouched legacy `V12 Label Check` displayed its stored
-  metrics unchanged and the required result-level legacy notice. Its
-  Equity Curve and Ending Equity remained available as explicitly
-  reconstructed values; Recovery Factor remained `—`.
-- V-4 PASS — new-vs-new comparison displayed no legacy notices.
-  New-vs-legacy displayed exactly one notice, on the legacy side only;
-  comparison KPIs remained available and unqualified.
-- V-5 PASS — after hard reload, snapshot A reloaded with the same KPIs,
-  full path and charts, and Ending Equity, with no legacy notice. This
-  verified `equityPath` through the LocalStorage JSON round-trip.
-- V-6 PASS — saved-result selection and rename continued to work. Only
-  newly created `P26 Immutable Snapshot B` was renamed to
-  `P26 Immutable Snapshot B Renamed`; nothing was deleted and the
-  historical controls were untouched.
+No real journal trades, saved Backtest Results, Recovery Bin entries, or
+other user data were changed. The disposable tab and local development
+server were closed after verification.
 
 ---
 
 ## Approved Decision
 
-AD-018 — New BacktestResults persist a raw cumulative equity path;
-legacy results remain unmigrated and visibly reconstructed.
+AD-019 — Local Durability and Backup Integrity.
 
-AD-018 supersedes AD-015 clause 2 only. It does not rewrite AD-015 and
-does not amend AD-014.
+AD-019 narrowly supersedes:
 
----
+- AD-014 only where it excludes Backtest Results from Backup & Restore on
+  the old regenerable-results premise.
+- AD-018 clause 4 only where it continues that Backup & Restore exclusion.
+- AD-015 only where it requires oldest-result eviction at the 50-result
+  cap.
 
-## Adjacent Finding
-
-`Avg Risk ($)` rendered as `-$NaN` on the freshly created result and as
-`—` after reload. JSON serialisation converts non-finite numeric values
-such as NaN to null. The value comes from the pre-existing `_rv` / Core
-Analytics path, untouched by Phase 26; it is unrelated to `equityPath`
-and is not a Phase 26 regression. It was recorded, not fixed. The
-equity path itself contained finite values and its endpoint reconciled
-with stored Net P&L.
+AD-014's Class B/local-only/unsynced classification, AD-018's immutable
+snapshot contract, and AD-015's remaining decisions stay approved.
+Historical ADR text remains unchanged.
 
 ---
 
 ## Exit Criteria
 
-- [x] New results persist one raw, unrounded equity point per matched
-      trade; empty matches persist `[]`.
-- [x] New result view and comparison consume `equityPath` without
-      rebuilding those analytical outputs from current trades.
-- [x] Editing or deleting source trades cannot mutate a new saved
-      path or any stored metric, proven by tests.
-- [x] JSON persistence preserves a finite `equityPath` exactly.
-- [x] Legacy records remain unmigrated and are discriminated only by
-      absence of `equityPath`.
-- [x] Legacy result and comparison notices accurately qualify only
-      reconstructed equity outputs; stored metrics remain unchanged.
-- [x] AD-018 supersedes AD-015 clause 2 only; AD-014 is untouched.
-- [x] Runtime V-1 through V-6 all pass.
-- [x] Final changed-file manifest contains exactly the frozen 9 files.
-- [x] All six automated gates match the frozen baseline.
-- [x] No data, persistence architecture, dependency, or Phase 27 scope
-      was added.
+- [x] Backup v2 emits all 12 approved sections.
+- [x] Versions 1 and 2 restore; invalid and unsupported versions reject
+      before writes.
+- [x] Every malformed present known section rejects before any write.
+- [x] Missing sections leave live state untouched; unknown sections are
+      ignored; additive valid fields are preserved.
+- [x] Recovery Bin and saved Backtest Results appear in backups and new
+      Restore Points; Restore Points and sync cursors remain excluded.
+- [x] Every non-null restore write receives registered-path semantic
+      read-back verification.
+- [x] Detected persistence failure cannot produce success.
+- [x] Result creation at count 50 or greater is blocked before computation
+      without eviction or trimming.
+- [x] Restored collections above 50 are preserved.
+- [x] The approved inline cap guidance is implemented.
+- [x] Focused and full automated verification pass.
+- [x] Production build remains 994 modules.
+- [x] Exactly nine frozen files changed and no out-of-scope work occurred.
 
-All exit criteria passed. Phase 26 is closed.
+All exit criteria passed. Phase 27 is closed.
 
 ---
 
 ## Known Risks / Limitations
 
-- Legacy equity paths are permanently unrecoverable. Their Equity
-  Curve, Ending Equity, and comparison series depend on currently
-  resolvable journal trades and must retain the Phase 26 notices.
-- BacktestResults remain local-only, capped Class-B data and remain
-  excluded from Backup & Restore under AD-014.
-- The adjacent non-finite Avg Risk JSON-serialization issue remains
-  open and separately scoped.
-- The 7 pre-existing lint warnings remain.
-- Previously recorded risks and deferred items from earlier phases
-  remain unchanged unless explicitly superseded by AD-018 clause 2.
+- Restore is sequential rather than transactional. Earlier verified
+  sections may remain changed after a later failure.
+- Restore Points consume additional LocalStorage because they now include
+  Recovery Bin and saved Backtest Result data.
+- Browser quota pressure remains possible; detected failures are surfaced.
+- Authenticated UI paths were not directly observed during disposable
+  runtime verification.
+- The finite-number / Avg Risk issue remains deferred for Phase 28.
+- The Insights hook-order maintainability finding and all other previously
+  deferred issues remain outside Phase 27.
+- The 7 pre-existing lint warnings remain unchanged.
 
 ---
 
 ## Repository Statistics (measured at phase close)
 
-- Tests: 123 passing across 8 files.
+- Tests: 161 passing across 10 files.
+- Focused Phase 27 tests: 38 passing across 2 files.
 - Production build: 994 modules transformed.
-- tsc: 0 errors.
-- eslint: 0 errors, 7 warnings.
-- Changed files: exactly 9; no new source or test file.
+- TypeScript: 0 errors.
+- ESLint: 0 errors, 7 warnings.
+- Changed files: exactly 9; 2 new test files.
 
 ---
 
 ## Next Phase
 
-Not selected. Phase 27 has not started and no scope is implied by this
-close. Any next phase requires the standard re-derivation and approval
-workflow.
+Not started and not selected. The finite-number / Avg Risk issue is carried
+forward as a Phase 28 candidate only; this close does not authorize or begin
+Phase 28. All other deferred findings retain their existing status.

@@ -15,18 +15,33 @@
  * computeBacktestResult() (pure) and is the only place that persists a
  * result — the engine itself never touches storage.
  *
- * Caps stored results at 50, evicting the oldest (by append order,
- * which matches creation order in this hook) on overflow — the
- * storage-growth mitigation from the approved Phase Definition.
+ * Caps creation at 50 saved results. At or above the cap, creation is
+ * rejected before computation; existing historical results are never
+ * trimmed or evicted.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { loadBacktestResults, saveBacktestResults } from '@services/storage.js';
 import { computeBacktestResult } from '@calculations/backtest.js';
 import type { FilterGroup } from '@calculations/filterEngine.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
 import type { BacktestResult } from '@apptypes/backtest.js';
 
-const MAX_STORED_BACKTEST_RESULTS = 50;
+export const MAX_STORED_BACKTEST_RESULTS = 50;
+
+export const canAddBacktestResult = (count: number): boolean =>
+  count < MAX_STORED_BACKTEST_RESULTS;
+
+export type RunBacktestResult =
+  | { success: true; result: BacktestResult }
+  | { success: false; reason: 'limit_reached' };
+
+export function createBacktestResultWithinLimit(
+  count: number,
+  createResult: () => BacktestResult,
+): RunBacktestResult {
+  if (!canAddBacktestResult(count)) return { success: false, reason: 'limit_reached' };
+  return { success: true, result: createResult() };
+}
 
 export interface UseBacktestsReturn {
   backtestResults: BacktestResult[];
@@ -35,7 +50,7 @@ export interface UseBacktestsReturn {
     trades: EnrichedTrade[],
     startingCapital: number,
     name?: string,
-  ) => BacktestResult;
+  ) => RunBacktestResult;
   deleteBacktestResult: (id: string) => void;
   renameBacktestResult: (id: string, newName: string) => void;
 }
@@ -44,6 +59,7 @@ export function useBacktests(): UseBacktestsReturn {
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>(
     () => loadBacktestResults() as BacktestResult[],
   );
+  const resultsRef = useRef(backtestResults);
 
   useEffect(() => {
     saveBacktestResults(backtestResults);
@@ -54,23 +70,29 @@ export function useBacktests(): UseBacktestsReturn {
     trades: EnrichedTrade[],
     startingCapital: number,
     name?: string,
-  ): BacktestResult => {
-    const result = computeBacktestResult(filterGroup, trades, startingCapital, name);
-    setBacktestResults((prev) => {
-      const next = [...prev, result];
-      return next.length > MAX_STORED_BACKTEST_RESULTS
-        ? next.slice(next.length - MAX_STORED_BACKTEST_RESULTS)
-        : next;
-    });
-    return result;
+  ): RunBacktestResult => {
+    const outcome = createBacktestResultWithinLimit(
+      resultsRef.current.length,
+      () => computeBacktestResult(filterGroup, trades, startingCapital, name),
+    );
+    if (!outcome.success) return outcome;
+    const result = outcome.result;
+    const next = [...resultsRef.current, result];
+    resultsRef.current = next;
+    setBacktestResults(next);
+    return { success: true, result };
   }, []);
 
   const deleteBacktestResult = useCallback((id: string) => {
-    setBacktestResults((prev) => prev.filter((r) => r.id !== id));
+    const next = resultsRef.current.filter((r) => r.id !== id);
+    resultsRef.current = next;
+    setBacktestResults(next);
   }, []);
 
   const renameBacktestResult = useCallback((id: string, newName: string) => {
-    setBacktestResults((prev) => prev.map((r) => (r.id === id ? { ...r, name: newName || r.name } : r)));
+    const next = resultsRef.current.map((r) => (r.id === id ? { ...r, name: newName || r.name } : r));
+    resultsRef.current = next;
+    setBacktestResults(next);
   }, []);
 
   return { backtestResults, runBacktest, deleteBacktestResult, renameBacktestResult };

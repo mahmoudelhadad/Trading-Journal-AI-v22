@@ -1,3 +1,93 @@
+# Phase 27 — Local Durability & Backup Integrity
+
+Status:
+COMPLETE
+
+Summary:
+Closed five local-durability gaps without changing the global storage
+contract. Backup format v2 covers 12 user-data sections, including the
+Recovery Bin and saved Backtest Results. Restore accepts v1 and v2,
+validates every present known section before its first write, and
+verifies each save by reloading through the registered load path and
+comparing semantic state. Saved Backtest creation at count 50 or above
+is blocked before computation instead of evicting history.
+
+Architecture:
+- Added AD-019. Saved Backtest Results now belong to Backup & Restore
+  because AD-018 made new results immutable historical records;
+  Recovery Bin belongs because it contains real recoverable records.
+- Backtest Results remain LocalStorage-only, unsynced Class B, outside
+  the resolver, IndexedDB, Sync Engine, and cutover.
+- AD-019 narrowly supersedes AD-014 and AD-018 clause 4 only where they
+  exclude Backtest Results from Backup & Restore, and AD-015 only where
+  it requires oldest-result eviction at the 50-result cap.
+- Restore remains sequential rather than transactionally atomic.
+
+Implementation:
+- `BACKUP_VERSION` is 2; only integer versions 1 and 2 are accepted.
+- Backup now contains 12 sections. Recovery Bin and Backtest Results
+  use their existing storage accessors. Restore Points inherit both
+  through `buildBackup()`; Restore Points themselves and sync cursors
+  remain excluded.
+- All known sections are optional. Missing sections leave live state
+  untouched; unknown sections are ignored; valid additive record fields
+  are preserved. Minimum-safe validation rejects malformed present
+  sections before any write without exact-schema locking or migration.
+- Every non-null restored section is revived at most once, saved,
+  reloaded, and compared by recursive semantic JSON equality. Detected
+  save, reload, or read-back mismatch failures are surfaced, exclude the
+  failed key, abort later writes, and cannot report success.
+- Result #51 is blocked before `computeBacktestResult()`. Existing and
+  restored collections at or above 50 are preserved without slicing,
+  eviction, trimming, or migration. The page shows: "Saved Backtest
+  limit reached. Delete an existing saved result before running another
+  Backtest."
+- Added the repository's first service/hook Node tests. No jsdom, new
+  dependency, or test-configuration change was introduced.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 pre-existing warnings at unchanged sites.
+- Focused tests: 38/38 across 2 files.
+- Full tests: 161/161 across 10 files.
+- `npm run verify`: green.
+- Production build: succeeds, 994 modules transformed.
+- `git diff --check`: clean.
+
+Runtime evidence:
+- The disposable local application launch and authentication screen
+  were observed.
+- Authenticated Backup/Restore and Backtest-cap UI surfaces were not
+  safely reachable without authentication. Those paths were verified
+  through automated tests, typecheck/build, and source/diff inspection;
+  they are not claimed as authenticated runtime observations.
+- No real journal, saved Backtest Result, Recovery Bin entry, or other
+  user data was mutated.
+
+Known limitations:
+- Restore is sequential, not transactional. Earlier verified sections
+  may remain changed after a later section fails.
+- Restore Points consume additional LocalStorage because they now carry
+  Recovery Bin and saved Backtest Result state.
+- Browser quota pressure remains possible; detected restore persistence
+  failures are surfaced rather than reported as success.
+- The finite-number / Avg Risk issue remains deferred to Phase 28.
+- The Insights hook-order maintainability finding and other previously
+  deferred work remain outside Phase 27.
+
+Files changed:
+- src/services/backupService.ts
+- src/services/backupService.test.ts (new)
+- src/hooks/useBacktests.ts
+- src/hooks/useBacktests.test.ts (new)
+- src/pages/Backtest.tsx
+- src/components/settings/BackupPanel.tsx
+- docs/ARCHITECTURE_DECISIONS.md.txt
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+---
+
 # Phase 26 — Immutable Backtest Equity Snapshots
 
 Status:

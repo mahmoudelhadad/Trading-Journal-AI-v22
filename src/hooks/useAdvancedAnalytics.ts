@@ -36,7 +36,7 @@ import {
 
 export interface AdvancedAnalytics {
   core:       CoreAnalytics;
-  drawdown:   DrawdownResult;
+  drawdown:   DrawdownResult | null;
   streaks:    StreakResult;
   allStreaks: StreakRun[];
   averageStreaks: AverageStreaks;
@@ -56,12 +56,12 @@ export interface AdvancedAnalytics {
  */
 export function useAdvancedAnalytics(
   trades: EnrichedTrade[],
-  startingCapital: number,
+  startingCapital: number | null,
 ): AdvancedAnalytics {
   return useMemo<AdvancedAnalytics>(() => {
-    const drawdown = computeDrawdownFromTrades(trades, startingCapital);
+    const drawdown = startingCapital === null ? null : computeDrawdownFromTrades(trades, startingCapital);
     const coreBase = computeCoreAnalytics(trades);
-    const core = withRecoveryFactor(coreBase, drawdown.maxDrawdownDollar);
+    const core = withRecoveryFactor(coreBase, drawdown?.maxDrawdownDollar ?? null);
 
     return {
       core,

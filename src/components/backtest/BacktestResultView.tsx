@@ -34,6 +34,7 @@ import { TableHeader, TableCell } from '@components/ui/Table.js';
 import { fr, getSignColor } from '@calculations/formatters.js';
 import { EquityCurveChart } from '@components/charts/EquityCurveChart.js';
 import { DrawdownChart } from '@components/charts/DrawdownChart.js';
+import { isFiniteNumber } from '@calculations/tradeCalc.js';
 import type { EquityCurvePoint } from '@components/charts/EquityCurveChart.js';
 import type { BacktestResult } from '@apptypes/backtest.js';
 
@@ -60,7 +61,7 @@ export interface BacktestResultViewProps {
  * but every `fr` variant prefixes a sign, which reads wrong on a
  * ratio ("+1.80" payoff ratio). This is display formatting only.
  */
-const num = (v: number | null): string => (v === null ? '—' : v.toFixed(2));
+const num = (v: number | null): string => (isFiniteNumber(v) ? v.toFixed(2) : '—');
 
 // ─── Component ───────────────────────────────────────────────
 
@@ -102,7 +103,7 @@ export function BacktestResultView({ result, equityData, currentEquity, unresolv
     ['Gross Loss',          fr.usd(core.grossLoss)],
 
     ['Kelly %',             fr.pct(core.kellyPercent)],
-    ['Risk of Ruin',        core.riskOfRuinPercent === null ? '—' : `${core.riskOfRuinPercent.toFixed(1)}%`],
+    ['Risk of Ruin',        isFiniteNumber(core.riskOfRuinPercent) ? `${core.riskOfRuinPercent.toFixed(1)}%` : '—'],
 
     ['Avg Holding (min)',         num(core.avgHoldingMins)],
     ['Avg Winning Hold (min)',    num(core.avgWinningHoldingMins)],
@@ -138,31 +139,31 @@ export function BacktestResultView({ result, equityData, currentEquity, unresolv
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <KPI
           label="Net P&L"
-          value={`${summary.netPL >= 0 ? '+' : '-'}$${Math.abs(summary.netPL).toFixed(0)}`}
+          value={fr.usd(summary.netPL)}
           color={getSignColor(summary.netPL)}
         />
         <KPI
           label="Win Rate (W/L only)"
-          value={summary.wr !== null ? `${(summary.wr * 100).toFixed(1)}%` : '—'}
+          value={isFiniteNumber(summary.wr) ? `${(summary.wr * 100).toFixed(1)}%` : '—'}
           color={C.blue}
           sub={`${summary.green}W / ${summary.red}L`}
         />
         <KPI
           label="Profit Factor"
-          value={core.profitFactor !== null ? core.profitFactor.toFixed(2) : '—'}
+          value={num(core.profitFactor)}
           color={C.purple}
         />
         <KPI
           label="Max Drawdown"
-          value={`-$${drawdown.maxDrawdownDollar.toFixed(0)}`}
+          value={isFiniteNumber(drawdown.maxDrawdownDollar) ? `-$${drawdown.maxDrawdownDollar.toFixed(0)}` : '—'}
           color={C.red}
-          sub={`-${drawdown.maxDrawdownPercent.toFixed(1)}%`}
+          sub={isFiniteNumber(drawdown.maxDrawdownPercent) ? `-${drawdown.maxDrawdownPercent.toFixed(1)}%` : undefined}
         />
         <KPI
           label="Trades"
           value={result.tradeCount}
           color={C.dim}
-          sub={`Total R: ${summary.totalR.toFixed(2)}`}
+          sub={`Total R: ${fr.r(summary.totalR)}`}
         />
         <KPI
           label="Ending Equity"
@@ -221,12 +222,12 @@ export function BacktestResultView({ result, equityData, currentEquity, unresolv
           />
           <StatBox
             label="Avg Win Streak"
-            value={averageStreaks.avgWinStreak !== null ? averageStreaks.avgWinStreak.toFixed(2) : '—'}
+            value={num(averageStreaks.avgWinStreak)}
             color={C.green}
           />
           <StatBox
             label="Avg Loss Streak"
-            value={averageStreaks.avgLossStreak !== null ? averageStreaks.avgLossStreak.toFixed(2) : '—'}
+            value={num(averageStreaks.avgLossStreak)}
             color={C.red}
           />
         </div>

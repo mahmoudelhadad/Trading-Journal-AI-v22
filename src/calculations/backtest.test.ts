@@ -26,13 +26,23 @@ import { summarizeTrades } from './rolling.js';
 import { buildEquitySequence, computeDrawdown } from './drawdown.js';
 import { computeStreaks, getAverageStreaks, getLongestStreaks } from './streaks.js';
 import { computeCoreAnalytics, withRecoveryFactor } from './analytics.js';
-import { computeBacktestResult } from './backtest.js';
+import { computeBacktestResult as computeBacktestResultNullable } from './backtest.js';
 import type { Account } from '@apptypes/account.js';
 import type { RawTradeContent } from '@apptypes/trade.js';
 
 const accounts: Account[] = [{ id: 'acc_1', name: 'Main', capital: 1000 } as Account];
 const STARTING_CAPITAL = 1000;
 const TOLERANCE = 1e-9;
+
+function required<T>(value: T | null): T {
+  expect(value).not.toBeNull();
+  if (value === null) throw new Error('expected available calculation');
+  return value;
+}
+
+const computeBacktestResult = (
+  ...args: Parameters<typeof computeBacktestResultNullable>
+): NonNullable<ReturnType<typeof computeBacktestResultNullable>> => required(computeBacktestResultNullable(...args));
 
 function trade(tid: number, exitPrice: string): RawTradeContent {
   return {
@@ -71,7 +81,7 @@ describe('computeBacktestResult', () => {
     const matched = applyFilterGroup(trades, greenOnly);
 
     expect(result.summary).toEqual(summarizeTrades(matched));
-    expect(result.drawdown).toEqual(computeDrawdown(buildEquitySequence(matched, STARTING_CAPITAL)));
+    expect(result.drawdown).toEqual(computeDrawdown(required(buildEquitySequence(matched, STARTING_CAPITAL))));
     expect(result.streaks).toEqual(computeStreaks(matched));
     expect(result.averageStreaks).toEqual(getAverageStreaks(matched));
     expect(result.longestStreaks).toEqual(getLongestStreaks(matched));
@@ -89,7 +99,7 @@ describe('computeBacktestResult', () => {
     expect(result.core).toEqual(
       withRecoveryFactor(
         computeCoreAnalytics(matched),
-        computeDrawdown(buildEquitySequence(matched, STARTING_CAPITAL)).maxDrawdownDollar,
+        required(computeDrawdown(required(buildEquitySequence(matched, STARTING_CAPITAL)))).maxDrawdownDollar,
       ),
     );
   });
@@ -100,7 +110,7 @@ describe('computeBacktestResult', () => {
     expect(result.tradeCount).toBe(0);
     expect(result.matchedTradeIds).toEqual([]);
     expect(result.summary).toEqual(summarizeTrades([]));
-    expect(result.drawdown).toEqual(computeDrawdown(buildEquitySequence([], STARTING_CAPITAL)));
+    expect(result.drawdown).toEqual(computeDrawdown(required(buildEquitySequence([], STARTING_CAPITAL))));
     expect(result.streaks).toEqual({ current: 0, type: '', maxWin: 0, maxLoss: 0 });
     expect(result.averageStreaks).toEqual({ avgWinStreak: null, avgLossStreak: null });
     expect(result.longestStreaks).toEqual({ longestWinStreak: 0, longestLossStreak: 0 });
@@ -149,7 +159,7 @@ describe('computeBacktestResult', () => {
     const endpoint = result.equityPath && result.equityPath.length > 0
       ? result.equityPath[result.equityPath.length - 1]
       : STARTING_CAPITAL;
-    expect(Math.abs(endpoint - (STARTING_CAPITAL + result.summary.netPL))).toBeLessThan(TOLERANCE);
+    expect(Math.abs(endpoint - (STARTING_CAPITAL + (result.summary.netPL as number)))).toBeLessThan(TOLERANCE);
   });
 
   it('T-3 preserves equityPath exactly through a JSON round-trip', () => {
@@ -261,5 +271,22 @@ describe('computeBacktestResult', () => {
 
     expect(result.drawdown.maxDrawdownDollar).toBe(0);
     expect(result.core.recoveryFactor).toBeNull();
+  });
+
+  it('returns null for invalid starting capital or an unrepresentable new computation', () => {
+    expect(computeBacktestResultNullable(matchesEverything, trades, Number.NaN)).toBeNull();
+    const huge = [{ ...trades[0], _netPL: 1e308 }];
+    expect(computeBacktestResultNullable(matchesEverything, huge, 1e308)).toBeNull();
+  });
+
+  it('contains no NaN or infinity anywhere and survives a semantic JSON round trip', () => {
+    const result = computeBacktestResult(matchesEverything, trades, STARTING_CAPITAL);
+    const assertFiniteNumbers = (value: unknown): void => {
+      if (typeof value === 'number') expect(Number.isFinite(value)).toBe(true);
+      else if (Array.isArray(value)) value.forEach(assertFiniteNumbers);
+      else if (value !== null && typeof value === 'object') Object.values(value).forEach(assertFiniteNumbers);
+    };
+    assertFiniteNumbers(result);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 });

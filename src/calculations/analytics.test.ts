@@ -409,3 +409,44 @@ describe('win-rate vocabulary: winPct and summarizeTrades().wr are different met
     expect(summarizeTrades(decisive).wr).toBe(computeCoreAnalytics(decisive).winPct);
   });
 });
+
+describe('finite aggregate integrity', () => {
+  it('makes CoreAnalytics scalar sums and daily extrema null on positive overflow', () => {
+    const [a, b] = MIXED();
+    Object.assign(a, { date: '2026-03-01', _pl: 1e308, _netPL: 1e308 });
+    Object.assign(b, { date: '2026-03-01', _pl: 1e308, _netPL: 1e308 });
+    const core = computeCoreAnalytics([a, b]);
+    expect(core.netProfit).toBeNull();
+    expect(core.grossProfit).toBeNull();
+    expect(core.largestWinningDay).toBeNull();
+    expect(core.largestLosingDay).toBeNull();
+  });
+
+  it('makes grossLoss null on negative overflow', () => {
+    const [a, b] = MIXED();
+    Object.assign(a, { _pl: -1e308, _netPL: -1e308 });
+    Object.assign(b, { _pl: -1e308, _netPL: -1e308 });
+    const core = computeCoreAnalytics([a, b]);
+    expect(core.netProfit).toBeNull();
+    expect(core.grossLoss).toBeNull();
+  });
+
+  it('does not silently omit finite reward multiplication overflow', () => {
+    const [a] = MIXED();
+    Object.assign(a, { _rv: 1e308, _plannedR: 1e308 });
+    expect(computeCoreAnalytics([a]).avgRewardDollar).toBeNull();
+  });
+
+  it('keeps a valid aggregate finite when another enriched value is unavailable', () => {
+    const trades = enrichTrades([
+      trade({ exitPrice: 'BE', commission: '0' }),
+      trade({ exitPrice: '120', commission: '0' }),
+    ], accounts);
+    expect(computeCoreAnalytics(trades).netProfit).toBe(20);
+  });
+
+  it('returns null recovery factor when finite division overflows', () => {
+    const core = { ...computeCoreAnalytics([]), netProfit: 1e308 };
+    expect(withRecoveryFactor(core, 1e-308).recoveryFactor).toBeNull();
+  });
+});

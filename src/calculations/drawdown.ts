@@ -21,7 +21,7 @@
  * introduced with a separate equity.ts module).
  */
 
-import type { EnrichedTrade } from './tradeCalc.js';
+import { finiteOrNull, isFiniteNumber, type EnrichedTrade } from './tradeCalc.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -71,14 +71,22 @@ export interface DrawdownResult {
 export function buildEquitySequence(
   trades: EnrichedTrade[],
   startingCapital: number,
-): EquityPoint[] {
+): EquityPoint[] | null {
+  if (!isFiniteNumber(startingCapital)) return null;
   const points: EquityPoint[] = [{ index: 0, equity: startingCapital }];
   let running = startingCapital;
 
-  trades.forEach((t, i) => {
-    running += t._netPL ?? 0;
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    if (!isFiniteNumber(t._netPL)) {
+      points.push({ index: i + 1, equity: running, date: t.date });
+      continue;
+    }
+    const next = finiteOrNull(running + t._netPL);
+    if (next === null) return null;
+    running = next;
     points.push({ index: i + 1, equity: running, date: t.date });
-  });
+  }
 
   return points;
 }
@@ -159,7 +167,7 @@ export function buildEquitySequence(
  *   EDGE CASES:  Empty array for an empty input sequence.
  * ─────────────────────────────────────────────────────────────
  */
-export function computeDrawdown(equitySequence: EquityPoint[]): DrawdownResult {
+export function computeDrawdown(equitySequence: EquityPoint[]): DrawdownResult | null {
   if (equitySequence.length === 0) {
     return {
       maxDrawdownDollar: 0,
@@ -170,6 +178,10 @@ export function computeDrawdown(equitySequence: EquityPoint[]): DrawdownResult {
       recoveryTimeTrades: null,
       rollingDrawdown: [],
     };
+  }
+
+  if (equitySequence.some((point) => !isFiniteNumber(point.index) || !isFiniteNumber(point.equity))) {
+    return null;
   }
 
   let runningPeak = equitySequence[0].equity;
@@ -189,8 +201,12 @@ export function computeDrawdown(equitySequence: EquityPoint[]): DrawdownResult {
       runningPeakIndex = point.index;
     }
 
-    const ddDollar  = runningPeak - point.equity;
-    const ddPercent = runningPeak !== 0 ? (ddDollar / runningPeak) * 100 : 0;
+    const ddDollar = finiteOrNull(runningPeak - point.equity);
+    if (ddDollar === null) return null;
+    const ddPercent = runningPeak !== 0
+      ? finiteOrNull((ddDollar / runningPeak) * 100)
+      : 0;
+    if (ddPercent === null) return null;
 
     rollingDrawdown.push({ index: point.index, drawdownDollar: ddDollar, drawdownPercent: ddPercent });
 
@@ -208,16 +224,22 @@ export function computeDrawdown(equitySequence: EquityPoint[]): DrawdownResult {
   for (const point of equitySequence) {
     if (point.equity > peakAtEnd) peakAtEnd = point.equity;
   }
-  const currentDrawdownDollar  = peakAtEnd - lastPoint.equity;
-  const currentDrawdownPercent = peakAtEnd !== 0 ? (currentDrawdownDollar / peakAtEnd) * 100 : 0;
+  const currentDrawdownDollar = finiteOrNull(peakAtEnd - lastPoint.equity);
+  if (currentDrawdownDollar === null) return null;
+  const currentDrawdownPercent = peakAtEnd !== 0
+    ? finiteOrNull((currentDrawdownDollar / peakAtEnd) * 100)
+    : 0;
+  if (currentDrawdownPercent === null) return null;
 
-  const drawdownDurationTrades = maxDDTroughIndex - maxDDPeakIndex;
+  const drawdownDurationTrades = finiteOrNull(maxDDTroughIndex - maxDDPeakIndex);
+  if (drawdownDurationTrades === null) return null;
 
   let recoveryTimeTrades: number | null = null;
   for (const point of equitySequence) {
     if (point.index <= maxDDTroughIndex) continue;
     if (point.equity >= maxDDPeakValue) {
-      recoveryTimeTrades = point.index - maxDDTroughIndex;
+      recoveryTimeTrades = finiteOrNull(point.index - maxDDTroughIndex);
+      if (recoveryTimeTrades === null) return null;
       break;
     }
   }
@@ -241,6 +263,7 @@ export function computeDrawdown(equitySequence: EquityPoint[]): DrawdownResult {
 export function computeDrawdownFromTrades(
   trades: EnrichedTrade[],
   startingCapital: number,
-): DrawdownResult {
-  return computeDrawdown(buildEquitySequence(trades, startingCapital));
+): DrawdownResult | null {
+  const sequence = buildEquitySequence(trades, startingCapital);
+  return sequence === null ? null : computeDrawdown(sequence);
 }

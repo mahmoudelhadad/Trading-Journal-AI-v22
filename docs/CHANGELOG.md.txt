@@ -1,3 +1,134 @@
+# Phase 28 — Finite Derived-Number Integrity
+
+Status:
+COMPLETE
+
+Summary:
+Every derived numeric value is now finite or null. Malformed, symbolic,
+blank required, and non-finite numeric operands leave raw historical
+strings untouched while making affected derived values unavailable.
+Valid finite calculations remain unchanged, valid zero remains zero, and
+an invalid non-empty commission no longer behaves as zero commission.
+
+What shipped:
+- Finite parsing and post-arithmetic checks now protect trade enrichment,
+  aggregates, running capital, equity, drawdown, Backtest snapshots,
+  shared formatters, and approved page-local calculations.
+- Finite aggregate arithmetic overflow becomes null; it is not clamped,
+  skipped, JSON-normalized, or replaced with zero.
+- Running capital cannot advance from unavailable/non-finite net P/L.
+- An unavailable cumulative equity calculation returns no sequence; an
+  unavailable drawdown calculation returns no DrawdownResult.
+- A Backtest returns null when it cannot produce a safe immutable
+  snapshot. `calculation_unavailable` remains distinct from
+  `limit_reached`; a failed calculation is not appended, persisted,
+  selected, or partially saved.
+- The exact inline message is: "Backtest could not be calculated because
+  one or more required numeric calculations were unavailable."
+- Shared formatters render null, undefined, NaN, +Infinity, and -Infinity
+  as `—`.
+- Dashboard, Strategy, Insights, Equity, Backtest, and Calendar local
+  coercion/accumulation paths are finite-safe. Unavailable values render
+  or gate as unavailable without fabricated $0, 0R, 0%, neutral scores,
+  comparison winners, chart points, or secondary fallback analytics.
+
+Exact widened contracts:
+- `EnrichedFields._capital: number | null`
+- `TradeSummary.totalR: number | null`
+- `TradeSummary.pl: number | null`
+- `TradeSummary.netPL: number | null`
+- `PeriodStats.totalR: number | null`
+- `PeriodStats.netPL: number | null`
+- `CoreAnalytics.netProfit: number | null`
+- `CoreAnalytics.grossProfit: number | null`
+- `CoreAnalytics.grossLoss: number | null`
+
+Whole-computation contracts:
+- `buildEquitySequence(...): EquityPoint[] | null`
+- `computeDrawdown(...): DrawdownResult | null`
+- `computeDrawdownFromTrades(...): DrawdownResult | null`
+- `computeBacktestResult(...): BacktestResult | null`
+- EquityPoint and every DrawdownResult field remain finite-only.
+- `BacktestResult.equityPath` remains finite-only `number[]`; the AD-018
+  persisted shape and presence/absence legacy discriminator are unchanged.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 pre-existing warnings.
+- Tests: 203/203 passing across 11 files.
+- `npm run verify`: green.
+- Production build: succeeds, 994 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation manifest: 16 production files and 7 test files.
+- Added `src/calculations/formatters.test.ts`.
+- No jsdom, React Testing Library, dependency, or configuration change.
+
+Runtime evidence:
+- The local application launch and authentication screen were observed.
+- Authenticated application surfaces were not directly exercised because
+  authentication would be required. No account was created and no real
+  journal data was altered.
+- Authenticated surfaces are recorded as automated/diff verified through
+  tests, typecheck, build, and source/diff inspection; they are not
+  claimed as runtime-observed and no full runtime V-case pass is claimed.
+
+Historical-data policy:
+- No raw historical trade or string was rewritten.
+- No LocalStorage migration, saved Backtest migration, repair, backfill,
+  Recovery Bin change, or backup/restore change occurred.
+- Historical JSON nulls caused by older non-finite values are not
+  reconstructable and were not repaired.
+
+Architecture:
+- No AD-020 was required. Phase 28 enforces the existing finite-or-null
+  derived-value contract and does not introduce a new persistence policy.
+- AD-018 and AD-019 remain unchanged.
+
+Known limitations / carry-forward:
+- Input-validation UX and TradeForm's permissive raw-string entry remain
+  separate work.
+- Import validation/rejection and raw-history cleanup remain separate.
+- Existing historical lossy nulls remain unchanged.
+- Futures data/import and unrelated Insights correctness remain deferred.
+- Phase 29 is not started.
+
+Files changed:
+
+Production (16):
+- src/calculations/tradeCalc.ts
+- src/calculations/analytics.ts
+- src/calculations/rolling.ts
+- src/calculations/drawdown.ts
+- src/calculations/backtest.ts
+- src/calculations/formatters.ts
+- src/hooks/useAdvancedAnalytics.ts
+- src/hooks/useBacktests.ts
+- src/pages/Dashboard.tsx
+- src/pages/Strategy.tsx
+- src/pages/Insights.tsx
+- src/pages/Equity.tsx
+- src/pages/Backtest.tsx
+- src/pages/Calendar.tsx
+- src/components/backtest/BacktestResultView.tsx
+- src/components/charts/PeriodPLChart.tsx
+
+Tests (7):
+- src/calculations/tradeCalc.test.ts
+- src/calculations/analytics.test.ts
+- src/calculations/rolling.test.ts
+- src/calculations/drawdown.test.ts
+- src/calculations/backtest.test.ts
+- src/hooks/useBacktests.test.ts
+- src/calculations/formatters.test.ts (new)
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Twenty-five files total. No architecture-decision file changed.
+
+---
+
 # Phase 27 — Local Durability & Backup Integrity
 
 Status:

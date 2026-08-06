@@ -36,6 +36,14 @@ describe('saved Backtest capacity', () => {
     expect(compute).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps calculation_unavailable distinct and exposes no result to persist or select', () => {
+    const compute = vi.fn(() => null);
+    const outcome = createBacktestResultWithinLimit(49, compute);
+    expect(outcome).toEqual({ success: false, reason: 'calculation_unavailable' });
+    expect(compute).toHaveBeenCalledTimes(1);
+    expect('result' in outcome).toBe(false);
+  });
+
   it('models deletion freeing capacity while rename leaves it unchanged', () => {
     const restored = Array.from({ length: 51 }, (_, i) => result(String(i)));
     const renamed = restored.map((item, i) => i === 0 ? { ...item, name: 'Renamed' } : item);

@@ -60,9 +60,13 @@ import React, { useMemo } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { StatBox } from '@components/ui/StatBox.js';
 import { EmptyState } from '@components/ui/EmptyState.js';
+import { fr } from '@calculations/formatters.js';
 import { summarizeTrades, groupTradesBy } from '@calculations/rolling.js';
 import { useAdvancedAnalytics } from '@hooks/useAdvancedAnalytics.js';
-import type { EnrichedTrade } from '@calculations/tradeCalc.js';
+import {
+  finiteOrNull, isFiniteNumber, sumFinite, toFiniteNumber,
+  type EnrichedTrade,
+} from '@calculations/tradeCalc.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -134,20 +138,21 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     const n = trades.length;
 
     // Reused: matches core.winPct exactly (green / n, all trades)
-    const wr = core.winPct ?? 0;
+    const wr = core.winPct;
 
     // NOT reused from core.avgActualR — see file header for why.
     // summarizeTrades(trades) uses the exact matching "null-as-0 / full n" formula.
     const overallSummary = summarizeTrades(trades);
     const totalR = overallSummary.totalR;
-    const avgR   = overallSummary.avgR ?? 0;
+    const avgR   = overallSummary.avgR;
     const netPL  = overallSummary.netPL;
 
     const avgPlanned = core.avgPlannedR;
 
     // ── Best/Worst Day — reuses aggregateByPeriod('day') via the hook ──
-    const bestDay = daily.length > 0 ? daily.reduce((best, cur) => (cur.totalR > best.totalR ? cur : best)) : null;
-    const worstDay = daily.length > 0 ? daily.reduce((worst, cur) => (cur.totalR < worst.totalR ? cur : worst)) : null;
+    const availableDays = daily.filter((period) => period.totalR !== null);
+    const bestDay = availableDays.length > 0 ? availableDays.reduce((best, cur) => ((cur.totalR as number) > (best.totalR as number) ? cur : best)) : null;
+    const worstDay = availableDays.length > 0 ? availableDays.reduce((worst, cur) => ((cur.totalR as number) < (worst.totalR as number) ? cur : worst)) : null;
 
     // Phase 20 — Architecture Cleanup (finding M-2): all three groupings
     // below now reuse groupTradesBy() (calculations/rolling.ts) instead
@@ -161,28 +166,28 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     const setupGroups = groupTradesBy(trades, (t) => t.entrySetup);
     const setupEntries = Object.entries(setupGroups)
       .map(([key, ts]) => [key, summarizeTrades(ts)] as const)
-      .filter(([, s]) => s.n >= 2);
-    const bestSetup = setupEntries.length > 0 ? setupEntries.reduce((a, b) => (b[1].totalR > a[1].totalR ? b : a)) : null;
-    const worstSetup = setupEntries.length > 0 ? setupEntries.reduce((a, b) => (b[1].totalR < a[1].totalR ? b : a)) : null;
+      .filter(([, s]) => s.n >= 2 && s.totalR !== null);
+    const bestSetup = setupEntries.length > 0 ? setupEntries.reduce((a, b) => ((b[1].totalR as number) > (a[1].totalR as number) ? b : a)) : null;
+    const worstSetup = setupEntries.length > 0 ? setupEntries.reduce((a, b) => ((b[1].totalR as number) < (a[1].totalR as number) ? b : a)) : null;
 
     // ── Best Session (n>=2 threshold) ──
     const sessGroups = groupTradesBy(trades, (t) => t.session);
     const sessEntries = Object.entries(sessGroups)
       .map(([key, ts]) => [key, summarizeTrades(ts)] as const)
-      .filter(([, s]) => s.n >= 2);
-    const bestSess = sessEntries.length > 0 ? sessEntries.reduce((a, b) => (b[1].totalR > a[1].totalR ? b : a)) : null;
+      .filter(([, s]) => s.n >= 2 && s.totalR !== null);
+    const bestSess = sessEntries.length > 0 ? sessEntries.reduce((a, b) => ((b[1].totalR as number) > (a[1].totalR as number) ? b : a)) : null;
 
     // ── Best/Worst Hour (n>=2 threshold) ──
     const hourGroups = groupTradesBy(trades, (t) => {
       if (!t.entryTime) return null;
-      const hr = parseInt(t.entryTime.split(':')[0], 10);
-      return isNaN(hr) ? null : String(hr);
+      const hr = toFiniteNumber(t.entryTime.split(':')[0]);
+      return hr === null ? null : String(hr);
     });
     const hourEntries = Object.entries(hourGroups)
       .map(([key, ts]) => [key, summarizeTrades(ts)] as const)
-      .filter(([, s]) => s.n >= 2);
-    const bestHour = hourEntries.length > 0 ? hourEntries.reduce((a, b) => (b[1].totalR > a[1].totalR ? b : a)) : null;
-    const worstHour = hourEntries.length > 0 ? hourEntries.reduce((a, b) => (b[1].totalR < a[1].totalR ? b : a)) : null;
+      .filter(([, s]) => s.n >= 2 && s.totalR !== null);
+    const bestHour = hourEntries.length > 0 ? hourEntries.reduce((a, b) => ((b[1].totalR as number) > (a[1].totalR as number) ? b : a)) : null;
+    const worstHour = hourEntries.length > 0 ? hourEntries.reduce((a, b) => ((b[1].totalR as number) < (a[1].totalR as number) ? b : a)) : null;
 
     // ── Streaks — reused from computeStreaks() via the hook ──
     const maxWin = streaks.maxWin;
@@ -195,27 +200,29 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     const planNoR  = planNo.length > 0  ? summarizeTrades(planNo).avgR  : null;
 
     // ── Execution ratio (page-local, no existing equivalent) ──
-    const execPairs = trades.filter((t) => t._r !== null && t._plannedR !== null && t._plannedR > 0);
-    const execRatio = execPairs.length > 0
-      ? execPairs.reduce((s, t) => s + (t._r as number) / (t._plannedR as number), 0) / execPairs.length
+    const execPairs = trades.filter((t) => isFiniteNumber(t._r) && isFiniteNumber(t._plannedR) && t._plannedR > 0);
+    const execValues = execPairs.map((t) => finiteOrNull((t._r as number) / (t._plannedR as number)));
+    const execTotal = execValues.every(isFiniteNumber) ? sumFinite(execValues) : null;
+    const execRatio = execPairs.length > 0 && execTotal !== null
+      ? finiteOrNull(execTotal / execPairs.length)
       : null;
 
     // ── Build insights list — every rule/threshold/message preserved exactly ──
     const insights: Insight[] = [];
 
-    if (wr > 0.6) insights.push({ type: 'good', title: 'Strong All-Trade Win Rate', body: `All-trade win rate ${Math.round(wr * 100)}% — excellent. Focus on maintaining trade quality.` });
-    else if (wr < 0.4) insights.push({ type: 'bad', title: `Low All-Trade Win Rate (${Math.round(wr * 100)}%)`, body: 'Less than 40% of trades are winning. Review your entry criteria and wait for A+ setups only.' });
+    if (wr !== null && wr > 0.6) insights.push({ type: 'good', title: 'Strong All-Trade Win Rate', body: `All-trade win rate ${Math.round(wr * 100)}% — excellent. Focus on maintaining trade quality.` });
+    else if (wr !== null && wr < 0.4) insights.push({ type: 'bad', title: `Low All-Trade Win Rate (${Math.round(wr * 100)}%)`, body: 'Less than 40% of trades are winning. Review your entry criteria and wait for A+ setups only.' });
 
-    if (avgR > 0.5) insights.push({ type: 'good', title: `Solid Avg R: +${avgR.toFixed(2)}R`, body: 'Average return per trade is healthy. Keep protecting your winners.' });
-    else if (avgR < 0) insights.push({ type: 'bad', title: `Negative Avg R (${avgR.toFixed(2)}R)`, body: "Average trade is losing money. Check if you're cutting winners too early or letting losers run." });
+    if (avgR !== null && avgR > 0.5) insights.push({ type: 'good', title: `Solid Avg R: +${avgR.toFixed(2)}R`, body: 'Average return per trade is healthy. Keep protecting your winners.' });
+    else if (avgR !== null && avgR < 0) insights.push({ type: 'bad', title: `Negative Avg R (${avgR.toFixed(2)}R)`, body: "Average trade is losing money. Check if you're cutting winners too early or letting losers run." });
 
-    if (bestSetup) insights.push({ type: 'good', title: `Best Setup: ${bestSetup[0]}`, body: `${bestSetup[0]} generated ${bestSetup[1].totalR.toFixed(2)}R across ${bestSetup[1].n} trades (${Math.round((bestSetup[1].green / bestSetup[1].n) * 100)}% win rate). Prioritize this setup.` });
-    if (worstSetup && worstSetup[1].totalR < 0) insights.push({ type: 'bad', title: `Avoid: ${worstSetup[0]}`, body: `${worstSetup[0]} generated ${worstSetup[1].totalR.toFixed(2)}R across ${worstSetup[1].n} trades. Consider removing it from your playbook or reviewing your execution.` });
+    if (bestSetup) insights.push({ type: 'good', title: `Best Setup: ${bestSetup[0]}`, body: `${bestSetup[0]} generated ${(bestSetup[1].totalR as number).toFixed(2)}R across ${bestSetup[1].n} trades (${Math.round((bestSetup[1].green / bestSetup[1].n) * 100)}% win rate). Prioritize this setup.` });
+    if (worstSetup && (worstSetup[1].totalR as number) < 0) insights.push({ type: 'bad', title: `Avoid: ${worstSetup[0]}`, body: `${worstSetup[0]} generated ${(worstSetup[1].totalR as number).toFixed(2)}R across ${worstSetup[1].n} trades. Consider removing it from your playbook or reviewing your execution.` });
 
-    if (bestSess) insights.push({ type: 'good', title: `Best Session: ${bestSess[0]}`, body: `${bestSess[0]} is your strongest session with ${bestSess[1].totalR.toFixed(2)}R total across ${bestSess[1].n} trades. Focus your energy here.` });
+    if (bestSess) insights.push({ type: 'good', title: `Best Session: ${bestSess[0]}`, body: `${bestSess[0]} is your strongest session with ${(bestSess[1].totalR as number).toFixed(2)}R total across ${bestSess[1].n} trades. Focus your energy here.` });
 
-    if (bestHour) insights.push({ type: 'good', title: `Best Entry Hour: ${bestHour[0]}:00`, body: `Your best performing entries happen around ${bestHour[0]}:00 with ${bestHour[1].totalR.toFixed(2)}R total across ${bestHour[1].n} trades.` });
-    if (worstHour && worstHour[1].totalR < -0.5) insights.push({ type: 'warn', title: `Risky Hour: ${worstHour[0]}:00`, body: `Entries at ${worstHour[0]}:00 produced ${worstHour[1].totalR.toFixed(2)}R across ${worstHour[1].n} trades. Be extra selective or avoid this hour.` });
+    if (bestHour) insights.push({ type: 'good', title: `Best Entry Hour: ${bestHour[0]}:00`, body: `Your best performing entries happen around ${bestHour[0]}:00 with ${(bestHour[1].totalR as number).toFixed(2)}R total across ${bestHour[1].n} trades.` });
+    if (worstHour && (worstHour[1].totalR as number) < -0.5) insights.push({ type: 'warn', title: `Risky Hour: ${worstHour[0]}:00`, body: `Entries at ${worstHour[0]}:00 produced ${(worstHour[1].totalR as number).toFixed(2)}R across ${worstHour[1].n} trades. Be extra selective or avoid this hour.` });
 
     if (planYesR !== null && planNoR !== null) {
       insights.push({
@@ -226,25 +233,29 @@ export function InsightsPage({ trades }: InsightsPageProps) {
     }
 
     if (execRatio !== null) {
-      insights.push({
+      const execPercent = finiteOrNull(execRatio * 100);
+      if (execPercent !== null) insights.push({
         type: execRatio > 0.5 ? 'good' : 'warn',
-        title: `Execution Ratio: ${(execRatio * 100).toFixed(0)}%`,
-        body: `You captured ${(execRatio * 100).toFixed(0)}% of your planned R on average, across ${execPairs.length} trades with both a planned and an actual R. ${execRatio < 0.5 ? 'Work on holding trades to target.' : 'Good trade management.'}`,
+        title: `Execution Ratio: ${execPercent.toFixed(0)}%`,
+        body: `You captured ${execPercent.toFixed(0)}% of your planned R on average, across ${execPairs.length} trades with both a planned and an actual R. ${execRatio < 0.5 ? 'Work on holding trades to target.' : 'Good trade management.'}`,
       });
     }
 
     if (maxWin >= 3) insights.push({ type: 'good', title: `Longest Win Streak: ${maxWin}`, body: `You've had winning streaks up to ${maxWin} trades. Stay disciplined during runs.` });
     if (maxLoss >= 3) insights.push({ type: 'bad', title: `Longest Loss Streak: ${maxLoss}`, body: `Loss streaks up to ${maxLoss} trades. Consider taking a break after 3 consecutive losses.` });
 
-    if (avgPlanned !== null && avgR !== null) {
+    const planPercent = avgPlanned !== null && avgPlanned !== 0 && avgR !== null
+      ? finiteOrNull((avgR / avgPlanned) * 100)
+      : null;
+    if (avgPlanned !== null && avgR !== null && planPercent !== null) {
       insights.push({
         type: avgR / avgPlanned > 0.5 ? 'good' : 'warn',
         title: 'Planned vs Real R',
-        body: `Planned: +${avgPlanned.toFixed(2)}R avg across trades that have a planned R. Actual: ${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R avg across all ${n} trades. You achieve ${avgPlanned > 0 ? (avgR / avgPlanned * 100).toFixed(0) : 0}% of your plan.`,
+        body: `Planned: +${avgPlanned.toFixed(2)}R avg across trades that have a planned R. Actual: ${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R avg across all ${n} trades. You achieve ${planPercent.toFixed(0)}% of your plan.`,
       });
     }
 
-    if (n > 10 && totalR < 0) insights.push({ type: 'bad', title: 'Overall Negative P/L', body: `Total R is ${totalR.toFixed(2)} across ${n} trades. Consider reducing position size while you work on strategy improvements.` });
+    if (n > 10 && totalR !== null && totalR < 0) insights.push({ type: 'bad', title: 'Overall Negative P/L', body: `Total R is ${totalR.toFixed(2)} across ${n} trades. Consider reducing position size while you work on strategy improvements.` });
 
     return { n, wr, totalR, avgR, netPL, maxWin, maxLoss, insights };
   }, [trades, core, streaks, daily]);
@@ -257,10 +268,10 @@ export function InsightsPage({ trades }: InsightsPageProps) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <StatBox label="Total R" value={`${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)}R`} color={totalR >= 0 ? C.green : C.red} />
-        <StatBox label="Win Rate (all trades)" value={`${Math.round(wr * 100)}%`} color={wr > 0.5 ? C.green : C.red} />
-        <StatBox label="Avg R / Trade" value={`${avgR >= 0 ? '+' : ''}${avgR.toFixed(2)}R`} color={avgR >= 0 ? C.green : C.red} />
-        <StatBox label="Net P/L" value={`${netPL >= 0 ? '+$' : '-$'}${Math.abs(netPL).toFixed(0)}`} color={netPL >= 0 ? C.green : C.red} />
+        <StatBox label="Total R" value={fr.r(totalR)} color={totalR === null ? C.dim : totalR >= 0 ? C.green : C.red} />
+        <StatBox label="Win Rate (all trades)" value={fr.pct(wr)} color={wr === null ? C.dim : wr > 0.5 ? C.green : C.red} />
+        <StatBox label="Avg R / Trade" value={fr.r(avgR)} color={avgR === null ? C.dim : avgR >= 0 ? C.green : C.red} />
+        <StatBox label="Net P/L" value={fr.usd(netPL)} color={netPL === null ? C.dim : netPL >= 0 ? C.green : C.red} />
         <StatBox label="Best Streak" value={`${maxWin} wins`} color={C.green} />
         <StatBox label="Worst Streak" value={`${maxLoss} losses`} color={C.red} />
       </div>

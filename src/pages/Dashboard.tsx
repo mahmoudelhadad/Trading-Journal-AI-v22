@@ -39,7 +39,10 @@ import {
   EquityCurveChart, OutcomePieChart, LongShortChart,
   HourlyRChart, MonthlyRChart, SymbolRChart, RatingGauge,
 } from '@components/charts/index.js';
-import type { EnrichedTrade } from '@calculations/tradeCalc.js';
+import {
+  finiteOrNull, isFiniteNumber, sumFinite, toFiniteNumber,
+  type EnrichedTrade,
+} from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
 
 // ─── Types ───────────────────────────────────────────────────
@@ -50,6 +53,8 @@ export interface DashboardPageProps {
   /** 'all' or a specific account ID — matches original accFilter prop */
   accFilter: string;
 }
+
+const round2 = (value: number): number | null => finiteOrNull(Math.round(value * 100) / 100);
 
 // ─── Component ───────────────────────────────────────────────
 
@@ -86,93 +91,114 @@ const n = trades.length;
   // ── Average personal rating (ignores empty ratings) ────
   const ratings = trades
     .filter((t) => t.personalRating && t.personalRating !== '')
-    .map((t) => +(t.personalRating as string));
-  const avgRating = ratings.length > 0
-    ? ratings.reduce((s, v) => s + v, 0) / ratings.length
-    : 0;
+    .map((t) => toFiniteNumber(t.personalRating))
+    .filter(isFiniteNumber);
+  const ratingTotal = sumFinite(ratings);
+  const hasRatingInput = trades.some((t) => typeof t.personalRating === 'string' && t.personalRating.trim() !== '');
+  const avgRating = ratings.length > 0 && ratingTotal !== null
+    ? finiteOrNull(ratingTotal / ratings.length)
+    : hasRatingInput ? null : 0;
 
   // ── Equity curve ────────────────────────────────────────
   // Matches original exactly:
   //   totalCap = accFilter==="all" ? sum(accounts.capital) : selectedAccount.capital
+  const selectedCapital = accounts.find((a) => a.id === accFilter)?.capital;
   const totalCap = accFilter === 'all'
-    ? accounts.reduce((s, a) => s + a.capital, 0)
-    : (accounts.find((a) => a.id === accFilter)?.capital ?? 0);
+    ? sumFinite(accounts.map((a) => a.capital))
+    : selectedCapital === undefined ? 0 : finiteOrNull(selectedCapital);
 
   let run = totalCap;
-  const eqCurve: { x: number; eq: number }[] = [{ x: 0, eq: totalCap }];
-  trades.forEach((t, i) => {
-    run += t._netPL || 0;
-    eqCurve.push({ x: i + 1, eq: Math.round(run * 100) / 100 });
-  });
+  const eqCurve: { x: number; eq: number }[] | null = totalCap === null ? null : [{ x: 0, eq: totalCap }];
+  if (eqCurve !== null) {
+    for (let i = 0; i < trades.length; i++) {
+      const netPL = trades[i]._netPL;
+      if (isFiniteNumber(netPL)) run = finiteOrNull((run as number) + netPL);
+      if (run === null) break;
+      const eq = finiteOrNull(Math.round(run * 100) / 100);
+      if (eq === null) { run = null; break; }
+      eqCurve.push({ x: i + 1, eq });
+    }
+  }
+  const finiteEqCurve = run === null ? null : eqCurve;
 
-  const curCap = totalCap + totalNPL;
-  const ret = totalCap > 0
-    ? `${(((curCap - totalCap) / totalCap) * 100).toFixed(1)}%`
-    : '—';
+  const curCap = totalCap !== null && totalNPL !== null ? finiteOrNull(totalCap + totalNPL) : null;
+  const returnPct = totalCap !== null && totalCap > 0 && curCap !== null
+    ? finiteOrNull(((curCap - totalCap) / totalCap) * 100)
+    : null;
+  const ret = returnPct === null ? '—' : `${returnPct.toFixed(1)}%`;
 
   // Matches original: color equity above/below starting capital
-  const eqColored = eqCurve.map((p) => ({
+  const eqColored = finiteEqCurve !== null && totalCap !== null ? finiteEqCurve.map((p) => ({
     x:     p.x,
     eq:    p.eq,
     above: p.eq >= totalCap ? p.eq : totalCap,
     below: p.eq <  totalCap ? p.eq : totalCap,
     ref:   totalCap,
-  }));
+  })) : null;
 
   // ── Monthly R ────────────────────────────────────────────
-  const byMo: Record<string, { r: number }> = {};
+  const byMo: Record<string, { r: number | null }> = {};
   trades.forEach((t) => {
     if (!t.date) return;
     const m = t.date.slice(0, 7);
     if (!byMo[m]) byMo[m] = { r: 0 };
-    byMo[m].r += t._r || 0;
+    if (isFiniteNumber(t._r) && byMo[m].r !== null) byMo[m].r = finiteOrNull(byMo[m].r + t._r);
   });
-  const mData = Object.entries(byMo)
+  const monthlyEntries = Object.entries(byMo);
+  const monthlyData = monthlyEntries
     .sort((a, b) => (a[0] > b[0] ? 1 : -1))
     .map(([key, val]) => ({
       m: new Date(`${key}-01`).toLocaleDateString('en', { month: 'short', year: '2-digit' }),
-      R: Math.round(val.r * 100) / 100,
+      R: val.r === null ? null : round2(val.r),
     }));
+  const mData = monthlyData.some((item) => item.R === null) ? null : monthlyData as Array<{ m: string; R: number }>;
 
   // ── Symbol R (top 12) ────────────────────────────────────
-  const bySym: Record<string, { r: number; mkt: string }> = {};
+  const bySym: Record<string, { r: number | null; mkt: string }> = {};
   trades.forEach((t) => {
     if (!t.symbol) return;
     if (!bySym[t.symbol]) bySym[t.symbol] = { r: 0, mkt: t.market as string };
-    bySym[t.symbol].r += t._r || 0;
+    const group = bySym[t.symbol];
+    if (isFiniteNumber(t._r) && group.r !== null) group.r = finiteOrNull(group.r + t._r);
   });
-  const symData = Object.entries(bySym)
-    .map(([s, val]) => ({ s, R: Math.round(val.r * 100) / 100, mkt: val.mkt }))
+  const symbolEntries = Object.entries(bySym);
+  const symbolData = symbolEntries
+    .map(([s, val]) => ({ s, R: val.r === null ? null : round2(val.r), mkt: val.mkt }));
+  const symData = symbolData.some((item) => item.R === null) ? null : (symbolData as Array<{ s: string; R: number; mkt: string }>)
     .sort((a, b) => b.R - a.R)
     .slice(0, 12);
 
   // ── Long vs Short ────────────────────────────────────────
   const longs  = trades.filter((t) => t.direction === 'Long').length;
   const shorts = trades.filter((t) => t.direction === 'Short').length;
-  const longR  = trades.filter((t) => t.direction === 'Long').reduce((s, t) => s + (t._r || 0), 0);
-  const shortR = trades.filter((t) => t.direction === 'Short').reduce((s, t) => s + (t._r || 0), 0);
-  const bsData = [
-    { name: 'Long (Buy)',  count: longs,  R: Math.round(longR  * 100) / 100, pct: n > 0 ? (longs  / n * 100).toFixed(1) : '0' },
-    { name: 'Short (Sell)', count: shorts, R: Math.round(shortR * 100) / 100, pct: n > 0 ? (shorts / n * 100).toFixed(1) : '0' },
+  const longR  = sumFinite(trades.filter((t) => t.direction === 'Long').map((t) => t._r));
+  const shortR = sumFinite(trades.filter((t) => t.direction === 'Short').map((t) => t._r));
+  const roundedLongR = longR === null ? null : round2(longR);
+  const roundedShortR = shortR === null ? null : round2(shortR);
+  const bsData = roundedLongR === null || roundedShortR === null ? null : [
+    { name: 'Long (Buy)',  count: longs,  R: roundedLongR, pct: n > 0 ? (longs  / n * 100).toFixed(1) : '0' },
+    { name: 'Short (Sell)', count: shorts, R: roundedShortR, pct: n > 0 ? (shorts / n * 100).toFixed(1) : '0' },
   ];
 
   // ── Open Time — R by Hour ────────────────────────────────
-  const byHour: Record<number, { r: number; n: number }> = {};
+  const byHour: Record<number, { r: number | null; n: number }> = {};
   trades.forEach((t) => {
     if (!t.entryTime) return;
-    const hr = parseInt(t.entryTime.split(':')[0], 10);
-    if (isNaN(hr)) return;
+    const hr = toFiniteNumber(t.entryTime.split(':')[0]);
+    if (hr === null) return;
     if (!byHour[hr]) byHour[hr] = { r: 0, n: 0 };
-    byHour[hr].r += t._r || 0;
+    if (isFiniteNumber(t._r) && byHour[hr].r !== null) byHour[hr].r = finiteOrNull(byHour[hr].r + t._r);
     byHour[hr].n += 1;
   });
-  const hourData = Object.entries(byHour)
+  const hourEntries = Object.entries(byHour);
+  const hourlyData = hourEntries
     .sort((a, b) => +a[0] - +b[0])
     .map(([key, val]) => {
       const hr = +key;
       const label = `${hr < 10 ? '0' + hr : hr}:00`;
-      return { hr: label, R: Math.round(val.r * 100) / 100, n: val.n };
+      return { hr: label, R: val.r === null ? null : round2(val.r), n: val.n };
     });
+  const hourData = hourlyData.some((item) => item.R === null) ? null : hourlyData as Array<{ hr: string; R: number; n: number }>;
 
   // ── Outcome pie (with % embedded in name) ────────────────
   const total3 = green + red + be;
@@ -204,15 +230,15 @@ const n = trades.length;
       {/* ── KPI row ─────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
         <KPI label="Total Trades" value={n} color={C.blue} sub={`FX: ${fxCount} | Fut: ${futCount}`} />
-        <KPI label="Avg R" value={avgR !== null ? fr.r(avgR) : '—'} color={(avgR ?? 0) >= 0 ? C.green : C.red} />
+        <KPI label="Avg R" value={fr.r(avgR)} color={avgR === null ? C.dim : avgR >= 0 ? C.green : C.red} />
         <KPI label="Win Rate (W/L only)" value={wr} color={C.green} sub={`${green}W / ${red}L / ${be}BE`} />
-        <KPI label="Net P/L" value={fr.usd(totalNPL)} color={totalNPL >= 0 ? C.green : C.red} sub={`Return: ${ret}`} />
-        <KPI label="Total R" value={`${totalR.toFixed(2)}R`} color={totalR >= 0 ? C.green : C.red} />
+        <KPI label="Net P/L" value={fr.usd(totalNPL)} color={totalNPL === null ? C.dim : totalNPL >= 0 ? C.green : C.red} sub={`Return: ${ret}`} />
+        <KPI label="Total R" value={fr.r(totalR)} color={totalR === null ? C.dim : totalR >= 0 ? C.green : C.red} />
         <KPI
           label="Capital"
-          value={`$${Math.round(curCap).toLocaleString()}`}
+          value={fr.usd(curCap)}
           color={C.gold}
-          sub={`Start: $${totalCap.toLocaleString()}`}
+          sub={`Start: ${fr.usd(totalCap)}`}
         />
       </div>
 
@@ -220,7 +246,7 @@ const n = trades.length;
       <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 14, marginBottom: 14 }}>
         <Card>
           <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>📈 Equity Curve</div>
-          {n === 0 ? <EmptyState /> : (
+          {n === 0 || eqColored === null || totalCap === null || curCap === null ? <EmptyState /> : (
             <EquityCurveChart data={eqColored} totalCap={totalCap} curCap={curCap} />
           )}
         </Card>
@@ -237,12 +263,12 @@ const n = trades.length;
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
         <Card>
           <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>📊 Long vs Short</div>
-          {longs + shorts === 0 ? <EmptyState /> : <LongShortChart data={bsData} />}
+          {longs + shorts === 0 || bsData === null ? <EmptyState /> : <LongShortChart data={bsData} />}
         </Card>
 
         <Card>
           <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>⏰ Open Time — R by Hour</div>
-          {hourData.length === 0 ? <EmptyState /> : <HourlyRChart data={hourData} />}
+          {hourData === null || hourData.length === 0 ? <EmptyState /> : <HourlyRChart data={hourData} />}
         </Card>
       </div>
 
@@ -250,25 +276,28 @@ const n = trades.length;
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
         <Card>
           <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>📅 Monthly R</div>
-          {mData.length === 0 ? <EmptyState /> : <MonthlyRChart data={mData} />}
+          {mData === null || mData.length === 0 ? <EmptyState /> : <MonthlyRChart data={mData} />}
         </Card>
 
         <Card>
           <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>💹 R by Symbol</div>
-          {symData.length === 0 ? <EmptyState /> : <SymbolRChart data={symData} />}
+          {symData === null || symData.length === 0 ? <EmptyState /> : <SymbolRChart data={symData} />}
         </Card>
       </div>
 
       {/* ── Row 4: Rating gauge + Setup Type panel ────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 14 }}>
-        <RatingGauge avg={avgRating} />
+        {avgRating === null ? (
+          <Card><div style={{ color: C.dim, fontSize: 18, textAlign: 'center' }}>—</div></Card>
+        ) : <RatingGauge avg={avgRating} />}
 
         <Card>
           <div style={{ color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 }}>📊 Avg R per Setup Type</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['A+', 'A', 'B', 'C'] as const).map((st) => {
               const ts = trades.filter((t) => t.setupType === st);
-              const r  = ts.length > 0 ? ts.reduce((s, t) => s + (t._r || 0), 0) / ts.length : null;
+              const setupTotal = sumFinite(ts.map((t) => t._r));
+              const r = ts.length > 0 && setupTotal !== null ? finiteOrNull(setupTotal / ts.length) : null;
               const col = r === null ? C.dim : r > 0 ? C.green : C.red;
               return (
                 <div

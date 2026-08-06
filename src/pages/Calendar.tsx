@@ -47,7 +47,7 @@ import { TableHeader, TableCell } from '@components/ui/Table.js';
 import { Badge } from '@components/ui/Badge.js';
 import { EmptyState } from '@components/ui/EmptyState.js';
 import { fr, getOutcomeColor, getDirectionColor } from '@calculations/formatters.js';
-import type { EnrichedTrade } from '@calculations/tradeCalc.js';
+import { sumFinite, type EnrichedTrade } from '@calculations/tradeCalc.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -155,12 +155,13 @@ export function CalendarPage({ trades }: CalendarPageProps) {
     });
 
     const allMonthTrades = Object.values(byDay).reduce<EnrichedTrade[]>((a, b) => a.concat(b), []);
-    const monthPL = allMonthTrades.reduce((s, t) => s + (t._netPL ?? 0), 0);
-    const monthR  = allMonthTrades.reduce((s, t) => s + (t._r ?? 0), 0);
+    const monthPL = sumFinite(allMonthTrades.map((t) => t._netPL));
+    const monthR  = sumFinite(allMonthTrades.map((t) => t._r));
     const dayEntries = Object.entries(byDay);
     const tradingDays = dayEntries.length;
-    const winDays = dayEntries.filter(([, dayTrades]) => dayTrades.reduce((s, t) => s + (t._netPL ?? 0), 0) > 0).length;
-    const lossDays = tradingDays - winDays;
+    const dayTotals = dayEntries.map(([, dayTrades]) => sumFinite(dayTrades.map((t) => t._netPL)));
+    const winDays = dayTotals.filter((total) => total !== null && total > 0).length;
+    const lossDays = dayTotals.filter((total) => total !== null && total <= 0).length;
 
     return { byDay, monthPL, monthR, tradingDays, winDays, lossDays };
   }, [trades, year, month]);
@@ -192,11 +193,11 @@ export function CalendarPage({ trades }: CalendarPageProps) {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ background: C.card, borderRadius: 8, padding: '6px 14px', border: `1px solid ${C.border}` }}>
             <span style={{ color: C.dim, fontSize: 10 }}>Monthly P/L: </span>
-            <span style={{ color: monthPL >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 13 }}>{`${monthPL >= 0 ? '+$' : '-$'}${Math.abs(monthPL).toFixed(0)}`}</span>
+            <span style={{ color: monthPL === null ? C.dim : monthPL >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 13 }}>{fr.usd(monthPL)}</span>
           </div>
           <div style={{ background: C.card, borderRadius: 8, padding: '6px 14px', border: `1px solid ${C.border}` }}>
             <span style={{ color: C.dim, fontSize: 10 }}>Total R: </span>
-            <span style={{ color: monthR >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 13 }}>{`${monthR >= 0 ? '+' : ''}${monthR.toFixed(2)}R`}</span>
+            <span style={{ color: monthR === null ? C.dim : monthR >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 13 }}>{fr.r(monthR)}</span>
           </div>
           <div style={{ background: C.card, borderRadius: 8, padding: '6px 14px', border: `1px solid ${C.border}` }}>
             <span style={{ color: C.dim, fontSize: 10 }}>Trading Days: </span>
@@ -222,13 +223,14 @@ export function CalendarPage({ trades }: CalendarPageProps) {
           if (!day) return <div key={`e${i}`} style={{ background: `${C.card}44`, borderRadius: 6, minHeight: 90, opacity: 0.3 }} />;
 
           const dayTrades = byDay[day] ?? [];
-          const dayPL = dayTrades.reduce((s, t) => s + (t._netPL ?? 0), 0);
-          const dayR  = dayTrades.reduce((s, t) => s + (t._r ?? 0), 0);
+          const dayPL = sumFinite(dayTrades.map((t) => t._netPL));
+          const dayR  = sumFinite(dayTrades.map((t) => t._r));
           const isToday = day === todayD && month === todayM && year === todayY;
           const hasTrades = dayTrades.length > 0;
-          const isWin = dayPL > 0;
-          const bgColor = !hasTrades ? C.card : isWin ? C.winBg : C.lossBg;
-          const borderColor = isToday ? C.blue : (!hasTrades ? C.border : isWin ? C.winBorder : C.lossBorder);
+          const isWin = dayPL !== null && dayPL > 0;
+          const isAvailable = dayPL !== null;
+          const bgColor = !hasTrades || !isAvailable ? C.card : isWin ? C.winBg : C.lossBg;
+          const borderColor = isToday ? C.blue : (!hasTrades || !isAvailable ? C.border : isWin ? C.winBorder : C.lossBorder);
 
           return (
             <div
@@ -243,18 +245,18 @@ export function CalendarPage({ trades }: CalendarPageProps) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <span style={{ color: isToday ? C.blue : C.dim, fontSize: 11, fontWeight: isToday ? 700 : 400 }}>{day}</span>
                 {hasTrades && (
-                  <span style={{ background: isWin ? `${C.green}33` : `${C.red}33`, color: isWin ? C.green : C.red, fontSize: 8, borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>
+                  <span style={{ background: !isAvailable ? `${C.dim}33` : isWin ? `${C.green}33` : `${C.red}33`, color: !isAvailable ? C.dim : isWin ? C.green : C.red, fontSize: 8, borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>
                     {`${dayTrades.length} trade${dayTrades.length !== 1 ? 's' : ''}`}
                   </span>
                 )}
               </div>
               {hasTrades && (
                 <div style={{ marginTop: 8 }}>
-                  <div style={{ color: isWin ? C.green : C.red, fontSize: 13, fontWeight: 800 }}>
-                    {`${dayPL >= 0 ? '+$' : '-$'}${Math.abs(dayPL).toFixed(0)}`}
+                  <div style={{ color: !isAvailable ? C.dim : isWin ? C.green : C.red, fontSize: 13, fontWeight: 800 }}>
+                    {fr.usd(dayPL)}
                   </div>
                   <div style={{ color: isWin ? '#22C55E99' : '#EF444499', fontSize: 10 }}>
-                    {`${dayR >= 0 ? '+' : ''}${dayR.toFixed(2)}R`}
+                    {fr.r(dayR)}
                   </div>
                 </div>
               )}

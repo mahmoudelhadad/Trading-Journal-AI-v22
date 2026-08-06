@@ -55,7 +55,12 @@ import { EmptyState } from '@components/ui/EmptyState.js';
 import { EquityCurveChart, DrawdownChart, PeriodPLChart } from '@components/charts/index.js';
 import type { EquityCurvePoint } from '@components/charts/EquityCurveChart.js';
 import { useAdvancedAnalytics } from '@hooks/useAdvancedAnalytics.js';
-import type { EnrichedTrade } from '@calculations/tradeCalc.js';
+import { fr } from '@calculations/formatters.js';
+import { buildEquitySequence } from '@calculations/drawdown.js';
+import {
+  finiteOrNull, sumFinite,
+  type EnrichedTrade,
+} from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
 
 // ─── Types ───────────────────────────────────────────────────
@@ -79,8 +84,8 @@ export function EquityPage({ trades, accounts, accFilter }: EquityPageProps) {
   // expression below is unchanged from the prior implementation.
   const startingCapital = useMemo(() => (
     accFilter === 'all'
-      ? accounts.reduce((s, a) => s + a.capital, 0)
-      : (accounts.find((a) => a.id === accFilter)?.capital ?? 0)
+      ? sumFinite(accounts.map((a) => a.capital))
+      : finiteOrNull(accounts.find((a) => a.id === accFilter)?.capital ?? 0)
   ), [accounts, accFilter]);
 
   const { drawdown, daily, weekly, monthly } = useAdvancedAnalytics(trades, startingCapital);
@@ -89,8 +94,9 @@ export function EquityPage({ trades, accounts, accFilter }: EquityPageProps) {
   // rationale as Dashboard.tsx (see MIGRATION_NOTES.md Phase 17 entry).
   const derived = useMemo(() => {
     const n = trades.length;
-    const netProfit = trades.reduce((s, t) => s + (t._netPL ?? 0), 0);
-    const currentEquity = startingCapital + netProfit;
+    const netProfit = sumFinite(trades.map((t) => t._netPL));
+    const equitySequence = startingCapital === null ? null : buildEquitySequence(trades, startingCapital);
+    const currentEquity = equitySequence === null ? null : equitySequence[equitySequence.length - 1].equity;
 
     // ── Map drawdown.ts's equity sequence into EquityCurveChart's shape ──
     // EquityCurveChart (Phase 6) expects {x, eq, above, below, ref} —
@@ -100,26 +106,26 @@ export function EquityPage({ trades, accounts, accFilter }: EquityPageProps) {
     // stores drawdown, not raw equity. Instead we rebuild the mapping
     // from netPL directly, matching Dashboard.tsx's exact prior pattern
     // (Phase 6) for 1:1 visual consistency between the two pages' charts.
-    let running = startingCapital;
-    const eqColored: EquityCurvePoint[] = [{ x: 0, eq: startingCapital, above: startingCapital, below: startingCapital, ref: startingCapital }];
-    trades.forEach((t, i) => {
-      running += t._netPL ?? 0;
-      const eq = Math.round(running * 100) / 100;
-      eqColored.push({
-        x: i + 1,
-        eq,
-        above: eq >= startingCapital ? eq : startingCapital,
-        below: eq <  startingCapital ? eq : startingCapital,
-        ref: startingCapital,
-      });
-    });
+    const roundedSequence = equitySequence?.map((point) => ({ ...point, equity: finiteOrNull(Math.round(point.equity * 100) / 100) })) ?? null;
+    const eqColored: EquityCurvePoint[] | null = roundedSequence === null || startingCapital === null || roundedSequence.some((point) => point.equity === null)
+      ? null
+      : roundedSequence.map((point) => {
+          const equity = point.equity as number;
+          return {
+            x: point.index,
+            eq: equity,
+            above: equity >= startingCapital ? equity : startingCapital,
+            below: equity < startingCapital ? equity : startingCapital,
+            ref: startingCapital,
+          };
+        });
 
     // ── Cumulative return % at the latest point ──
-    const cumulativeReturnPct = startingCapital > 0
+    const cumulativeReturnPct = startingCapital !== null && startingCapital > 0 && currentEquity !== null
       ? ((currentEquity - startingCapital) / startingCapital) * 100
       : null;
 
-    return { n, netProfit, currentEquity, eqColored, cumulativeReturnPct };
+    return { n, netProfit, currentEquity, eqColored, cumulativeReturnPct: cumulativeReturnPct === null ? null : finiteOrNull(cumulativeReturnPct) };
   }, [trades, startingCapital]);
 
   const { n, netProfit, currentEquity, eqColored, cumulativeReturnPct } = derived;
@@ -131,7 +137,9 @@ export function EquityPage({ trades, accounts, accFilter }: EquityPageProps) {
   // useAdvancedAnalytics) and startingCapital.
   const monthlyReturns = useMemo(() => monthly.map((m) => ({
     key: m.key,
-    returnPct: startingCapital > 0 ? (m.netPL / startingCapital) * 100 : null,
+    returnPct: startingCapital !== null && startingCapital > 0 && m.netPL !== null
+      ? finiteOrNull((m.netPL / startingCapital) * 100)
+      : null,
   })), [monthly, startingCapital]);
 
   const noData = <EmptyState message="Add trades to see equity data" />;
@@ -140,29 +148,29 @@ export function EquityPage({ trades, accounts, accFilter }: EquityPageProps) {
     <div>
       {/* ── KPI row ─────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-        <KPI label="Current Equity" value={`$${Math.round(currentEquity).toLocaleString()}`} color={C.gold} sub={`Start: $${startingCapital.toLocaleString()}`} />
-        <KPI label="Cumulative Return" value={cumulativeReturnPct !== null ? `${cumulativeReturnPct >= 0 ? '+' : ''}${cumulativeReturnPct.toFixed(1)}%` : '—'} color={(cumulativeReturnPct ?? 0) >= 0 ? C.green : C.red} />
-        <KPI label="Max Drawdown" value={n > 0 ? `-$${drawdown.maxDrawdownDollar.toFixed(0)}` : '—'} color={C.red} sub={n > 0 ? `-${drawdown.maxDrawdownPercent.toFixed(1)}%` : undefined} />
-        <KPI label="Current Drawdown" value={n > 0 ? `-$${drawdown.currentDrawdownDollar.toFixed(0)}` : '—'} color={drawdown.currentDrawdownDollar > 0 ? C.gold : C.green} sub={n > 0 ? `-${drawdown.currentDrawdownPercent.toFixed(1)}%` : undefined} />
-        <KPI label="Drawdown Duration" value={n > 0 ? `${drawdown.drawdownDurationTrades} trades` : '—'} color={C.dim} />
+        <KPI label="Current Equity" value={fr.usd(currentEquity)} color={C.gold} sub={`Start: ${fr.usd(startingCapital)}`} />
+        <KPI label="Cumulative Return" value={cumulativeReturnPct === null ? '—' : `${cumulativeReturnPct >= 0 ? '+' : ''}${cumulativeReturnPct.toFixed(1)}%`} color={cumulativeReturnPct === null ? C.dim : cumulativeReturnPct >= 0 ? C.green : C.red} />
+        <KPI label="Max Drawdown" value={n > 0 && drawdown !== null ? `-$${drawdown.maxDrawdownDollar.toFixed(0)}` : '—'} color={C.red} sub={n > 0 && drawdown !== null ? `-${drawdown.maxDrawdownPercent.toFixed(1)}%` : undefined} />
+        <KPI label="Current Drawdown" value={n > 0 && drawdown !== null ? `-$${drawdown.currentDrawdownDollar.toFixed(0)}` : '—'} color={drawdown === null ? C.dim : drawdown.currentDrawdownDollar > 0 ? C.gold : C.green} sub={n > 0 && drawdown !== null ? `-${drawdown.currentDrawdownPercent.toFixed(1)}%` : undefined} />
+        <KPI label="Drawdown Duration" value={n > 0 && drawdown !== null ? `${drawdown.drawdownDurationTrades} trades` : '—'} color={C.dim} />
         <KPI
           label="Recovery Time"
-          value={drawdown.recoveryTimeTrades !== null ? `${drawdown.recoveryTimeTrades} trades` : n > 0 ? 'Not yet' : '—'}
-          color={drawdown.recoveryTimeTrades !== null ? C.green : C.dim}
+          value={drawdown !== null && drawdown.recoveryTimeTrades !== null ? `${drawdown.recoveryTimeTrades} trades` : drawdown !== null && n > 0 ? 'Not yet' : '—'}
+          color={drawdown !== null && drawdown.recoveryTimeTrades !== null ? C.green : C.dim}
         />
       </div>
 
       {/* ── Equity Curve + Drawdown Curve ─────────────────────── */}
       <Card>
         <div style={sectionTitle}>📈 Equity Curve</div>
-        {n === 0 ? noData : (
+        {n === 0 || eqColored === null || startingCapital === null || currentEquity === null ? noData : (
           <EquityCurveChart data={eqColored} totalCap={startingCapital} curCap={currentEquity} height={200} />
         )}
       </Card>
 
       <Card>
         <div style={sectionTitle}>📉 Drawdown Curve</div>
-        {n === 0 ? noData : (
+        {n === 0 || drawdown === null ? noData : (
           <DrawdownChart data={drawdown.rollingDrawdown} height={160} />
         )}
       </Card>

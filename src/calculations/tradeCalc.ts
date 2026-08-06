@@ -76,7 +76,7 @@ export interface EnrichedFields {
   _rPct:      number | null;
   _plannedR:  number | null;
   _outcome:   TradeOutcome;
-  _capital:   number;
+  _capital:   number | null;
   _durMins:   number | null;
   _dur:       string;
   _isFutures: boolean;
@@ -85,6 +85,41 @@ export interface EnrichedFields {
 
 export type EnrichedTrade = TradeLike & EnrichedFields & { _tid: number };
 
+// ─── Finite-number boundary helpers ───────────────────────────
+
+/** True only for JavaScript numbers that can safely cross a derived-value boundary. */
+export function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Parse a permissive raw value without rewriting it; invalid/blank values are unavailable. */
+export function toFiniteNumber(value: unknown): number | null {
+  if (isFiniteNumber(value)) return value;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const parsed = Number(value);
+  return isFiniteNumber(parsed) ? parsed : null;
+}
+
+/** Convert a calculated numeric result into the finite-or-null contract. */
+export function finiteOrNull(value: number): number | null {
+  return isFiniteNumber(value) ? value : null;
+}
+
+/**
+ * Sum available finite values. Null/undefined/non-finite operands are unavailable
+ * contributions; overflow of the finite running sum makes the aggregate unavailable.
+ */
+export function sumFinite(values: readonly (number | null | undefined)[]): number | null {
+  let total = 0;
+  for (const value of values) {
+    if (!isFiniteNumber(value)) continue;
+    const next = total + value;
+    if (!isFiniteNumber(next)) return null;
+    total = next;
+  }
+  return total;
+}
+
 // ─── Calculation functions — copied verbatim ──────────────────
 
 /**
@@ -92,11 +127,13 @@ export type EnrichedTrade = TradeLike & EnrichedFields & { _tid: number };
  * Original: function calcR(t)
  */
 export function calcR(t: TradeLike): number | null {
-  if (!t.entryPrice || !t.stopLoss || !t.exitPrice) return null;
-  const ep = +t.entryPrice, sl = +t.stopLoss, ex = +t.exitPrice;
+  const ep = toFiniteNumber(t.entryPrice);
+  const sl = toFiniteNumber(t.stopLoss);
+  const ex = toFiniteNumber(t.exitPrice);
+  if (ep === null || sl === null || ex === null) return null;
   const d = Math.abs(ep - sl);
-  if (!d) return null;
-  return t.direction === 'Long' ? (ex - ep) / d : (ep - ex) / d;
+  if (!isFiniteNumber(d) || d === 0) return null;
+  return finiteOrNull(t.direction === 'Long' ? (ex - ep) / d : (ep - ex) / d);
 }
 
 /**
@@ -104,11 +141,13 @@ export function calcR(t: TradeLike): number | null {
  * Original: function calcPlannedR(t)
  */
 export function calcPlannedR(t: TradeLike): number | null {
-  if (!t.entryPrice || !t.stopLoss || !t.target) return null;
-  const ep = +t.entryPrice, sl = +t.stopLoss, tg = +t.target;
+  const ep = toFiniteNumber(t.entryPrice);
+  const sl = toFiniteNumber(t.stopLoss);
+  const tg = toFiniteNumber(t.target);
+  if (ep === null || sl === null || tg === null) return null;
   const d = Math.abs(ep - sl);
-  if (!d) return null;
-  return t.direction === 'Long' ? (tg - ep) / d : (ep - tg) / d;
+  if (!isFiniteNumber(d) || d === 0) return null;
+  return finiteOrNull(t.direction === 'Long' ? (tg - ep) / d : (ep - tg) / d);
 }
 
 /**
@@ -117,12 +156,15 @@ export function calcPlannedR(t: TradeLike): number | null {
  * getP() → getPipEntry() — identical behavior
  */
 export function calcPL(t: TradeLike): number | null {
-  if (!t.entryPrice || !t.exitPrice || !t.positionSize || !t.symbol) return null;
+  const ep = toFiniteNumber(t.entryPrice);
+  const ex = toFiniteNumber(t.exitPrice);
+  const size = toFiniteNumber(t.positionSize);
+  if (ep === null || ex === null || size === null || !t.symbol) return null;
   const p = getPipEntry(t.symbol);
   const diff = t.direction === 'Long'
-    ? +t.exitPrice - +t.entryPrice
-    : +t.entryPrice - +t.exitPrice;
-  return +t.positionSize * diff * p.f * p.pv;
+    ? ex - ep
+    : ep - ex;
+  return finiteOrNull(size * diff * p.f * p.pv);
 }
 
 /**
@@ -130,9 +172,12 @@ export function calcPL(t: TradeLike): number | null {
  * Original: function calcRisk(t)
  */
 export function calcRisk(t: TradeLike): number | null {
-  if (!t.entryPrice || !t.stopLoss || !t.positionSize || !t.symbol) return null;
+  const ep = toFiniteNumber(t.entryPrice);
+  const sl = toFiniteNumber(t.stopLoss);
+  const size = toFiniteNumber(t.positionSize);
+  if (ep === null || sl === null || size === null || !t.symbol) return null;
   const p = getPipEntry(t.symbol);
-  return +t.positionSize * Math.abs(+t.entryPrice - +t.stopLoss) * p.f * p.pv;
+  return finiteOrNull(size * Math.abs(ep - sl) * p.f * p.pv);
 }
 
 /**
@@ -140,12 +185,14 @@ export function calcRisk(t: TradeLike): number | null {
  * Original: function calcPoints(t)
  */
 export function calcPoints(t: TradeLike): number | null {
-  if (!t.entryPrice || !t.exitPrice || !t.symbol) return null;
+  const ep = toFiniteNumber(t.entryPrice);
+  const ex = toFiniteNumber(t.exitPrice);
+  if (ep === null || ex === null || !t.symbol) return null;
   const p = getPipEntry(t.symbol);
   const diff = t.direction === 'Long'
-    ? +t.exitPrice - +t.entryPrice
-    : +t.entryPrice - +t.exitPrice;
-  return Math.round(diff * p.f * 100) / 100;
+    ? ex - ep
+    : ep - ex;
+  return finiteOrNull(Math.round(diff * p.f * 100) / 100);
 }
 
 /**
@@ -159,7 +206,7 @@ export function parseDurMins(t: TradeLike): number | null {
       new Date(t.date + 'T' + t.exitTime).getTime() -
       new Date(t.date + 'T' + t.entryTime).getTime(),
     );
-    return Math.floor(d / 60000);
+    return finiteOrNull(Math.floor(d / 60000));
   } catch {
     return null;
   }
@@ -170,7 +217,7 @@ export function parseDurMins(t: TradeLike): number | null {
  * Original: function formatDur(mins)
  */
 export function formatDur(mins: number | null): string {
-  if (mins === null) return '—';
+  if (!isFiniteNumber(mins)) return '—';
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return `${h}h ${m}m`;
@@ -182,7 +229,7 @@ export function formatDur(mins: number | null): string {
  * Thresholds: > 0.2 = Green, < -0.2 = Red, else Breakeven
  */
 export function calcOutcome(r: number | null): TradeOutcome {
-  if (r === null) return '';
+  if (!isFiniteNumber(r)) return '';
   return r > 0.2 ? 'Green' : r < -0.2 ? 'Red' : 'Breakeven';
 }
 
@@ -206,26 +253,29 @@ export function enrichTrades(
 ): EnrichedTrade[] {
   // Running capital per account — initialised from account.capital
   // Matches original: var accRun = {}; accounts.forEach(a => accRun[a.id] = a.capital)
-  const accRun: Record<string, number> = {};
-  accounts.forEach((a) => { accRun[a.id] = a.capital; });
+  const accRun: Record<string, number | null> = {};
+  accounts.forEach((a) => { accRun[a.id] = finiteOrNull(a.capital); });
 
   return trades.map((t, i) => {
     // Resolve account capital — matches original exactly
     const accId = (t.accountId as string) || accounts[0]?.id || 'acc_1';
-    if (accRun[accId] === undefined) {
+    if (!(accId in accRun)) {
       const acc = accounts.find((a) => a.id === accId);
-      accRun[accId] = acc ? acc.capital : 10000;
+      accRun[accId] = acc ? finiteOrNull(acc.capital) : 10000;
     }
 
     const r       = calcR(t);
     const pl      = calcPL(t);
     const rv      = calcRisk(t);
-    const comm    = t.commission ? +t.commission : 0;
-    const netPL   = pl !== null ? pl - comm : null;
+    const commissionText = typeof t.commission === 'string' ? t.commission.trim() : '';
+    const comm    = commissionText === '' ? 0 : toFiniteNumber(t.commission);
+    const netPL   = pl !== null && comm !== null ? finiteOrNull(pl - comm) : null;
     const capital = accRun[accId];
 
     // Advance running capital — matches original
-    if (netPL !== null) accRun[accId] += netPL;
+    if (netPL !== null && capital !== null) {
+      accRun[accId] = finiteOrNull(capital + netPL);
+    }
 
     const durMins = parseDurMins(t);
 
@@ -239,7 +289,9 @@ export function enrichTrades(
       _pl:        pl,
       _netPL:     netPL,
       _rv:        rv,
-      _rPct:      rv && capital ? rv / capital : null,
+      _rPct:      rv !== null && capital !== null && capital !== 0
+        ? finiteOrNull(rv / capital)
+        : null,
       _plannedR:  calcPlannedR(t),
       _outcome:   calcOutcome(r),
       _capital:   capital,

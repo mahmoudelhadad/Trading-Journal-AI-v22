@@ -34,6 +34,13 @@ import { computeCoreAnalytics, withRecoveryFactor } from './analytics.js';
 import { nextId } from './idGenerator.js';
 import type { BacktestResult } from '@apptypes/backtest.js';
 
+function containsOnlyFiniteNumbers(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (value === null || value === undefined || typeof value !== 'object') return true;
+  if (Array.isArray(value)) return value.every(containsOnlyFiniteNumbers);
+  return Object.values(value as Record<string, unknown>).every(containsOnlyFiniteNumbers);
+}
+
 /**
  * Run a backtest: apply filterGroup to trades, then compute the full
  * stats bundle over the matched subset using only existing, already-
@@ -60,12 +67,14 @@ export function computeBacktestResult(
   trades: EnrichedTrade[],
   startingCapital: number,
   name?: string,
-): BacktestResult {
+): BacktestResult | null {
   const matched = applyFilterGroup(trades, filterGroup);
   const equitySequence = buildEquitySequence(matched, startingCapital);
+  if (equitySequence === null) return null;
   const drawdown = computeDrawdown(equitySequence);
+  if (drawdown === null) return null;
 
-  return {
+  const result: BacktestResult = {
     id:        nextId('backtest'),
     name:      name || 'Untitled Backtest',
     createdAt: Date.now(),
@@ -84,4 +93,6 @@ export function computeBacktestResult(
     longestStreaks: getLongestStreaks(matched),
     core:           withRecoveryFactor(computeCoreAnalytics(matched), drawdown.maxDrawdownDollar),
   };
+
+  return containsOnlyFiniteNumbers(result) ? result : null;
 }

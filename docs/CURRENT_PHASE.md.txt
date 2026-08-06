@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 27 — Local Durability & Backup Integrity
+Phase 28 — Finite Derived-Number Integrity
 
 Status:
 
@@ -14,186 +14,259 @@ COMPLETE
 
 ## Objective
 
-Prevent silent or misleading local-data loss for records the application
-presents as saved, recoverable, or historical. Validate backup contents
-before mutation, make restore persistence failures observable, include
-Recovery Bin and saved Backtest Results in backup snapshots, and stop the
-50-result cap from silently evicting history.
+Guarantee that every derived numeric value is either a finite number or
+null. Prevent malformed/non-finite raw operands and finite arithmetic
+overflow from propagating NaN or Infinity through enrichment,
+aggregation, running capital, equity, drawdown, newly computed Backtest
+snapshots, or user-visible numeric output.
 
 ---
 
 ## Scope (as delivered)
 
-- Backup format v2 emits 12 centralized user-data sections.
-- Restore accepts versions 1 and 2 only and rejects invalid or unsupported
-  versions before writes.
-- Recovery Bin and saved Backtest Results are included in Backup & Restore.
-- Restore Points inherit both datasets through `buildBackup()`; Restore
-  Points themselves and sync cursors remain excluded.
-- Every present known section receives minimum-safe, additive-tolerant
-  validation before the first save. Missing sections leave live state
-  untouched; unknown sections are ignored; unknown valid fields survive.
-- Each non-null section is revived at most once, saved through its
-  registered path, reloaded through that same path, and compared by
-  semantic JSON-state equality. Detected persistence failure is surfaced,
-  aborts later sections, and cannot report success.
-- Saved Backtest creation at count 50 or greater is blocked before
-  computation. Existing and restored results are never sliced, evicted,
-  trimmed, migrated, or deleted by the cap.
-- The Backtest page renders the approved inline guidance when creation is
-  blocked. Manual deletion immediately frees capacity once the count falls
-  below 50; rename behavior is unchanged.
-- The global `storageSet` contract remains unchanged.
+- Added finite parsing and final-result checks without rewriting raw
+  historical strings.
+- Preserved valid finite calculations, valid negative inputs where
+  previously accepted, and valid zero.
+- Empty commission retains zero-fee behavior; invalid non-empty
+  commission makes net P/L unavailable.
+- Running capital never advances from unavailable/non-finite net P/L.
+- Aggregate arithmetic overflow becomes null without clamping, skipping,
+  JSON normalization, or fabricated zero.
+- Equity, drawdown, and Backtest composition use whole-computation null
+  results when a finite-only result cannot be produced.
+- Backtest calculation failure is explicit and distinct from the saved
+  result limit.
+- Shared numeric formatters render unavailable/non-finite inputs as `—`.
+- Dashboard, Strategy, Insights, Equity, Backtest, and Calendar local
+  numeric producers and nullable consumers were hardened without
+  secondary fallback analytics.
 
 ---
 
 ## Files Changed
 
-Production (4):
-- src/services/backupService.ts
+Production (16):
+- src/calculations/tradeCalc.ts
+- src/calculations/analytics.ts
+- src/calculations/rolling.ts
+- src/calculations/drawdown.ts
+- src/calculations/backtest.ts
+- src/calculations/formatters.ts
+- src/hooks/useAdvancedAnalytics.ts
 - src/hooks/useBacktests.ts
+- src/pages/Dashboard.tsx
+- src/pages/Strategy.tsx
+- src/pages/Insights.tsx
+- src/pages/Equity.tsx
 - src/pages/Backtest.tsx
-- src/components/settings/BackupPanel.tsx
+- src/pages/Calendar.tsx
+- src/components/backtest/BacktestResultView.tsx
+- src/components/charts/PeriodPLChart.tsx
 
-Tests (2):
-- src/services/backupService.test.ts (new)
-- src/hooks/useBacktests.test.ts (new)
+Tests (7):
+- src/calculations/tradeCalc.test.ts
+- src/calculations/analytics.test.ts
+- src/calculations/rolling.test.ts
+- src/calculations/drawdown.test.ts
+- src/calculations/backtest.test.ts
+- src/hooks/useBacktests.test.ts
+- src/calculations/formatters.test.ts (new)
 
-Documentation (3):
-- docs/ARCHITECTURE_DECISIONS.md.txt
+Documentation (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Nine files total, exactly matching the frozen RFC.
+Twenty-five files total, exactly matching the approved close manifest.
 
 ---
 
 ## Out of Scope (respected)
 
-- No global `storageSet` change or storage-accessor redesign.
-- No resolver, IndexedDB, Sync Engine, cutover, authentication, or sync
-  cursor change.
-- No migration, backfill, repair, normalization, or exact-schema lock.
-- No transaction or rollback engine; restore remains sequential.
-- No Restore Points inside backup payloads and no Recovery Bin merge or
-  `_tid` collision policy.
-- No Backtest cap increase, calculation, formula, equity-path, comparison,
-  result-rendering, rename, or delete behavior change beyond approved cap
-  blocking.
-- No Avg Risk/non-finite-number fix and no changes under calculations/.
-- No Insights, Trade Review, Futures, AI, MCP, Prop Firm Tracker, or
-  Position Calculator work.
-- No dependency or test-configuration change.
-- No staging, commit, tag, push, PR, or Phase 28 implementation.
+- No TradeForm save blocking or manual-entry validation UX.
+- No import validation/rejection, import redesign, raw-data cleanup, or
+  historical normalization.
+- No migration, backfill, LocalStorage repair, saved Backtest repair, or
+  Recovery Bin repair.
+- No backup version, backup section, restore validation, Restore Point,
+  storage accessor, resolver, IndexedDB, Sync Engine, cutover, auth, or
+  namespacing change.
+- No formula, pip-value, threshold, or denominator redesign.
+- No dependency, test-configuration, jsdom, or React Testing Library
+  change.
+- No Futures import/data, unrelated Insights correctness, Trade Review,
+  Prop Firm Tracker, Position Calculator, AI/agent/MCP, or Phase 29 work.
+
+---
+
+## Numeric Invariant
+
+Every derived numeric value is finite or null.
+
+- null means unavailable / not computable.
+- 0 means valid numeric zero.
+- NaN, +Infinity, and -Infinity are invalid derived state.
+- Malformed, symbolic, non-finite, empty, or whitespace-only required
+  numeric operands make the affected derived result unavailable.
+- Finite arithmetic results are checked after calculation, including
+  aggregate arithmetic.
+- Unavailable state is not converted to zero merely to satisfy a UI,
+  chart, comparison, type, or persistence contract.
+
+---
+
+## Exact Widened Contracts
+
+EnrichedFields:
+- `_capital: number | null`
+
+TradeSummary:
+- `totalR: number | null`
+- `pl: number | null`
+- `netPL: number | null`
+
+PeriodStats:
+- `totalR: number | null`
+- `netPL: number | null`
+
+CoreAnalytics:
+- `netProfit: number | null`
+- `grossProfit: number | null`
+- `grossLoss: number | null`
+
+Bounded counts, identity/index values, and fields already protected
+upstream were not widened.
+
+---
+
+## Whole-Computation Null Behavior
+
+- `buildEquitySequence(...): EquityPoint[] | null`
+- `computeDrawdown(...): DrawdownResult | null`
+- `computeDrawdownFromTrades(...): DrawdownResult | null`
+- `computeBacktestResult(...): BacktestResult | null`
+
+EquityPoint remains finite-only. DrawdownResult fields remain finite-only.
+`BacktestResult.equityPath` remains finite-only `number[]`. The AD-018
+persisted shape and presence/absence legacy discriminator are unchanged.
+No page rebuilds an alternative analysis when a shared calculation
+returns null.
+
+---
+
+## Backtest Failure Contract
+
+`calculation_unavailable` is distinct from `limit_reached`.
+
+Exact inline message:
+
+"Backtest could not be calculated because one or more required numeric
+calculations were unavailable."
+
+On `calculation_unavailable`, no Backtest result is appended, persisted,
+selected, partially saved, or fabricated through fallback recomputation.
 
 ---
 
 ## Automated Verification
 
 - TypeScript: 0 errors.
-- ESLint: 0 errors, exactly 7 pre-existing warnings at unchanged sites.
-- Focused Node/Vitest tests: 38/38 across 2 files.
-- Full tests: 161/161 across 10 files.
+- ESLint: 0 errors, exactly 7 pre-existing warnings.
+- Tests: 203/203 passing across 11 files.
 - `npm run verify`: green.
 - Production build: succeeds, 994 modules transformed.
 - `git diff --check`: clean.
-
-The tests cover v1/v2 compatibility, all 12 section types, complete
-pre-write validation, additive-field preservation, nullable historical
-sentinels, resolver revival, semantic read-back, thrown and silently
-dropped writes, partial-failure reporting, Recovery Bin replacement,
-Restore Point inheritance, legacy/new Backtest JSON round-trip, restored
-collections above 50, and the 49/50/51 capacity boundary without invoking
-result computation on failure.
+- Exact implementation manifest: 16 production files and 7 test files.
+- New formatter test: src/calculations/formatters.test.ts.
+- No dependency, configuration, jsdom, or component-test infrastructure
+  change.
 
 ---
 
 ## Runtime Verification
 
-The disposable local application launch and authentication screen were
-observed. Authenticated Backup/Restore and Backtest-cap UI surfaces were
-not safely reachable without authentication. They were verified through
-automated tests, typecheck/build, and source/diff inspection and are not
-claimed as authenticated runtime observations.
+The local application launch and authentication screen were observed.
+Authenticated application surfaces were not directly exercised because
+authentication would be required. No account was created and no real
+journal data was altered.
 
-No real journal trades, saved Backtest Results, Recovery Bin entries, or
-other user data were changed. The disposable tab and local development
-server were closed after verification.
+Authenticated surfaces were therefore recorded as automated/diff
+verified through tests, typecheck, build, and source/diff inspection;
+they are not claimed as runtime-observed. No full runtime V-case pass is
+claimed.
 
 ---
 
-## Approved Decision
+## Architecture Decision
 
-AD-019 — Local Durability and Backup Integrity.
+No AD-020 was required. Phase 28 enforces the existing finite-or-null
+derived-value contract rather than introducing a new architectural
+persistence policy. docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
+AD-018's immutable `equityPath` and legacy-discriminator contracts and
+AD-019's durability/backup contracts remain in force.
 
-AD-019 narrowly supersedes:
+---
 
-- AD-014 only where it excludes Backtest Results from Backup & Restore on
-  the old regenerable-results premise.
-- AD-018 clause 4 only where it continues that Backup & Restore exclusion.
-- AD-015 only where it requires oldest-result eviction at the 50-result
-  cap.
+## Historical Data Policy
 
-AD-014's Class B/local-only/unsynced classification, AD-018's immutable
-snapshot contract, and AD-015's remaining decisions stay approved.
-Historical ADR text remains unchanged.
+- No raw historical trade or string was rewritten.
+- No LocalStorage migration occurred.
+- No saved Backtest was migrated, repaired, backfilled, or normalized.
+- No Recovery Bin, backup, restore, or existing immutable Backtest Result
+  was changed.
+- Historical JSON nulls caused by older NaN/Infinity values are not
+  reconstructable and were not repaired.
+- Phase 28 guarantees finite/null correctness only for calculations
+  performed after implementation.
 
 ---
 
 ## Exit Criteria
 
-- [x] Backup v2 emits all 12 approved sections.
-- [x] Versions 1 and 2 restore; invalid and unsupported versions reject
-      before writes.
-- [x] Every malformed present known section rejects before any write.
-- [x] Missing sections leave live state untouched; unknown sections are
-      ignored; additive valid fields are preserved.
-- [x] Recovery Bin and saved Backtest Results appear in backups and new
-      Restore Points; Restore Points and sync cursors remain excluded.
-- [x] Every non-null restore write receives registered-path semantic
-      read-back verification.
-- [x] Detected persistence failure cannot produce success.
-- [x] Result creation at count 50 or greater is blocked before computation
-      without eviction or trimming.
-- [x] Restored collections above 50 are preserved.
-- [x] The approved inline cap guidance is implemented.
-- [x] Focused and full automated verification pass.
-- [x] Production build remains 994 modules.
-- [x] Exactly nine frozen files changed and no out-of-scope work occurred.
+- [x] Every approved calculation boundary produces finite or null.
+- [x] Invalid required operands and invalid non-empty commission cannot
+      create non-finite derived state.
+- [x] Running capital, aggregate, equity, drawdown, and new Backtest
+      snapshot paths satisfy the frozen invariant.
+- [x] Exact nullable scalar and whole-computation contracts are applied.
+- [x] `calculation_unavailable` is distinct and prevents persistence or
+      selection of a failed Backtest.
+- [x] Shared formatters and every approved page-local numeric path are
+      finite-safe without null-to-zero fabrication.
+- [x] Valid known-good calculations remain unchanged.
+- [x] Typecheck, lint, tests, verify, build, diff-check, and manifest
+      verification pass.
+- [x] Exactly 25 approved files changed and no rejected file changed.
+- [x] Historical data and Phase 27 persistence contracts remain untouched.
 
-All exit criteria passed. Phase 27 is closed.
+All exit criteria passed. Phase 28 is closed.
 
 ---
 
 ## Known Risks / Limitations
 
-- Restore is sequential rather than transactional. Earlier verified
-  sections may remain changed after a later failure.
-- Restore Points consume additional LocalStorage because they now include
-  Recovery Bin and saved Backtest Result data.
-- Browser quota pressure remains possible; detected failures are surfaced.
-- Authenticated UI paths were not directly observed during disposable
-  runtime verification.
-- The finite-number / Avg Risk issue remains deferred for Phase 28.
-- The Insights hook-order maintainability finding and all other previously
-  deferred issues remain outside Phase 27.
+- Authenticated UI paths were not directly runtime-observed.
+- Input-validation UX remains separate; TradeForm still permits
+  permissive raw strings.
+- Import validation/rejection and raw-history cleanup remain separate.
+- Existing historical lossy nulls remain unchanged and unrecoverable.
+- Futures data/import and unrelated Insights correctness remain deferred.
 - The 7 pre-existing lint warnings remain unchanged.
 
 ---
 
 ## Repository Statistics (measured at phase close)
 
-- Tests: 161 passing across 10 files.
-- Focused Phase 27 tests: 38 passing across 2 files.
+- Tests: 203 passing across 11 files.
 - Production build: 994 modules transformed.
 - TypeScript: 0 errors.
 - ESLint: 0 errors, 7 warnings.
-- Changed files: exactly 9; 2 new test files.
+- Changed files: exactly 25 — 16 production, 7 tests, 2 documentation.
+- New files: 1 test file (`src/calculations/formatters.test.ts`).
+- Dependencies/configuration changed: none.
 
 ---
 
 ## Next Phase
 
-Not started and not selected. The finite-number / Avg Risk issue is carried
-forward as a Phase 28 candidate only; this close does not authorize or begin
-Phase 28. All other deferred findings retain their existing status.
+Not started. Phase 29 is not defined or scoped by this close.

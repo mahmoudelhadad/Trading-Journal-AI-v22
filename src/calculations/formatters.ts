@@ -13,7 +13,9 @@
  */
 
 import { COLORS as C } from '@constants/lists.js';
-import type { TradeOutcome } from './tradeCalc.js';
+import { isFiniteNumber, type TradeOutcome } from './tradeCalc.js';
+
+type FormattableNumber = number | null | undefined;
 
 /**
  * Format functions object.
@@ -26,20 +28,23 @@ import type { TradeOutcome } from './tradeCalc.js';
  */
 export const fr = {
   /** Format R multiple — matches original: v>=0 ? '+'+v.toFixed(2)+'R' : v.toFixed(2)+'R' */
-  r: (v: number | null): string =>
-    v === null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + 'R',
+  r: (v: FormattableNumber): string =>
+    !isFiniteNumber(v) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + 'R',
 
   /** Format percentage — matches original: (v*100).toFixed(1)+'%' */
-  pct: (v: number | null): string =>
-    v === null ? '—' : (v * 100).toFixed(1) + '%',
+  pct: (v: FormattableNumber): string => {
+    if (!isFiniteNumber(v)) return '—';
+    const percent = v * 100;
+    return isFiniteNumber(percent) ? percent.toFixed(1) + '%' : '—';
+  },
 
   /** Format USD — matches original: v>=0 ? '+$'+abs(v).toFixed(2) : '-$'+abs(v).toFixed(2) */
-  usd: (v: number | null): string =>
-    v === null ? '—' : (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2),
+  usd: (v: FormattableNumber): string =>
+    !isFiniteNumber(v) ? '—' : (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2),
 
   /** Format pips/points — matches original: v>=0 ? '+'+v.toFixed(2) : v.toFixed(2) */
-  pt: (v: number | null): string =>
-    v === null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2),
+  pt: (v: FormattableNumber): string =>
+    !isFiniteNumber(v) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2),
 };
 
 /**
@@ -75,7 +80,7 @@ export function getDirectionColor(direction: string): string {
  *   v !== null ? (v > 0 ? C.green : C.red) : C.dim
  */
 export function getSignColor(value: number | null): string {
-  if (value === null) return C.dim;
+  if (!isFiniteNumber(value)) return C.dim;
   return value > 0 ? C.green : C.red;
 }
 

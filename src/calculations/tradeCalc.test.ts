@@ -26,11 +26,24 @@ import {
   calcRisk,
   calcPoints,
   calcOutcome,
+  calcPlannedR,
   formatDur,
   enrichTrades,
+  parseDurMins,
+  toFiniteNumber,
 } from './tradeCalc.js';
 import type { Account } from '@apptypes/account.js';
 import type { RawTradeContent } from '@apptypes/trade.js';
+
+describe('finite parsing boundary', () => {
+  it.each([
+    ['', null], ['   ', null], ['42.5', 42.5], ['0', 0], ['-7', -7],
+    ['BE', null], ['N/A', null], ['-', null], ['alphabetic', null],
+    ['NaN', null], ['Infinity', null], ['-Infinity', null], ['1e309', null], ['12px', null],
+  ])('parses %j as %j', (raw, expected) => {
+    expect(toFiniteNumber(raw)).toBe(expected);
+  });
+});
 
 describe('calcR', () => {
   it('computes a positive R for a winning long trade', () => {
@@ -50,6 +63,19 @@ describe('calcR', () => {
   it('returns null when entry equals stop (zero risk distance)', () => {
     expect(calcR({ entryPrice: '100', stopLoss: '100', exitPrice: '120', direction: 'Long' })).toBeNull();
   });
+
+  it('returns null for malformed operands and finite subtraction/division overflow', () => {
+    expect(calcR({ entryPrice: 'BE', stopLoss: '90', exitPrice: '120', direction: 'Long' })).toBeNull();
+    expect(calcR({ entryPrice: '100', stopLoss: 'N/A', exitPrice: '120', direction: 'Long' })).toBeNull();
+    expect(calcR({ entryPrice: '100', stopLoss: '90', exitPrice: 'Infinity', direction: 'Long' })).toBeNull();
+    expect(calcR({ entryPrice: '-1e308', stopLoss: '1e308', exitPrice: '0', direction: 'Long' })).toBeNull();
+    expect(calcR({ entryPrice: '0', stopLoss: '1e-308', exitPrice: '1e308', direction: 'Long' })).toBeNull();
+  });
+
+  it('returns null for an invalid target and preserves finite negative planned R', () => {
+    expect(calcPlannedR({ entryPrice: '100', stopLoss: '90', target: 'bad', direction: 'Long' })).toBeNull();
+    expect(calcPlannedR({ entryPrice: '100', stopLoss: '90', target: '80', direction: 'Long' })).toBe(-2);
+  });
 });
 
 describe('calcPL', () => {
@@ -65,6 +91,13 @@ describe('calcPL', () => {
 
   it('returns null when symbol is missing', () => {
     expect(calcPL({ entryPrice: '100', exitPrice: '120', positionSize: '1', symbol: '', direction: 'Long' })).toBeNull();
+  });
+
+  it('returns null for invalid entry, exit, size, and finite multiplication overflow', () => {
+    expect(calcPL({ entryPrice: 'BE', exitPrice: '120', positionSize: '1', symbol: 'US100', direction: 'Long' })).toBeNull();
+    expect(calcPL({ entryPrice: '100', exitPrice: '-', positionSize: '1', symbol: 'US100', direction: 'Long' })).toBeNull();
+    expect(calcPL({ entryPrice: '100', exitPrice: '120', positionSize: 'N/A', symbol: 'US100', direction: 'Long' })).toBeNull();
+    expect(calcPL({ entryPrice: '0', exitPrice: '1e308', positionSize: '1e308', symbol: 'US100', direction: 'Long' })).toBeNull();
   });
 });
 
@@ -104,6 +137,13 @@ describe('formatDur', () => {
   });
   it('renders the em-dash placeholder for a null duration', () => {
     expect(formatDur(null)).toBe('—');
+  });
+});
+
+describe('parseDurMins', () => {
+  it('returns null for invalid dates or times', () => {
+    expect(parseDurMins({ date: 'bad-date', entryTime: '09:00', exitTime: '10:00' })).toBeNull();
+    expect(parseDurMins({ date: '2026-01-01', entryTime: 'bad', exitTime: '10:00' })).toBeNull();
   });
 });
 
@@ -149,5 +189,30 @@ describe('enrichTrades', () => {
 
     expect(first._capital).toBe(10000);
     expect(second._capital).toBe(10020); // 10000 + first trade's +20 net P/L
+  });
+
+  it('keeps empty commission as zero-fee but makes invalid non-empty commission unavailable', () => {
+    const base = { symbol: 'US100', accountId: 'acc_1', positionSize: '1', direction: 'Long', entryPrice: '100', stopLoss: '90', exitPrice: '120' };
+    const [empty, whitespace, invalid] = enrichTrades([
+      { ...base, commission: '' }, { ...base, commission: '   ' }, { ...base, commission: 'BE' },
+    ], accounts);
+    expect(empty._netPL).toBe(20);
+    expect(whitespace._netPL).toBe(20);
+    expect(invalid._netPL).toBeNull();
+  });
+
+  it('does not let unavailable net P/L or capital overflow create non-finite running state', () => {
+    const base = { symbol: 'US100', accountId: 'acc_1', positionSize: '1', direction: 'Long', entryPrice: '100', stopLoss: '90', exitPrice: '120', commission: '0' };
+    const [invalid, valid] = enrichTrades([{ ...base, exitPrice: 'BE' }, base], accounts);
+    expect(invalid._netPL).toBeNull();
+    expect(valid._capital).toBe(10000);
+
+    const hugeAccounts: Account[] = [{ id: 'acc_1', name: 'Huge', capital: 1e308 } as Account];
+    const [overflowing, after] = enrichTrades([
+      { ...base, entryPrice: '0', exitPrice: '1e308' }, base,
+    ], hugeAccounts);
+    expect(overflowing._netPL).toBe(1e308);
+    expect(after._capital).toBeNull();
+    expect(after._rPct).toBeNull();
   });
 });

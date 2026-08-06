@@ -19,7 +19,10 @@
  * Strategy/Insights pages will consume this file in later phases).
  */
 
-import type { EnrichedTrade } from './tradeCalc.js';
+import {
+  finiteOrNull, isFiniteNumber, sumFinite, toFiniteNumber,
+  type EnrichedTrade,
+} from './tradeCalc.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -59,9 +62,9 @@ export interface CoreAnalytics {
   lossPct: number | null;
   bePct:   number | null;
 
-  netProfit:   number;
-  grossProfit: number;
-  grossLoss:   number;
+  netProfit:   number | null;
+  grossProfit: number | null;
+  grossLoss:   number | null;
 
   avgCommission:  number | null;
   commissionPct:  number | null;
@@ -75,8 +78,12 @@ export interface CoreAnalytics {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-const sum  = (arr: number[]): number => arr.reduce((s, v) => s + v, 0);
-const mean = (arr: number[]): number | null => (arr.length > 0 ? sum(arr) / arr.length : null);
+const sum = (arr: number[]): number | null => sumFinite(arr);
+const mean = (arr: number[]): number | null => {
+  if (arr.length === 0) return null;
+  const total = sum(arr);
+  return total === null ? null : finiteOrNull(total / arr.length);
+};
 
 /**
  * Population standard deviation.
@@ -90,9 +97,18 @@ const mean = (arr: number[]): number | null => (arr.length > 0 ? sum(arr) / arr.
  */
 function stddev(arr: number[]): number | null {
   if (arr.length < 2) return null;
-  const m = mean(arr)!;
-  const variance = sum(arr.map((v) => (v - m) ** 2)) / arr.length;
-  return Math.sqrt(variance);
+  const m = mean(arr);
+  if (m === null) return null;
+  const squaredDiffs: number[] = [];
+  for (const value of arr) {
+    const squared = finiteOrNull((value - m) ** 2);
+    if (squared === null) return null;
+    squaredDiffs.push(squared);
+  }
+  const squaredTotal = sum(squaredDiffs);
+  if (squaredTotal === null) return null;
+  const variance = finiteOrNull(squaredTotal / arr.length);
+  return variance === null ? null : finiteOrNull(Math.sqrt(variance));
 }
 
 /**
@@ -391,87 +407,102 @@ export function computeCoreAnalytics(trades: EnrichedTrade[]): CoreAnalytics {
   const nClosed = closed.length;
 
   const beCountAll = trades.filter((t) => t._outcome === 'Breakeven').length;
-  const winPct  = n > 0 ? winners.length / n : null;
-  const lossPct = n > 0 ? losers.length  / n : null;
-  const bePct   = n > 0 ? beCountAll     / n : null;
+  const winPct  = n > 0 ? finiteOrNull(winners.length / n) : null;
+  const lossPct = n > 0 ? finiteOrNull(losers.length  / n) : null;
+  const bePct   = n > 0 ? finiteOrNull(beCountAll     / n) : null;
 
-  const winnerDollars = winners.map((t) => t._pl).filter((v): v is number => v !== null);
-  const loserDollars  = losers.map((t) => t._pl).filter((v): v is number => v !== null);
+  const winnerDollars = winners.map((t) => t._pl).filter(isFiniteNumber);
+  const loserDollars  = losers.map((t) => t._pl).filter(isFiniteNumber);
   const avgWinnerDollar = mean(winnerDollars);
   const avgLoserDollar  = mean(loserDollars);
 
   const largestWinnerDollar = winnerDollars.length > 0 ? Math.max(...winnerDollars) : null;
   const largestLoserDollar  = loserDollars.length  > 0 ? Math.min(...loserDollars)  : null;
 
-  const winRs = winners.map((t) => t._r).filter((v): v is number => v !== null);
-  const lossRs = losers.map((t) => t._r).filter((v): v is number => v !== null);
+  const winRs = winners.map((t) => t._r).filter(isFiniteNumber);
+  const lossRs = losers.map((t) => t._r).filter(isFiniteNumber);
   const avgWinR  = mean(winRs);
   const avgLossR = mean(lossRs);
 
-  const plannedRs = trades.map((t) => t._plannedR).filter((v): v is number => v !== null);
-  const actualRs  = trades.map((t) => t._r).filter((v): v is number => v !== null);
+  const plannedRs = trades.map((t) => t._plannedR).filter(isFiniteNumber);
+  const actualRs  = trades.map((t) => t._r).filter(isFiniteNumber);
   const avgPlannedR = mean(plannedRs);
   const avgActualR  = mean(actualRs);
 
-  const allDurations = trades.map((t) => t._durMins).filter((v): v is number => v !== null);
-  const winDurations = winners.map((t) => t._durMins).filter((v): v is number => v !== null);
-  const lossDurations = losers.map((t) => t._durMins).filter((v): v is number => v !== null);
+  const allDurations = trades.map((t) => t._durMins).filter(isFiniteNumber);
+  const winDurations = winners.map((t) => t._durMins).filter(isFiniteNumber);
+  const lossDurations = losers.map((t) => t._durMins).filter(isFiniteNumber);
   const avgHoldingMins        = mean(allDurations);
   const avgWinningHoldingMins = mean(winDurations);
   const avgLosingHoldingMins  = mean(lossDurations);
 
-  const riskVals = trades.map((t) => t._rv).filter((v): v is number => v !== null);
+  const riskVals = trades.map((t) => t._rv).filter(isFiniteNumber);
   const avgRiskDollar = mean(riskVals);
 
-  const rewardVals = trades
-    .filter((t) => t._rv !== null && t._plannedR !== null)
-    .map((t) => (t._rv as number) * (t._plannedR as number));
-  const avgRewardDollar = mean(rewardVals);
+  const rewardVals: number[] = [];
+  let rewardUnavailable = false;
+  for (const trade of trades) {
+    if (!isFiniteNumber(trade._rv) || !isFiniteNumber(trade._plannedR)) continue;
+    const reward = finiteOrNull(trade._rv * trade._plannedR);
+    if (reward === null) { rewardUnavailable = true; break; }
+    rewardVals.push(reward);
+  }
+  const avgRewardDollar = rewardUnavailable ? null : mean(rewardVals);
   const avgRR = avgPlannedR;
 
-  const netProfit = sum(trades.map((t) => t._netPL ?? 0));
-  const allPL = trades.map((t) => t._pl).filter((v): v is number => v !== null);
+  const netProfit = sumFinite(trades.map((t) => t._netPL));
+  const allPL = trades.map((t) => t._pl).filter(isFiniteNumber);
   const grossProfit = sum(allPL.filter((v) => v > 0));
   const grossLoss   = sum(allPL.filter((v) => v < 0));
 
-  const profitFactor = grossLoss !== 0 ? grossProfit / Math.abs(grossLoss) : null;
+  const profitFactor = grossProfit !== null && grossLoss !== null && grossLoss !== 0
+    ? finiteOrNull(grossProfit / Math.abs(grossLoss))
+    : null;
   const payoffRatio  = avgWinnerDollar !== null && avgLoserDollar !== null && avgLoserDollar !== 0
-    ? avgWinnerDollar / Math.abs(avgLoserDollar)
+    ? finiteOrNull(avgWinnerDollar / Math.abs(avgLoserDollar))
     : null;
 
-  const winRateClosed  = nClosed > 0 ? winners.length / nClosed : null;
-  const lossRateClosed = nClosed > 0 ? losers.length  / nClosed : null;
+  const winRateClosed  = nClosed > 0 ? finiteOrNull(winners.length / nClosed) : null;
+  const lossRateClosed = nClosed > 0 ? finiteOrNull(losers.length  / nClosed) : null;
 
   const expectancyR = (winRateClosed !== null && lossRateClosed !== null && avgWinR !== null && avgLossR !== null)
-    ? (winRateClosed * avgWinR) - (lossRateClosed * Math.abs(avgLossR))
+    ? finiteOrNull((winRateClosed * avgWinR) - (lossRateClosed * Math.abs(avgLossR)))
     : null;
 
   const expectancyDollar = (winRateClosed !== null && lossRateClosed !== null && avgWinnerDollar !== null && avgLoserDollar !== null)
-    ? (winRateClosed * avgWinnerDollar) - (lossRateClosed * Math.abs(avgLoserDollar))
+    ? finiteOrNull((winRateClosed * avgWinnerDollar) - (lossRateClosed * Math.abs(avgLoserDollar)))
     : null;
 
-  const commissionVals = trades
-    .map((t) => (t.commission ? parseFloat(t.commission as unknown as string) : NaN))
-    .filter((v) => !isNaN(v));
+  const commissionVals = trades.flatMap((t) => {
+    if (typeof t.commission !== 'string' || t.commission.trim() === '') return [];
+    const commission = toFiniteNumber(t.commission);
+    return commission === null ? [] : [commission];
+  });
   const avgCommission = mean(commissionVals);
   const totalCommission = sum(commissionVals);
-  const commissionPct = grossProfit !== 0 ? totalCommission / grossProfit : null;
+  const commissionPct = grossProfit !== null && grossProfit !== 0 && totalCommission !== null
+    ? finiteOrNull(totalCommission / grossProfit)
+    : null;
 
-  const byDate: Record<string, number> = {};
+  const byDate: Record<string, number | null> = {};
   trades.forEach((t) => {
     if (!t.date) return;
-    byDate[t.date] = (byDate[t.date] ?? 0) + (t._netPL ?? 0);
+    const value = isFiniteNumber(t._netPL) ? t._netPL : null;
+    if (!(t.date in byDate)) byDate[t.date] = 0;
+    if (value === null || byDate[t.date] === null) return;
+    byDate[t.date] = finiteOrNull((byDate[t.date] as number) + value);
   });
-  const dateEntries = Object.entries(byDate);
-  const largestWinningDay = dateEntries.length > 0
+  const dailyAggregateUnavailable = Object.values(byDate).some((value) => value === null);
+  const dateEntries = Object.entries(byDate).filter((entry): entry is [string, number] => entry[1] !== null);
+  const largestWinningDay = !dailyAggregateUnavailable && dateEntries.length > 0
     ? dateEntries.reduce((best, cur) => (cur[1] > best[1] ? cur : best))
     : null;
-  const largestLosingDay = dateEntries.length > 0
+  const largestLosingDay = !dailyAggregateUnavailable && dateEntries.length > 0
     ? dateEntries.reduce((worst, cur) => (cur[1] < worst[1] ? cur : worst))
     : null;
 
   const kellyPercent = (winRateClosed !== null && payoffRatio !== null && payoffRatio > 0)
-    ? Math.max(0, Math.min(1, winRateClosed - (1 - winRateClosed) / payoffRatio))
+    ? finiteOrNull(Math.max(0, Math.min(1, winRateClosed - (1 - winRateClosed) / payoffRatio)))
     : null;
 
   const riskOfRuinPercent = (winRateClosed !== null && lossRateClosed !== null && nClosed > 0)
@@ -480,31 +511,35 @@ export function computeCoreAnalytics(trades: EnrichedTrade[]): CoreAnalytics {
         if (edge <= 0) return 100;
         if (edge >= 1) return 0;
         const ratio = (1 - edge) / (1 + edge);
-        return Math.min(100, Math.pow(ratio, nClosed) * 100);
+        return finiteOrNull(Math.min(100, Math.pow(ratio, nClosed) * 100));
       })()
     : null;
 
-  const rValues = trades.map((t) => t._r).filter((v): v is number => v !== null);
+  const rValues = trades.map((t) => t._r).filter(isFiniteNumber);
   const rMean = mean(rValues);
   const rStd  = stddev(rValues);
   const sqn = (rMean !== null && rStd !== null && rStd > 0)
-    ? (rMean / rStd) * Math.sqrt(Math.min(rValues.length, 100))
+    ? finiteOrNull((rMean / rStd) * Math.sqrt(Math.min(rValues.length, 100)))
     : null;
 
-  const byMonth: Record<string, number> = {};
+  const byMonth: Record<string, number | null> = {};
   trades.forEach((t) => {
     if (!t.date) return;
     const m = t.date.slice(0, 7);
-    byMonth[m] = (byMonth[m] ?? 0) + (t._netPL ?? 0);
+    const value = isFiniteNumber(t._netPL) ? t._netPL : null;
+    if (!(m in byMonth)) byMonth[m] = 0;
+    if (value === null || byMonth[m] === null) return;
+    byMonth[m] = finiteOrNull((byMonth[m] as number) + value);
   });
-  const monthlyValues = Object.values(byMonth);
+  const monthlyUnavailable = Object.values(byMonth).some((value) => value === null);
+  const monthlyValues = Object.values(byMonth).filter(isFiniteNumber);
   let consistencyScore: number | null = null;
-  if (monthlyValues.length >= 2) {
-    const mMean = mean(monthlyValues)!;
+  if (!monthlyUnavailable && monthlyValues.length >= 2) {
+    const mMean = mean(monthlyValues);
     const mStd  = stddev(monthlyValues);
-    if (mStd !== null && mMean !== 0) {
-      const variability = Math.min(100, (mStd / Math.abs(mMean)) * 100);
-      consistencyScore = 100 - variability;
+    if (mMean !== null && mStd !== null && mMean !== 0) {
+      const variability = finiteOrNull(Math.min(100, (mStd / Math.abs(mMean)) * 100));
+      consistencyScore = variability === null ? null : finiteOrNull(100 - variability);
     }
   }
 
@@ -565,8 +600,12 @@ export function withRecoveryFactor(
   analytics: CoreAnalytics,
   maxDrawdownDollar: number | null,
 ): CoreAnalytics {
-  const recoveryFactor = (maxDrawdownDollar !== null && maxDrawdownDollar !== 0)
-    ? analytics.netProfit / Math.abs(maxDrawdownDollar)
+  const recoveryFactor = (
+    maxDrawdownDollar !== null
+    && maxDrawdownDollar !== 0
+    && analytics.netProfit !== null
+  )
+    ? finiteOrNull(analytics.netProfit / Math.abs(maxDrawdownDollar))
     : null;
   return { ...analytics, recoveryFactor };
 }

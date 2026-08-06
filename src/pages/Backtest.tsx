@@ -41,7 +41,10 @@ import type { EquityCurvePoint } from '@components/charts/EquityCurveChart.js';
 import type { BacktestComparisonPoint } from '@components/charts/BacktestComparisonChart.js';
 import type { BacktestResult } from '@apptypes/backtest.js';
 import type { FilterGroup } from '@calculations/filterEngine.js';
-import type { EnrichedTrade } from '@calculations/tradeCalc.js';
+import {
+  finiteOrNull, isFiniteNumber,
+  type EnrichedTrade,
+} from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
 
 // ─── Types ───────────────────────────────────────────────────
@@ -73,7 +76,9 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   function handleRun(filterGroup: FilterGroup, startingCapital: number, name: string) {
     const result = runBacktest(filterGroup, allTrades, startingCapital, name);
     if (!result.success) {
-      setRunError('Saved Backtest limit reached. Delete an existing saved result before running another Backtest.');
+      setRunError(result.reason === 'limit_reached'
+        ? 'Saved Backtest limit reached. Delete an existing saved result before running another Backtest.'
+        : 'Backtest could not be calculated because one or more required numeric calculations were unavailable.');
       return;
     }
     setRunError(null);
@@ -141,14 +146,17 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   // it is what the run was actually executed with.
   const equity = useMemo(() => {
     const startingCapital = selectedResult?.startingCapital ?? 0;
+    if (!isFiniteNumber(startingCapital)) return { equityData: null, currentEquity: null };
 
     if (selectedResult?.equityPath !== undefined) {
       const equityData: EquityCurvePoint[] = [
         { x: 0, eq: startingCapital, above: startingCapital, below: startingCapital, ref: startingCapital },
       ];
 
-      selectedResult.equityPath.forEach((rawEquity, i) => {
-        const eq = Math.round(rawEquity * 100) / 100;
+      for (let i = 0; i < selectedResult.equityPath.length; i++) {
+        const rawEquity = selectedResult.equityPath[i];
+        const eq = finiteOrNull(Math.round(rawEquity * 100) / 100);
+        if (eq === null) return { equityData: null, currentEquity: null };
         equityData.push({
           x:     i + 1,
           eq,
@@ -156,7 +164,7 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
           below: eq <  startingCapital ? eq : startingCapital,
           ref:   startingCapital,
         });
-      });
+      }
 
       return {
         equityData,
@@ -166,14 +174,17 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
       };
     }
 
-    let running = startingCapital;
+    let running: number | null = startingCapital;
     const equityData: EquityCurvePoint[] = [
       { x: 0, eq: startingCapital, above: startingCapital, below: startingCapital, ref: startingCapital },
     ];
 
-    resolved.matched.forEach((t, i) => {
-      running += t._netPL ?? 0;
-      const eq = Math.round(running * 100) / 100;
+    for (let i = 0; i < resolved.matched.length; i++) {
+      const t = resolved.matched[i];
+      if (isFiniteNumber(t._netPL) && running !== null) running = finiteOrNull(running + t._netPL);
+      if (running === null) return { equityData: null, currentEquity: null };
+      const eq = finiteOrNull(Math.round(running * 100) / 100);
+      if (eq === null) return { equityData: null, currentEquity: null };
       equityData.push({
         x:     i + 1,
         eq,
@@ -181,7 +192,7 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
         below: eq <  startingCapital ? eq : startingCapital,
         ref:   startingCapital,
       });
-    });
+    }
 
     return { equityData, currentEquity: running };
   }, [selectedResult, resolved]);
@@ -209,31 +220,40 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   const comparisonData = useMemo<BacktestComparisonPoint[]>(() => {
     if (selectedResult === null || comparisonResult === null) return [];
 
-    const returnSeries = (result: BacktestResult): (number | null)[] => {
+    const returnSeries = (result: BacktestResult): (number | null)[] | null => {
       const cap = result.startingCapital;
+      if (!isFiniteNumber(cap)) return null;
       if (result.equityPath !== undefined) {
-        return [
-          cap > 0 ? 0 : null,
-          ...result.equityPath.map((e) => cap > 0 ? ((e - cap) / cap) * 100 : null),
-        ];
+        const series: (number | null)[] = [cap > 0 ? 0 : null];
+        for (const equityPoint of result.equityPath) {
+          if (!isFiniteNumber(equityPoint)) return null;
+          const returnPct = cap > 0 ? finiteOrNull(((equityPoint - cap) / cap) * 100) : null;
+          if (cap > 0 && returnPct === null) return null;
+          series.push(returnPct);
+        }
+        return series;
       }
       // cap <= 0 makes a percentage return undefined — emit null
       // rather than Infinity/NaN.
       const series: (number | null)[] = [cap > 0 ? 0 : null];
-      let running = cap;
+      let running: number | null = cap;
 
       result.matchedTradeIds.forEach((id) => {
         const t = tradeMap.get(id);
         if (t === undefined) return;
-        running += t._netPL ?? 0;
-        series.push(cap > 0 ? ((running - cap) / cap) * 100 : null);
+        if (isFiniteNumber(t._netPL) && running !== null) running = finiteOrNull(running + t._netPL);
+        if (running === null) return;
+        const returnPct = cap > 0 ? finiteOrNull(((running - cap) / cap) * 100) : null;
+        if (cap > 0 && returnPct === null) { running = null; return; }
+        series.push(returnPct);
       });
 
-      return series;
+      return running === null ? null : series;
     };
 
     const a = returnSeries(selectedResult);
     const b = returnSeries(comparisonResult);
+    if (a === null || b === null) return [];
 
     const points: BacktestComparisonPoint[] = [];
     for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -278,7 +298,7 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
             onClose={() => setComparisonId(null)}
           />
         </div>
-      ) : selectedResult !== null ? (
+      ) : selectedResult !== null && equity.equityData !== null && equity.currentEquity !== null ? (
         <div style={{ marginTop: 14 }}>
           <BacktestResultView
             result={selectedResult}
@@ -288,6 +308,8 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
             legacy={selectedResult.equityPath === undefined}
           />
         </div>
+      ) : selectedResult !== null ? (
+        <div style={{ marginTop: 14 }}><EmptyState message="This Backtest analysis is unavailable." /></div>
       ) : null}
     </div>
   );

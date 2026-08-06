@@ -23,6 +23,7 @@ import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Toolti
 import { COLORS as C } from '@constants/lists.js';
 import { TOOLTIP_STYLE } from './chartTheme.js';
 import type { PeriodStats, PeriodGranularity } from '@calculations/rolling.js';
+import { finiteOrNull } from '@calculations/tradeCalc.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -48,9 +49,12 @@ function formatLabel(key: string, granularity: PeriodGranularity): string {
 // ─── Component ───────────────────────────────────────────────
 
 export function PeriodPLChart({ data, granularity, height = 180 }: PeriodPLChartProps) {
-  const chartData = data.map((d) => ({
+  const roundedValues = data.map((d) => d.netPL === null ? null : finiteOrNull(Math.round(d.netPL * 100) / 100));
+  if (roundedValues.some((value) => value === null)) return null;
+
+  const chartData = data.map((d, index) => ({
     label:  formatLabel(d.key, granularity),
-    netPL:  Math.round(d.netPL * 100) / 100,
+    netPL:  roundedValues[index] as number,
     trades: d.trades,
   }));
 

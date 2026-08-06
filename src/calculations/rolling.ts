@@ -39,7 +39,7 @@
  * winRate/totalR/avgR/pl/netPL math.
  */
 
-import type { EnrichedTrade } from './tradeCalc.js';
+import { finiteOrNull, sumFinite, type EnrichedTrade } from './tradeCalc.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -48,8 +48,8 @@ export type PeriodGranularity = 'day' | 'week' | 'month';
 export interface PeriodStats {
   key:      string;
   trades:   number;
-  totalR:   number;
-  netPL:    number;
+  totalR:   number | null;
+  netPL:    number | null;
   winRate:  number | null;
 }
 
@@ -64,10 +64,10 @@ export interface TradeSummary {
   red:    number;
   be:     number;
   wr:     number | null;
-  totalR: number;
+  totalR: number | null;
   avgR:   number | null;
-  pl:     number;
-  netPL:  number;
+  pl:     number | null;
+  netPL:  number | null;
 }
 
 export interface TradeFrequency {
@@ -114,11 +114,11 @@ export function summarizeTrades(ts: EnrichedTrade[]): TradeSummary {
   const red   = ts.filter((t) => t._outcome === 'Red').length;
   const be    = ts.filter((t) => t._outcome === 'Breakeven').length;
   const d = green + red;
-  const wr = d > 0 ? green / d : null;
-  const totalR = ts.reduce((s, t) => s + (t._r ?? 0), 0);
-  const pl     = ts.reduce((s, t) => s + (t._pl ?? 0), 0);
-  const netPL  = ts.reduce((s, t) => s + (t._netPL ?? 0), 0);
-  const avgR = n > 0 ? totalR / n : null;
+  const wr = d > 0 ? finiteOrNull(green / d) : null;
+  const totalR = sumFinite(ts.map((t) => t._r));
+  const pl     = sumFinite(ts.map((t) => t._pl));
+  const netPL  = sumFinite(ts.map((t) => t._netPL));
+  const avgR = n > 0 && totalR !== null ? finiteOrNull(totalR / n) : null;
 
   return { n, green, red, be, wr, totalR, avgR, pl, netPL };
 }
@@ -159,15 +159,17 @@ export function groupTradesBy<T>(
 
 // ─── Period key helpers ────────────────────────────────────────
 
-function getWeekKey(dateStr: string): string {
+function getWeekKey(dateStr: string): string | null {
   const dt = new Date(`${dateStr}T12:00`);
+  if (!Number.isFinite(dt.getTime())) return null;
   const day = dt.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   dt.setDate(dt.getDate() + diff);
   return dt.toISOString().split('T')[0];
 }
 
-function getPeriodKey(dateStr: string, granularity: PeriodGranularity): string {
+function getPeriodKey(dateStr: string, granularity: PeriodGranularity): string | null {
+  if (!Number.isFinite(new Date(`${dateStr}T12:00`).getTime())) return null;
   if (granularity === 'day') return dateStr;
   if (granularity === 'week') return getWeekKey(dateStr);
   return dateStr.slice(0, 7);
@@ -205,6 +207,7 @@ export function aggregateByPeriod(
   trades.forEach((t) => {
     if (!t.date) return;
     const key = getPeriodKey(t.date, granularity);
+    if (key === null) return;
     if (!groups[key]) groups[key] = [];
     groups[key].push(t);
   });
@@ -226,12 +229,12 @@ export function aggregateByPeriod(
 // ─── Trade frequency ─────────────────────────────────────────────
 
 export function getTradeFrequency(trades: EnrichedTrade[]): TradeFrequency {
-  const datedTrades = trades.filter((t) => t.date);
+  const datedTrades = trades.filter((t) => t.date && getPeriodKey(t.date, 'day') !== null);
   const n = datedTrades.length;
 
-  const dayKeys   = new Set(datedTrades.map((t) => getPeriodKey(t.date as string, 'day')));
-  const weekKeys  = new Set(datedTrades.map((t) => getPeriodKey(t.date as string, 'week')));
-  const monthKeys = new Set(datedTrades.map((t) => getPeriodKey(t.date as string, 'month')));
+  const dayKeys   = new Set(datedTrades.map((t) => getPeriodKey(t.date as string, 'day')).filter((key): key is string => key !== null));
+  const weekKeys  = new Set(datedTrades.map((t) => getPeriodKey(t.date as string, 'week')).filter((key): key is string => key !== null));
+  const monthKeys = new Set(datedTrades.map((t) => getPeriodKey(t.date as string, 'month')).filter((key): key is string => key !== null));
 
   return {
     avgTradesPerDay:    dayKeys.size   > 0 ? n / dayKeys.size   : null,
@@ -250,7 +253,7 @@ export function getRollingStats(
   windowDays: number,
   referenceDate?: string,
 ): PeriodStats {
-  const datedTrades = trades.filter((t) => t.date);
+  const datedTrades = trades.filter((t) => t.date && getPeriodKey(t.date, 'day') !== null);
   if (datedTrades.length === 0) {
     return { key: `rolling-${windowDays}d`, trades: 0, totalR: 0, netPL: 0, winRate: null };
   }
@@ -258,6 +261,9 @@ export function getRollingStats(
   const refDate = referenceDate
     ? new Date(`${referenceDate}T12:00`)
     : new Date(`${datedTrades.reduce((max, t) => (t.date! > max ? t.date! : max), datedTrades[0].date!)}T12:00`);
+  if (!Number.isFinite(refDate.getTime())) {
+    return { key: `rolling-${windowDays}d`, trades: 0, totalR: 0, netPL: 0, winRate: null };
+  }
 
   const cutoff = new Date(refDate);
   cutoff.setDate(cutoff.getDate() - windowDays);

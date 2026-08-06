@@ -149,6 +149,17 @@ describe('summarizeTrades', () => {
     expect(s.pl).toBe(0);
     expect(s.netPL).toBe(0);
   });
+
+  it('returns nullable aggregate fields for positive and negative finite-operand overflow', () => {
+    const [a, b] = MIXED();
+    Object.assign(a, { _r: 1e308, _pl: 1e308, _netPL: 1e308 });
+    Object.assign(b, { _r: 1e308, _pl: 1e308, _netPL: 1e308 });
+    expect(summarizeTrades([a, b])).toMatchObject({ totalR: null, avgR: null, pl: null, netPL: null });
+
+    Object.assign(a, { _r: -1e308, _pl: -1e308, _netPL: -1e308 });
+    Object.assign(b, { _r: -1e308, _pl: -1e308, _netPL: -1e308 });
+    expect(summarizeTrades([a, b])).toMatchObject({ totalR: null, avgR: null, pl: null, netPL: null });
+  });
 });
 
 // ─── groupTradesBy ───────────────────────────────────────────
@@ -220,6 +231,18 @@ describe('aggregateByPeriod', () => {
     expect(aggregateByPeriod(partial, 'day').map((p) => p.key)).toEqual(['2026-03-02']);
   });
 
+  it('excludes malformed dates and exposes period arithmetic overflow as null', () => {
+    const malformed = enrichTrades([trade({ date: 'not-a-date', exitPrice: '120' })], accounts);
+    expect(aggregateByPeriod(malformed, 'week')).toEqual([]);
+
+    const [a, b] = MIXED();
+    Object.assign(a, { date: '2026-03-01', _r: 1e308, _netPL: 1e308 });
+    Object.assign(b, { date: '2026-03-01', _r: 1e308, _netPL: 1e308 });
+    expect(aggregateByPeriod([a, b], 'day')).toEqual([
+      { key: '2026-03-01', trades: 2, totalR: null, netPL: null, winRate: 1 },
+    ]);
+  });
+
   it("partitions every dated trade exactly once for 'week', in ascending key order", () => {
     // SHAPE AND SORT ONLY. The Monday-start key itself comes from the
     // private, undocumented getWeekKey(), which builds a LOCAL date and
@@ -232,6 +255,6 @@ describe('aggregateByPeriod', () => {
     expect(new Set(keys).size).toBe(keys.length);
     // All 6 MIXED trades carry a date, so none may be dropped.
     expect(weekly.reduce((s, p) => s + p.trades, 0)).toBe(6);
-    expect(weekly.reduce((s, p) => s + p.netPL, 0)).toBe(15);
+    expect(weekly.reduce((s, p) => s + (p.netPL as number), 0)).toBe(15);
   });
 });

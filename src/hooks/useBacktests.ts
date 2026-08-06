@@ -33,14 +33,18 @@ export const canAddBacktestResult = (count: number): boolean =>
 
 export type RunBacktestResult =
   | { success: true; result: BacktestResult }
-  | { success: false; reason: 'limit_reached' };
+  | { success: false; reason: 'limit_reached' }
+  | { success: false; reason: 'calculation_unavailable' };
 
 export function createBacktestResultWithinLimit(
   count: number,
-  createResult: () => BacktestResult,
+  createResult: () => BacktestResult | null,
 ): RunBacktestResult {
   if (!canAddBacktestResult(count)) return { success: false, reason: 'limit_reached' };
-  return { success: true, result: createResult() };
+  const result = createResult();
+  return result === null
+    ? { success: false, reason: 'calculation_unavailable' }
+    : { success: true, result };
 }
 
 export interface UseBacktestsReturn {

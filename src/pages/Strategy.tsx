@@ -62,7 +62,10 @@ import { summarizeTrades, type TradeSummary } from '@calculations/rolling.js';
 import { useAdvancedAnalytics } from '@hooks/useAdvancedAnalytics.js';
 import { DayOfWeekRChart } from '@components/charts/DayOfWeekRChart.js';
 import { EntrySetupWinRateChart } from '@components/charts/EntrySetupWinRateChart.js';
-import type { EnrichedTrade } from '@calculations/tradeCalc.js';
+import {
+  finiteOrNull, isFiniteNumber, sumFinite, toFiniteNumber,
+  type EnrichedTrade,
+} from '@calculations/tradeCalc.js';
 import type { ListsState } from '@hooks/useLists.js';
 
 // ─── Types ───────────────────────────────────────────────────
@@ -78,6 +81,16 @@ interface KeyedSummary extends TradeSummary {
 
 const sectionTitle: React.CSSProperties = { color: C.text, fontSize: 11, fontWeight: 700, marginBottom: 10 };
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+function entryMinutes(value: string | undefined): number | null {
+  if (!value) return null;
+  const [hourText, minuteText = '0'] = value.split(':');
+  const hour = toFiniteNumber(hourText);
+  const minute = toFiniteNumber(minuteText);
+  return hour === null || minute === null ? null : finiteOrNull(hour * 60 + minute);
+}
+
+const round2 = (value: number): number | null => finiteOrNull(Math.round(value * 100) / 100);
 
 // ─── byField helper — matches original byField() exactly ──────
 
@@ -119,8 +132,8 @@ function PerfTable({ title, color, rows }: PerfTableProps) {
               <TableCell style={{ fontWeight: 700 }}>{r.key}</TableCell>
               <TableCell>{r.n}</TableCell>
               <TableCell style={{ color: r.wr !== null && r.wr > 0.5 ? C.green : C.red }}>{r.wr !== null ? `${(r.wr * 100).toFixed(0)}%` : '—'}</TableCell>
-              <TableCell style={{ color: r.totalR >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.totalR.toFixed(2)}</TableCell>
-              <TableCell style={{ color: (r.avgR ?? 0) >= 0 ? C.green : C.red }}>{r.avgR !== null ? r.avgR.toFixed(2) : '—'}</TableCell>
+              <TableCell style={{ color: r.totalR === null ? C.dim : r.totalR >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.totalR !== null ? r.totalR.toFixed(2) : '—'}</TableCell>
+              <TableCell style={{ color: r.avgR === null ? C.dim : r.avgR >= 0 ? C.green : C.red }}>{r.avgR !== null ? r.avgR.toFixed(2) : '—'}</TableCell>
             </tr>
           ))}
         </tbody>
@@ -167,33 +180,33 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
     return val1 ? f1Trades : f2Trades;
   }, [trades, field1, val1, field2, val2, f1Trades, f2Trades]);
 
-  const durMins = trades.map((t) => t._durMins).filter((v): v is number => v !== null);
-  const totalMins = durMins.reduce((s, v) => s + v, 0);
+  const durMins = trades.map((t) => t._durMins).filter(isFiniteNumber);
+  const totalMins = sumFinite(durMins);
 
-  const entryTimes = trades.filter((t) => t.entryTime).map((t) => {
-    const parts = (t.entryTime as string).split(':');
-    return +parts[0] * 60 + (+parts[1] || 0);
-  });
-  const avgEntryMins = entryTimes.length > 0 ? entryTimes.reduce((s, v) => s + v, 0) / entryTimes.length : null;
+  const entryTimes = trades.map((t) => entryMinutes(t.entryTime)).filter(isFiniteNumber);
+  const entryTimeTotal = sumFinite(entryTimes);
+  const avgEntryMins = entryTimes.length > 0 && entryTimeTotal !== null
+    ? finiteOrNull(entryTimeTotal / entryTimes.length)
+    : null;
   const avgEntryStr = avgEntryMins !== null
     ? `${Math.floor(avgEntryMins / 60)}:${Math.round(avgEntryMins % 60) < 10 ? '0' : ''}${Math.round(avgEntryMins % 60)}`
     : '—';
 
   const before930 = trades.filter((t) => {
     if (!t.entryTime) return false;
-    const p = t.entryTime.split(':');
-    return +p[0] * 60 + (+p[1] || 0) < 9 * 60 + 30;
+    const minutes = entryMinutes(t.entryTime);
+    return minutes !== null && minutes < 9 * 60 + 30;
   });
   const after930 = trades.filter((t) => {
     if (!t.entryTime) return false;
-    const p = t.entryTime.split(':');
-    return +p[0] * 60 + (+p[1] || 0) >= 9 * 60 + 30;
+    const minutes = entryMinutes(t.entryTime);
+    return minutes !== null && minutes >= 9 * 60 + 30;
   });
   const b9a = summarizeTrades(before930);
   const a9a = summarizeTrades(after930);
   const timeCompData = [
-    { name: 'Before 9:30', trades: b9a.n, wr: b9a.wr !== null ? +(b9a.wr * 100).toFixed(1) : 0, totalR: Math.round((b9a.totalR || 0) * 100) / 100, avgR: Math.round((b9a.avgR || 0) * 100) / 100, green: b9a.green, red: b9a.red },
-    { name: 'After 9:30',  trades: a9a.n, wr: a9a.wr !== null ? +(a9a.wr * 100).toFixed(1) : 0, totalR: Math.round((a9a.totalR || 0) * 100) / 100, avgR: Math.round((a9a.avgR || 0) * 100) / 100, green: a9a.green, red: a9a.red },
+    { name: 'Before 9:30', trades: b9a.n, wr: b9a.wr !== null ? round2(b9a.wr * 100) : null, totalR: b9a.totalR === null ? null : round2(b9a.totalR), avgR: b9a.avgR === null ? null : round2(b9a.avgR), green: b9a.green, red: b9a.red },
+    { name: 'After 9:30',  trades: a9a.n, wr: a9a.wr !== null ? round2(a9a.wr * 100) : null, totalR: a9a.totalR === null ? null : round2(a9a.totalR), avgR: a9a.avgR === null ? null : round2(a9a.avgR), green: a9a.green, red: a9a.red },
   ];
 
   const byEntry  = useMemo(() => byField(trades, 'entrySetup',  lists.EntrySetup  ?? []), [trades, lists]);
@@ -217,22 +230,24 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
     ];
     return items.map(({ l, f, direct }) => {
       const vals = trades
-        .map((t) => (direct ? t._r : (t[f as keyof EnrichedTrade] ? +(t[f as keyof EnrichedTrade] as unknown as string) : null)))
-        .filter((v): v is number => v !== null);
+        .map((t) => direct ? t._r : toFiniteNumber(t[f as keyof EnrichedTrade]))
+        .filter(isFiniteNumber);
       if (!vals.length) return null;
-      const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
-      return { l, n: vals.length, avg: Math.round(avg * 100) / 100, max: Math.round(Math.max(...vals) * 100) / 100, min: Math.round(Math.min(...vals) * 100) / 100 };
-    }).filter((v): v is { l: string; n: number; avg: number; max: number; min: number } => v !== null);
+      const total = sumFinite(vals);
+      const avg = total === null ? null : finiteOrNull(total / vals.length);
+      return { l, n: vals.length, avg: avg === null ? null : round2(avg), max: round2(Math.max(...vals)), min: round2(Math.min(...vals)) };
+    }).filter((v): v is { l: string; n: number; avg: number | null; max: number | null; min: number | null } => v !== null);
   }, [trades]);
 
   const tmStudy = useMemo(() => {
     const fields = ['tm1', 'tm2', 'tm3', 'tm4', 'tm5', 'tm6'] as const;
     return fields.map((f, i) => {
-      const vals = trades.map((t) => (t[f] ? +(t[f] as unknown as string) : null)).filter((v): v is number => v !== null);
+      const vals = trades.map((t) => toFiniteNumber(t[f])).filter(isFiniteNumber);
       if (!vals.length) return null;
-      const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
-      return { l: `TM ${i + 1}`, n: vals.length, avg: Math.round(avg * 100) / 100, max: Math.round(Math.max(...vals) * 100) / 100 };
-    }).filter((v): v is { l: string; n: number; avg: number; max: number } => v !== null);
+      const total = sumFinite(vals);
+      const avg = total === null ? null : finiteOrNull(total / vals.length);
+      return { l: `TM ${i + 1}`, n: vals.length, avg: avg === null ? null : round2(avg), max: round2(Math.max(...vals)) };
+    }).filter((v): v is { l: string; n: number; avg: number | null; max: number | null } => v !== null);
   }, [trades]);
 
   const noData = <EmptyState message="Not enough data" padding={16} fontSize={11} />;
@@ -240,9 +255,9 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
   return (
     <div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-        <StatBox label="Avg Planned R" value={core.avgPlannedR !== null ? fr.r(core.avgPlannedR) : '—'} color={(core.avgPlannedR ?? 0) > 0 ? C.blue : C.dim} />
-        <StatBox label="Avg Real R" value={core.avgActualR !== null ? fr.r(core.avgActualR) : '—'} color={(core.avgActualR ?? 0) > 0 ? C.green : C.red} />
-        <StatBox label="Total Trade Time" value={`${Math.floor(totalMins / 60)}h ${Math.round(totalMins % 60)}m`} color={C.teal} />
+        <StatBox label="Avg Planned R" value={fr.r(core.avgPlannedR)} color={core.avgPlannedR !== null && core.avgPlannedR > 0 ? C.blue : C.dim} />
+        <StatBox label="Avg Real R" value={fr.r(core.avgActualR)} color={core.avgActualR === null ? C.dim : core.avgActualR > 0 ? C.green : C.red} />
+        <StatBox label="Total Trade Time" value={totalMins === null ? '—' : `${Math.floor(totalMins / 60)}h ${Math.round(totalMins % 60)}m`} color={C.teal} />
         <StatBox label="Avg Trade Duration" value={core.avgHoldingMins !== null ? `${Math.floor(core.avgHoldingMins / 60)}h ${Math.round(core.avgHoldingMins % 60)}m` : '—'} color={C.blue} />
         <StatBox label="Avg Winning Duration" value={core.avgWinningHoldingMins !== null ? `${Math.floor(core.avgWinningHoldingMins / 60)}h ${Math.round(core.avgWinningHoldingMins % 60)}m` : '—'} color={C.green} />
         <StatBox label="Avg Losing Duration" value={core.avgLosingHoldingMins !== null ? `${Math.floor(core.avgLosingHoldingMins / 60)}h ${Math.round(core.avgLosingHoldingMins % 60)}m` : '—'} color={C.red} />
@@ -263,15 +278,15 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
           <div style={{ ...sectionTitle, color: C.purple }}>⏱ Before vs After 9:30 AM</div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
             {['Before 9:30', 'After 9:30'].map((name) => {
-              const d = timeCompData.find((x) => x.name === name) ?? { trades: 0, totalR: 0, avgR: 0, wr: undefined as unknown as number };
+              const d = timeCompData.find((x) => x.name === name) ?? { trades: 0, totalR: null, avgR: null, wr: null };
               return (
                 <div key={name} style={{ flex: 1, background: C.row, borderRadius: 7, padding: '7px 10px', border: `1px solid ${C.border}` }}>
                   <div style={{ color: C.dim, fontSize: 9, marginBottom: 2 }}>{name}</div>
                   <div style={{ display: 'flex', gap: 10 }}>
                     <span style={{ color: C.text, fontSize: 10 }}>{(d.trades || (0 + ' trades')) as unknown as string}</span>
-                    <span style={{ color: d.totalR >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 11 }}>{`${d.totalR >= 0 ? '+' : ''}${d.totalR.toFixed(2)}R total`}</span>
-                    <span style={{ color: d.avgR >= 0 ? C.green : C.red, fontSize: 10 }}>{`avg: ${d.avgR >= 0 ? '+' : ''}${d.avgR.toFixed(2)}R`}</span>
-                    {d.wr !== undefined && <span style={{ color: d.wr > 50 ? C.green : C.red, fontSize: 10 }}>{`win: ${d.wr}%`}</span>}
+                    <span style={{ color: d.totalR === null ? C.dim : d.totalR >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 11 }}>{d.totalR === null ? '—' : `${d.totalR >= 0 ? '+' : ''}${d.totalR.toFixed(2)}R total`}</span>
+                    <span style={{ color: d.avgR === null ? C.dim : d.avgR >= 0 ? C.green : C.red, fontSize: 10 }}>{d.avgR === null ? 'avg: —' : `avg: ${d.avgR >= 0 ? '+' : ''}${d.avgR.toFixed(2)}R`}</span>
+                    {d.wr !== null && <span style={{ color: d.wr > 50 ? C.green : C.red, fontSize: 10 }}>{`win: ${d.wr.toFixed(1)}%`}</span>}
                   </div>
                 </div>
               );
@@ -281,16 +296,16 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
 
         <Card>
           <div style={{ ...sectionTitle, color: C.teal }}>📅 Total R & Avg R by Day of Week</div>
-          {byDay.length === 0 ? noData : (
-            <DayOfWeekRChart data={byDay.map((r) => ({ name: r.key, avgR: Math.round((r.avgR ?? 0) * 100) / 100, totalR: Math.round((r.totalR ?? 0) * 100) / 100, n: r.n }))} />
+          {byDay.length === 0 || byDay.some((r) => r.avgR === null || r.totalR === null) ? noData : (
+            <DayOfWeekRChart data={byDay.map((r) => ({ name: r.key, avgR: r.avgR as number, totalR: r.totalR as number, n: r.n }))} />
           )}
         </Card>
       </div>
 
       <Card>
         <div style={{ ...sectionTitle, color: C.teal }}>R & Win Rate by Entry Setup</div>
-        {byEntry.length === 0 ? noData : (
-          <EntrySetupWinRateChart data={byEntry.map((r) => ({ name: r.key, wr: r.wr !== null ? +(r.wr * 100).toFixed(1) : 0, totalR: Math.round((r.totalR ?? 0) * 100) / 100 }))} />
+        {byEntry.length === 0 || byEntry.some((r) => r.wr === null || r.totalR === null) ? noData : (
+          <EntrySetupWinRateChart data={byEntry.map((r) => ({ name: r.key, wr: (r.wr as number) * 100, totalR: r.totalR as number }))} />
         )}
       </Card>
 
@@ -306,9 +321,9 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
                 <tr key={i} style={{ background: i % 2 === 0 ? C.row : C.rowAlt }}>
                   <TableCell style={{ fontWeight: 700 }}>{r.l}</TableCell>
                   <TableCell>{r.n}</TableCell>
-                  <TableCell style={{ color: r.avg >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.avg}</TableCell>
-                  <TableCell style={{ color: C.green }}>{r.max}</TableCell>
-                  <TableCell style={{ color: C.red }}>{r.min}</TableCell>
+                  <TableCell style={{ color: r.avg === null ? C.dim : r.avg >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.avg ?? '—'}</TableCell>
+                  <TableCell style={{ color: r.max === null ? C.dim : C.green }}>{r.max ?? '—'}</TableCell>
+                  <TableCell style={{ color: r.min === null ? C.dim : C.red }}>{r.min ?? '—'}</TableCell>
                 </tr>
               ))}
             </tbody>
@@ -326,8 +341,8 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
                 <tr key={i} style={{ background: i % 2 === 0 ? C.row : C.rowAlt }}>
                   <TableCell style={{ fontWeight: 700 }}>{r.l}</TableCell>
                   <TableCell>{r.n}</TableCell>
-                  <TableCell style={{ color: r.avg >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.avg}</TableCell>
-                  <TableCell style={{ color: C.green }}>{r.max}</TableCell>
+                  <TableCell style={{ color: r.avg === null ? C.dim : r.avg >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.avg ?? '—'}</TableCell>
+                  <TableCell style={{ color: r.max === null ? C.dim : C.green }}>{r.max ?? '—'}</TableCell>
                 </tr>
               ))}
             </tbody>
@@ -391,9 +406,9 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
                         <TableCell style={{ fontWeight: 700 }}>{item.label}</TableCell>
                         <TableCell>{r.n}</TableCell>
                         <TableCell style={{ color: r.wr !== null && r.wr > 0.5 ? C.green : C.red }}>{r.wr !== null ? `${(r.wr * 100).toFixed(0)}%` : '—'}</TableCell>
-                        <TableCell style={{ color: r.totalR >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.totalR.toFixed(2)}</TableCell>
-                        <TableCell style={{ color: (r.avgR ?? 0) >= 0 ? C.green : C.red }}>{r.avgR !== null ? r.avgR.toFixed(2) : '—'}</TableCell>
-                        <TableCell style={{ color: r.pl >= 0 ? C.green : C.red }}>{fr.usd(r.pl)}</TableCell>
+                        <TableCell style={{ color: r.totalR === null ? C.dim : r.totalR >= 0 ? C.green : C.red, fontWeight: 700 }}>{r.totalR !== null ? r.totalR.toFixed(2) : '—'}</TableCell>
+                        <TableCell style={{ color: r.avgR === null ? C.dim : r.avgR >= 0 ? C.green : C.red }}>{r.avgR !== null ? r.avgR.toFixed(2) : '—'}</TableCell>
+                        <TableCell style={{ color: r.pl === null ? C.dim : r.pl >= 0 ? C.green : C.red }}>{fr.usd(r.pl)}</TableCell>
                       </tr>
                     );
                   })}

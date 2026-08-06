@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 28 — Finite Derived-Number Integrity
+Phase 29 — Recovery-Complete Delete All
 
 Status:
 
@@ -14,259 +14,252 @@ COMPLETE
 
 ## Objective
 
-Guarantee that every derived numeric value is either a finite number or
-null. Prevent malformed/non-finite raw operands and finite arithmetic
-overflow from propagating NaN or Infinity through enrichment,
-aggregation, running capital, equity, drawdown, newly computed Backtest
-snapshots, or user-visible numeric output.
+Make the visible Delete ALL trade action follow the existing Recovery Bin
+deletion-safety workflow so it no longer uniquely bypasses recoverable
+deletion while single-row and selected-row deletion remain recoverable.
+
+Phase 29 provides parity with existing Recovery Bin semantics. It does not
+introduce stronger persistence guarantees.
 
 ---
 
-## Scope (as delivered)
+## Delivered Scope
 
-- Added finite parsing and final-result checks without rewriting raw
-  historical strings.
-- Preserved valid finite calculations, valid negative inputs where
-  previously accepted, and valid zero.
-- Empty commission retains zero-fee behavior; invalid non-empty
-  commission makes net P/L unavailable.
-- Running capital never advances from unavailable/non-finite net P/L.
-- Aggregate arithmetic overflow becomes null without clamping, skipping,
-  JSON normalization, or fabricated zero.
-- Equity, drawdown, and Backtest composition use whole-computation null
-  results when a finite-only result cannot be produced.
-- Backtest calculation failure is explicit and distinct from the saved
-  result limit.
-- Shared numeric formatters render unavailable/non-finite inputs as `—`.
-- Dashboard, Strategy, Insights, Equity, Backtest, and Calendar local
-  numeric producers and nullable consumers were hardened without
-  secondary fallback analytics.
+- Added deterministic batch construction for existing-shape Recovery Bin
+  entries.
+- Added `softDeleteMany()` with an empty-input no-op and one functional state
+  append for a nonempty batch.
+- Centralized the established trade Recovery Bin label convention.
+- Added an App-owned recoverable Delete ALL wrapper.
+- Routed RawPage's Delete ALL contract through that wrapper instead of the
+  raw `deleteAllTrades()` callback.
+- Replaced the irreversible Delete ALL confirmation with exact recoverability
+  wording.
+- Added focused pure Node tests without jsdom, React Testing Library, new
+  dependencies, or test-configuration changes.
 
 ---
 
 ## Files Changed
 
-Production (16):
-- src/calculations/tradeCalc.ts
-- src/calculations/analytics.ts
-- src/calculations/rolling.ts
-- src/calculations/drawdown.ts
-- src/calculations/backtest.ts
-- src/calculations/formatters.ts
-- src/hooks/useAdvancedAnalytics.ts
-- src/hooks/useBacktests.ts
-- src/pages/Dashboard.tsx
-- src/pages/Strategy.tsx
-- src/pages/Insights.tsx
-- src/pages/Equity.tsx
-- src/pages/Backtest.tsx
-- src/pages/Calendar.tsx
-- src/components/backtest/BacktestResultView.tsx
-- src/components/charts/PeriodPLChart.tsx
+Production (5):
+- src/calculations/recoveryBin.ts
+- src/hooks/useRecoveryBin.ts
+- src/App.jsx
+- src/pages/Raw.tsx
+- src/components/trade/TradeTable.tsx
 
-Tests (7):
-- src/calculations/tradeCalc.test.ts
-- src/calculations/analytics.test.ts
-- src/calculations/rolling.test.ts
-- src/calculations/drawdown.test.ts
-- src/calculations/backtest.test.ts
-- src/hooks/useBacktests.test.ts
-- src/calculations/formatters.test.ts (new)
+Tests (1):
+- src/calculations/recoveryBin.test.ts (new)
 
 Documentation (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Twenty-five files total, exactly matching the approved close manifest.
+Eight files total, exactly matching the approved close manifest.
 
 ---
 
-## Out of Scope (respected)
+## Recovery Contract
 
-- No TradeForm save blocking or manual-entry validation UX.
-- No import validation/rejection, import redesign, raw-data cleanup, or
-  historical normalization.
-- No migration, backfill, LocalStorage repair, saved Backtest repair, or
-  Recovery Bin repair.
-- No backup version, backup section, restore validation, Restore Point,
-  storage accessor, resolver, IndexedDB, Sync Engine, cutover, auth, or
-  namespacing change.
-- No formula, pip-value, threshold, or denominator redesign.
-- No dependency, test-configuration, jsdom, or React Testing Library
+- Delete ALL snapshots every currently active `RawTrade` targeted by the
+  operation.
+- Exactly one new Recovery Bin entry is created per targeted active trade.
+- The original raw object/data and every raw field are retained; no enriched
+  projection is stored.
+- Original `_tid` values are preserved exactly.
+- No captured trade is omitted or duplicated within the new batch.
+- Empty input creates no Recovery Bin entries.
+- The persisted Recovery Bin entry schema and storage key are unchanged.
+
+---
+
+## Batch Semantics
+
+- `RecoveryBinCapture<T>` contains only `item` and `label`.
+- Entry construction receives one operation timestamp and one unique
+  `nextId('recovery')` result per capture.
+- Every entry in one batch shares the operation timestamp.
+- Entry order matches snapshot/capture order deterministically.
+- `softDeleteMany()` appends all new entries through one functional Recovery
+  Bin state update rather than N independent updates.
+- Existing `softDelete(item, label)` retains its public behavior and produces
+  the established single-entry shape.
+
+---
+
+## Delete Ordering
+
+The implemented order is:
+
+1. Snapshot current active `rawTrades`.
+2. Map the snapshot to Recovery captures in snapshot order.
+3. Invoke `softDeleteMany(captures)`.
+4. Invoke the existing `deleteAllTrades()` lifecycle.
+5. Preserve TradeTable's existing selection-clearing behavior.
+
+Recovery state-update invocation precedes active deletion invocation. This
+ordering is not a durable storage acknowledgment.
+
+---
+
+## Exact Confirmation Wording
+
+"Delete ALL active trades? They will be moved to the Recovery Bin and can be restored from there."
+
+The wording intentionally makes no promise about cloud backup, Sync,
+automatic Restore Points, or durability under storage failure.
+
+---
+
+## Restore All Compatibility
+
+- Existing Restore All is unchanged.
+- It already consumes multiple non-expired Recovery Bin entries, returns
+  their original `item` payloads, and clears the bin in one state update.
+- App continues to restore all returned records through one `importTrades()`
+  call, preserving supplied `_tid` values under the existing import path.
+- Existing ordering, retention, and `_tid` conflict policies are unchanged.
+- Restore All continues to restore every current bin entry, including older
+  entries unrelated to the latest Delete ALL operation.
+
+---
+
+## Explicit Out of Scope (respected)
+
+- No global storage behavior or persistence acknowledgment.
+- No transaction, rollback, read-back verification, or retry mechanism.
+- No Recovery Bin schema, storage-key, retention, or count-cap change.
+- No `useTrades`, resolver, IndexedDB, Sync, cutover, or authentication
   change.
-- No Futures import/data, unrelated Insights correctness, Trade Review,
-  Prop Firm Tracker, Position Calculator, AI/agent/MCP, or Phase 29 work.
+- No backup format, backup section, or Restore Point change.
+- No `_tid` conflict redesign.
+- No migration, backfill, repair, or historical normalization.
+- No dependency, configuration, jsdom, or test-framework change.
+- No input validation, Futures/import, Insights, AD-017, Trade Review, Prop
+  Firm, Position Calculator, AI/agent/MCP, or Phase 30 work.
 
 ---
 
-## Numeric Invariant
+## Persistence Limitation
 
-Every derived numeric value is finite or null.
+Recovery Bin persistence remains best-effort through the existing effect.
+Phase 29 guarantees only that Recovery Bin state-update invocation occurs
+before active deletion invocation. It does not wait for or verify a durable
+storage write.
 
-- null means unavailable / not computable.
-- 0 means valid numeric zero.
-- NaN, +Infinity, and -Infinity are invalid derived state.
-- Malformed, symbolic, non-finite, empty, or whitespace-only required
-  numeric operands make the affected derived result unavailable.
-- Finite arithmetic results are checked after calculation, including
-  aggregate arithmetic.
-- Unavailable state is not converted to zero merely to satisfy a UI,
-  chart, comparison, type, or persistence contract.
+Storage quota, browser-storage denial, or another persistence failure can
+therefore still prevent durable Recovery Bin capture. This limitation was
+not redesigned or strengthened.
 
----
-
-## Exact Widened Contracts
-
-EnrichedFields:
-- `_capital: number | null`
-
-TradeSummary:
-- `totalR: number | null`
-- `pl: number | null`
-- `netPL: number | null`
-
-PeriodStats:
-- `totalR: number | null`
-- `netPL: number | null`
-
-CoreAnalytics:
-- `netProfit: number | null`
-- `grossProfit: number | null`
-- `grossLoss: number | null`
-
-Bounded counts, identity/index values, and fields already protected
-upstream were not widened.
-
----
-
-## Whole-Computation Null Behavior
-
-- `buildEquitySequence(...): EquityPoint[] | null`
-- `computeDrawdown(...): DrawdownResult | null`
-- `computeDrawdownFromTrades(...): DrawdownResult | null`
-- `computeBacktestResult(...): BacktestResult | null`
-
-EquityPoint remains finite-only. DrawdownResult fields remain finite-only.
-`BacktestResult.equityPath` remains finite-only `number[]`. The AD-018
-persisted shape and presence/absence legacy discriminator are unchanged.
-No page rebuilds an alternative analysis when a shared calculation
-returns null.
-
----
-
-## Backtest Failure Contract
-
-`calculation_unavailable` is distinct from `limit_reached`.
-
-Exact inline message:
-
-"Backtest could not be calculated because one or more required numeric
-calculations were unavailable."
-
-On `calculation_unavailable`, no Backtest result is appended, persisted,
-selected, partially saved, or fabricated through fallback recomputation.
+Pre-implementation retention review found no count cap or trimming rule
+capable of immediately truncating the newly captured Delete ALL batch. New
+batch entries share a current timestamp and are not immediately expired by
+the existing 30-day age policy.
 
 ---
 
 ## Automated Verification
 
 - TypeScript: 0 errors.
-- ESLint: 0 errors, exactly 7 pre-existing warnings.
-- Tests: 203/203 passing across 11 files.
-- `npm run verify`: green.
+- ESLint: 0 errors, exactly 7 existing warnings at unchanged sites.
+- Focused Phase 29 tests: 9/9.
+- Full tests: 212/212 passing across 12 files.
+- `npm.cmd run verify`: green.
 - Production build: succeeds, 994 modules transformed.
 - `git diff --check`: clean.
-- Exact implementation manifest: 16 production files and 7 test files.
-- New formatter test: src/calculations/formatters.test.ts.
-- No dependency, configuration, jsdom, or component-test infrastructure
-  change.
+- Exact implementation manifest: 5 production files and 1 test file.
+- Exact close manifest: 5 production, 1 test, and 2 documentation files.
+- Dependency and configuration changes: none.
 
 ---
 
 ## Runtime Verification
 
-The local application launch and authentication screen were observed.
-Authenticated application surfaces were not directly exercised because
-authentication would be required. No account was created and no real
-journal data was altered.
+Authenticated destructive runtime testing was not performed because no
+disposable authenticated profile or account was confirmed. No account was
+created for testing, and the user's real journal was not used.
 
-Authenticated surfaces were therefore recorded as automated/diff
-verified through tests, typecheck, build, and source/diff inspection;
-they are not claimed as runtime-observed. No full runtime V-case pass is
+Delete ALL, Restore All, single-delete, and selected-delete behavior is
+therefore automated/source-diff verified through focused tests, full tests,
+typecheck, lint, verify, build, and source/diff inspection. It is not claimed
+as directly runtime-observed, and no full authenticated runtime pass is
 claimed.
 
 ---
 
 ## Architecture Decision
 
-No AD-020 was required. Phase 28 enforces the existing finite-or-null
-derived-value contract rather than introducing a new architectural
-persistence policy. docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
-AD-018's immutable `equityPath` and legacy-discriminator contracts and
-AD-019's durability/backup contracts remain in force.
+No new ADR was required. Phase 29 extends the already-established Recovery
+Bin deletion-safety policy to the one destructive trade-deletion path that
+previously bypassed it. No persistence architecture changed.
+
+docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
 
 ---
 
-## Historical Data Policy
+## Historical / User Data
 
-- No raw historical trade or string was rewritten.
-- No LocalStorage migration occurred.
-- No saved Backtest was migrated, repaired, backfilled, or normalized.
-- No Recovery Bin, backup, restore, or existing immutable Backtest Result
-  was changed.
-- Historical JSON nulls caused by older NaN/Infinity values are not
-  reconstructable and were not repaired.
-- Phase 28 guarantees finite/null correctness only for calculations
-  performed after implementation.
+- No real journal trade changed.
+- No LocalStorage or Recovery Bin data was manually altered.
+- No saved Backtest Result changed.
+- No backup or Restore Point changed.
+- No Futures data was added.
+- No migration, backfill, repair, or normalization occurred.
 
 ---
 
 ## Exit Criteria
 
-- [x] Every approved calculation boundary produces finite or null.
-- [x] Invalid required operands and invalid non-empty commission cannot
-      create non-finite derived state.
-- [x] Running capital, aggregate, equity, drawdown, and new Backtest
-      snapshot paths satisfy the frozen invariant.
-- [x] Exact nullable scalar and whole-computation contracts are applied.
-- [x] `calculation_unavailable` is distinct and prevents persistence or
-      selection of a failed Backtest.
-- [x] Shared formatters and every approved page-local numeric path are
-      finite-safe without null-to-zero fabrication.
-- [x] Valid known-good calculations remain unchanged.
-- [x] Typecheck, lint, tests, verify, build, diff-check, and manifest
-      verification pass.
-- [x] Exactly 25 approved files changed and no rejected file changed.
-- [x] Historical data and Phase 27 persistence contracts remain untouched.
+- [x] Delete ALL captures every targeted active raw trade exactly once.
+- [x] Original raw payloads, fields, and `_tid` values are preserved.
+- [x] Batch ordering is deterministic and uses one shared timestamp.
+- [x] Every batch entry receives a unique Recovery Bin ID.
+- [x] Empty capture creates no entries or Recovery state update.
+- [x] Capture invocation precedes active deletion invocation.
+- [x] Existing single-row and selected-row deletion remain behaviorally
+      unchanged.
+- [x] Existing Restore All remains unchanged and compatible.
+- [x] Exact recoverability confirmation wording is present.
+- [x] No schema, key, retention, persistence, Sync, backup, dependency, or
+      configuration change occurred.
+- [x] Focused tests, full tests, typecheck, lint, verify, build, diff check,
+      and exact manifest verification passed.
+- [x] Historical and real user data remained untouched.
 
-All exit criteria passed. Phase 28 is closed.
+All approved automated and source/diff exit criteria passed. Authenticated
+destructive runtime verification remains explicitly unobserved.
 
 ---
 
 ## Known Risks / Limitations
 
-- Authenticated UI paths were not directly runtime-observed.
-- Input-validation UX remains separate; TradeForm still permits
-  permissive raw strings.
-- Import validation/rejection and raw-history cleanup remain separate.
-- Existing historical lossy nulls remain unchanged and unrecoverable.
-- Futures data/import and unrelated Insights correctness remain deferred.
-- The 7 pre-existing lint warnings remain unchanged.
+- Recovery capture is not persistence-acknowledged.
+- Storage failure can prevent durable Recovery Bin persistence.
+- Existing `_tid` conflict behavior remains unchanged.
+- Restore All restores all current bin entries, including older entries.
+- Authenticated UI behavior was not directly runtime-observed.
+- Authenticated local-user isolation remains separate.
+- Insights correctness and AD-017 vocabulary completion remain separate.
+- Trade Review activation remains separate.
+- Futures and broker import contracts remain separate.
 
 ---
 
 ## Repository Statistics (measured at phase close)
 
-- Tests: 203 passing across 11 files.
+- Tests: 212 passing across 12 files.
+- Focused Phase 29 tests: 9 passing.
 - Production build: 994 modules transformed.
 - TypeScript: 0 errors.
 - ESLint: 0 errors, 7 warnings.
-- Changed files: exactly 25 — 16 production, 7 tests, 2 documentation.
-- New files: 1 test file (`src/calculations/formatters.test.ts`).
+- Changed files: exactly 8 — 5 production, 1 test, 2 documentation.
+- New files: 1 test file (`src/calculations/recoveryBin.test.ts`).
 - Dependencies/configuration changed: none.
+- Architecture-decision files changed: none.
 
 ---
 
 ## Next Phase
 
-Not started. Phase 29 is not defined or scoped by this close.
+Unselected and not started. Phase 30 scope is not defined by this close.

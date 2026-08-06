@@ -1,3 +1,114 @@
+# Phase 29 — Recovery-Complete Delete All
+
+Status:
+COMPLETE
+
+Summary:
+Delete ALL now follows the existing Recovery Bin deletion-safety workflow.
+Every active raw trade targeted by the operation is captured before active
+deletion is invoked, removing the one destructive trade-deletion path that
+previously bypassed recovery.
+
+What shipped:
+- Delete ALL snapshots the active `rawTrades` collection and creates exactly
+  one Recovery Bin entry per targeted trade.
+- Recovery entries retain the original `RawTrade` payload, every raw field,
+  and the original `_tid` without storing enriched projections.
+- Batch entry order matches snapshot order deterministically. Every entry in
+  a batch shares one operation timestamp and receives its own unique
+  `nextId('recovery')` ID.
+- `softDeleteMany()` appends the complete nonempty batch through one
+  functional Recovery Bin state update. Empty capture is a safe no-op.
+- Recovery capture invocation precedes the existing `deleteAllTrades()`
+  invocation.
+- Existing single-row and selected-row deletion behavior is unchanged.
+- Existing Restore All is unchanged and remains compatible with the new
+  batch entries and their preserved `_tid` values.
+- Delete ALL confirmation now truthfully states that the trades are
+  recoverable.
+
+Exact UI copy:
+"Delete ALL active trades? They will be moved to the Recovery Bin and can be restored from there."
+
+Persistence semantics:
+- Phase 29 guarantees Recovery Bin state-update invocation before active
+  deletion invocation.
+- It does not guarantee durable storage acknowledgment before deletion.
+- Recovery Bin persistence remains best-effort through the existing effect.
+- No transaction, rollback, read-back verification, retry, or persistence
+  acknowledgment was added.
+
+Retention / cap finding:
+- Pre-implementation review found no Recovery Bin count cap or trimming rule
+  capable of immediately truncating a newly captured Delete ALL batch.
+- New batch entries share a current timestamp and are not immediately
+  expired by the existing age-based retention policy.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- Focused Phase 29 tests: 9/9.
+- Full tests: 212/212 passing across 12 files.
+- `npm.cmd run verify`: green.
+- Production build: succeeds, 994 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation manifest: 5 production files and 1 test file.
+- No dependency, configuration, jsdom, or test-framework change.
+
+Runtime characterization:
+- Authenticated destructive runtime testing was not performed because no
+  disposable authenticated profile or account was confirmed.
+- No account was created for testing, and the user's real journal was not
+  used.
+- Delete ALL, Restore All, single-delete, and selected-delete behavior is
+  automated/source-diff verified, not directly runtime-observed.
+- No full authenticated runtime verification is claimed.
+
+Historical / user data:
+- No real journal trade changed.
+- No Recovery Bin data or LocalStorage was manually altered.
+- No saved Backtest Result, backup, or Restore Point changed.
+- No Futures data was added.
+- No migration, backfill, repair, or normalization occurred.
+
+Architecture:
+- No new ADR was required. Phase 29 extends the already-established Recovery
+  Bin deletion-safety policy to the one destructive trade-deletion path that
+  previously bypassed it.
+- No persistence architecture, storage key, Recovery Bin schema, resolver,
+  IndexedDB, Sync, cutover, backup, or authentication behavior changed.
+
+Known limitations / carry-forward:
+- Recovery capture is not persistence-acknowledged; storage failure can
+  still prevent durable Recovery Bin persistence.
+- Existing `_tid` conflict behavior is unchanged.
+- Restore All continues to restore every current Recovery Bin entry,
+  including older entries unrelated to the latest Delete ALL operation.
+- Authenticated local-user isolation, Insights correctness, AD-017
+  vocabulary completion, Trade Review activation, and the Futures/import
+  contract remain separate work.
+- Phase 30 is not selected or started.
+
+Files changed:
+
+Production (5):
+- src/calculations/recoveryBin.ts
+- src/hooks/useRecoveryBin.ts
+- src/App.jsx
+- src/pages/Raw.tsx
+- src/components/trade/TradeTable.tsx
+
+Tests (1):
+- src/calculations/recoveryBin.test.ts (new)
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Eight files total. No architecture-decision file changed.
+
+---
+
 # Phase 28 — Finite Derived-Number Integrity
 
 Status:

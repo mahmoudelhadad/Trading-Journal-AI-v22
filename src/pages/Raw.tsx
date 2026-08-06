@@ -58,10 +58,11 @@ export interface RawPageProps {
   /** Default account ID for new trades — matches original defaultAccId logic */
   defaultAccId:  string;
 
-  /** From useTrades() — passed in by the parent that owns the hook */
+  /** Trade writes passed in by the parent that owns the hook */
   addTrade:       (trade: Omit<RawTradeContent, '_tid'>) => void;
   updateTrade:    (trade: RawTrade) => void;
-  deleteAllTrades: () => void;
+  /** Recovery capture followed by the existing Delete ALL lifecycle */
+  softDeleteAllTrades: () => void;
 
   /**
    * Recovery Bin wiring: replaces the raw deleteTrade prop this page
@@ -114,7 +115,7 @@ export function RawPage({
   defaultAccId,
   addTrade,
   updateTrade,
-  deleteAllTrades,
+  softDeleteAllTrades,
   softDeleteTrade,
   openAddTrigger,
   onAddSignalHandled,
@@ -219,7 +220,7 @@ export function RawPage({
         onEdit={openEdit}
         onDelete={handleDelete}
         onBulkDeleteTrade={softDeleteTrade}
-        onDeleteAll={deleteAllTrades}
+        onDeleteAll={softDeleteAllTrades}
         onAdd={openAdd}
       />
 

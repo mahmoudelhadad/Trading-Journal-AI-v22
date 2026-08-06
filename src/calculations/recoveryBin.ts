@@ -39,6 +39,41 @@ export interface RecoveryBinEntry<T = unknown> {
   label:     string;
 }
 
+/** Input required to capture one item in the existing Recovery Bin shape. */
+export interface RecoveryBinCapture<T> {
+  item:  T;
+  label: string;
+}
+
+/**
+ * Build one deterministic batch of Recovery Bin entries.
+ *
+ * The caller owns operation time and ID generation so this helper stays
+ * pure and directly testable. Capture order is preserved exactly; no
+ * filtering, deduplication, cloning, or persisted-schema change occurs.
+ */
+export function buildRecoveryBinEntries<T>(
+  captures: readonly RecoveryBinCapture<T>[],
+  deletedAt: number,
+  nextEntryId: () => string,
+): RecoveryBinEntry<T>[] {
+  return captures.map(({ item, label }) => ({
+    id: nextEntryId(),
+    deletedAt,
+    item,
+    label,
+  }));
+}
+
+/** Existing trade Recovery Bin label convention, shared by every delete path. */
+export function formatTradeRecoveryLabel(trade: {
+  symbol?: string | null;
+  direction?: string | null;
+  date?: string | null;
+}): string {
+  return `${trade.symbol || 'Trade'}${trade.direction ? ` ${trade.direction}` : ''} — ${trade.date || 'no date'}`;
+}
+
 // ─── Retention policy ────────────────────────────────────────
 
 /**

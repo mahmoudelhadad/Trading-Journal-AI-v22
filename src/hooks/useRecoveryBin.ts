@@ -17,7 +17,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { loadRecoveryBin, saveRecoveryBin } from '@services/storage.js';
 import {
-  purgeExpiredEntries, isExpired,
+  buildRecoveryBinEntries, purgeExpiredEntries, isExpired,
+  type RecoveryBinCapture,
   type RecoveryBinEntry,
 } from '@calculations/recoveryBin.js';
 import { nextId } from '@calculations/idGenerator.js';
@@ -29,6 +30,8 @@ export interface UseRecoveryBinReturn<T> {
   entries:        RecoveryBinEntry<T>[];
   /** Move an item into the bin (the "soft delete" action) */
   softDelete:     (item: T, label: string) => void;
+  /** Move a batch into the bin through one functional state update */
+  softDeleteMany: (captures: readonly RecoveryBinCapture<T>[]) => void;
   /** Move an entry back out of the bin, returning the original item */
   restore:        (id: string) => T | null;
   /**
@@ -75,15 +78,21 @@ export function useRecoveryBin<T>(): UseRecoveryBinReturn<T> {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount only — subsequent expiry is handled naturally on next mount
 
-  const softDelete = useCallback((item: T, label: string) => {
-    const entry: RecoveryBinEntry<T> = {
-      id: nextId('recovery'),
-      deletedAt: Date.now(),
-      item,
-      label,
-    };
-    setRawEntries((prev) => [...prev, entry]);
+  const softDeleteMany = useCallback((captures: readonly RecoveryBinCapture<T>[]) => {
+    if (captures.length === 0) return;
+
+    const deletedAt = Date.now();
+    const newEntries = buildRecoveryBinEntries(
+      captures,
+      deletedAt,
+      () => nextId('recovery'),
+    );
+    setRawEntries((prev) => [...prev, ...newEntries]);
   }, []);
+
+  const softDelete = useCallback((item: T, label: string) => {
+    softDeleteMany([{ item, label }]);
+  }, [softDeleteMany]);
 
   const restore = useCallback((id: string): T | null => {
     const entry = rawEntries.find((e) => e.id === id);
@@ -110,5 +119,5 @@ export function useRecoveryBin<T>(): UseRecoveryBinReturn<T> {
     setRawEntries([]);
   }, []);
 
-  return { entries, softDelete, restore, restoreAll, permanentlyDelete, emptyBin };
+  return { entries, softDelete, softDeleteMany, restore, restoreAll, permanentlyDelete, emptyBin };
 }

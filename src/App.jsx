@@ -55,6 +55,7 @@ import { useAdvancedFilters } from '@hooks/useAdvancedFilters.js';
 import { useTradeReview } from '@hooks/useTradeReview.js';
 import { useRecoveryBin } from '@hooks/useRecoveryBin.js';
 import { useRestorePoints } from '@hooks/useRestorePoints.js';
+import { formatTradeRecoveryLabel } from '@calculations/recoveryBin.js';
 
 // ─── Tabs — matches the pages actually built ───────────────────
 const TABS = [
@@ -89,7 +90,7 @@ export default function App() {
     checklistTemplates, addChecklistTemplate, deleteChecklistTemplate,
     customFieldDefs, addCustomFieldDef, deleteCustomFieldDef,
   } = useTradeReview();
-  const { entries: recoveryBinEntries, softDelete, restore: restoreFromBin, restoreAll: restoreAllFromBin, permanentlyDelete, emptyBin } = useRecoveryBin();
+  const { entries: recoveryBinEntries, softDelete, softDeleteMany, restore: restoreFromBin, restoreAll: restoreAllFromBin, permanentlyDelete, emptyBin } = useRecoveryBin();
   const { restorePoints, create: createRestorePoint, restore: restoreFromPoint, remove: deleteRestorePoint } = useRestorePoints();
 
   // ── Globally-filtered trades — same derivation every page expects ──
@@ -107,16 +108,30 @@ export default function App() {
   // original RawTrade snapshot is what gets stored in the bin — then
   // calls softDelete() BEFORE deleteTrade(), so a trade is never
   // removed from active trades without first being safely captured
-  // in the bin. Used at BOTH existing delete call sites (single via
-  // handleDelete, bulk via onBulkDeleteTrade) — see pages/Raw.tsx.
+  // in the bin. Used by the existing single-row and selected-row call
+  // sites; Delete ALL uses the batch wrapper immediately below.
   const handleSoftDeleteTrade = useCallback((tid) => {
     const trade = rawTrades.find((t) => t._tid === tid);
     if (trade) {
-      const label = `${trade.symbol || 'Trade'}${trade.direction ? ' ' + trade.direction : ''} — ${trade.date || 'no date'}`;
-      softDelete(trade, label);
+      softDelete(trade, formatTradeRecoveryLabel(trade));
     }
     deleteTrade(tid);
   }, [rawTrades, softDelete, deleteTrade]);
+
+  // Delete ALL follows the same Recovery Bin contract as single and
+  // selected-row deletion. Snapshot active RawTrade records, initiate one
+  // batch capture in snapshot order, then invoke the unchanged trade
+  // deletion lifecycle. Recovery persistence remains best-effort through
+  // useRecoveryBin's existing effect; this is not a durability transaction.
+  const handleSoftDeleteAllTrades = useCallback(() => {
+    const snapshot = rawTrades.slice();
+    const captures = snapshot.map((trade) => ({
+      item: trade,
+      label: formatTradeRecoveryLabel(trade),
+    }));
+    softDeleteMany(captures);
+    deleteAllTrades();
+  }, [rawTrades, softDeleteMany, deleteAllTrades]);
 
   // handleRestoreFromBin(id): calls the EXISTING restore() (removes
   // the bin entry, returns the original trade), then reinserts that
@@ -333,7 +348,7 @@ export default function App() {
           defaultAccId={defaultAccId}
           addTrade={addTrade}
           updateTrade={updateTrade}
-          deleteAllTrades={deleteAllTrades}
+          softDeleteAllTrades={handleSoftDeleteAllTrades}
           softDeleteTrade={handleSoftDeleteTrade}
           openAddTrigger={openAddPending}
           onAddSignalHandled={handleAddSignalHandled}

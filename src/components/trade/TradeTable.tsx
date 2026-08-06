@@ -168,11 +168,10 @@ export function TradeTable({
   }, [selected, onBulkDeleteTrade]);
 
   const deleteAll = useCallback(() => {
-    // Matches original confirm message exactly
-    if (!window.confirm(`Delete ALL ${trades.length} trades? This cannot be undone.`)) return;
+    if (!window.confirm('Delete ALL active trades? They will be moved to the Recovery Bin and can be restored from there.')) return;
     onDeleteAll();
     setSelected({});
-  }, [trades.length, onDeleteAll]);
+  }, [onDeleteAll]);
 
   return (
     <div>

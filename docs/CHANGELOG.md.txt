@@ -1,3 +1,115 @@
+# Phase 26 — Immutable Backtest Equity Snapshots
+
+Status:
+COMPLETE
+
+Summary:
+Closed the saved-backtest immutability gap. New BacktestResults now
+persist `equityPath`, the raw, unrounded cumulative equity after each
+matched trade. The result Equity Curve, Ending Equity, and comparison
+return series consume that stored path, so later edits or deletions of
+the source journal trades cannot silently change those analytical
+outputs while the stored KPIs remain fixed.
+
+Legacy handling is intentionally permanent and non-destructive.
+Records created before Phase 26 have no recoverable historical equity
+path and are not migrated, backfilled, or rewritten. They continue to
+render reconstructed current-data curves and Ending Equity, with a
+prominent result-level notice. Comparisons mark each legacy side
+independently. Stored legacy metrics remain unchanged.
+
+Architecture:
+- Added AD-018, superseding AD-015 clause 2 only. AD-015 clauses 1 and
+  3 remain approved; AD-015 itself is preserved as the historical
+  decision. AD-014 is untouched: BacktestResults remain capped,
+  unsynced Class-B LocalStorage data outside IndexedDB, the resolver,
+  sync, cutover, and Backup & Restore.
+- `equityPath?: number[]` is additive. Presence — including `[]` — is
+  the sole new-result discriminator; absence is legacy. Starting
+  capital remains the implicit point zero.
+- No migration, storage-key change, DATABASE_VERSION bump, dependency,
+  full-trade snapshot, presentation-series snapshot, or generic helper
+  extraction.
+
+Implementation and tests:
+- `computeBacktestResult()` retains the already-computed raw equity
+  sequence as one point per matched trade.
+- Result and comparison rendering use the stored path for new results
+  and preserve the existing reconstruction fallback for legacy ones.
+- Replaced the former no-equity-array regression guard deliberately,
+  consistent with AD-018, with T-1 through T-8: hand-derived path,
+  drawdown/endpoint consistency, JSON round-trip, edit and deletion
+  immutability, zero matches, null `_netPL`, and the absence-vs-empty
+  legacy discriminator.
+- Final suite: 123/123 tests passing across 8 files.
+
+Runtime verification (real authenticated journal; no journal trade or
+pre-existing saved result modified):
+- V-1 PASS — `P26 Immutable Snapshot A`, 74 trades, Starting Capital
+  $10,000: Net P&L +$5,286.75, Win Rate (W/L only) 26.2% (16W/45L),
+  Profit Factor 1.15, Max Drawdown -$17,383 (-53.2%), Ending Equity
+  $15,287; full Equity Curve, Drawdown, Streaks, and Core Analytics;
+  no legacy notice.
+- V-2 PASS — fresh-result parity and endpoint reconciliation:
+  $10,000 + $5,286.75 = $15,286.75, displayed as $15,287. Values match
+  the Phase 24 baseline; source consumption is pinned by the code and
+  automated tests.
+- V-3 PASS — untouched legacy `V12 Label Check` retained its stored
+  metrics, curve, and Ending Equity and displayed the exact permanent
+  legacy qualification; Recovery Factor remained `—`.
+- V-4 PASS — new-vs-new comparison showed no legacy notices;
+  new-vs-legacy showed exactly one notice on the legacy side, with
+  stored comparison KPIs unaffected.
+- V-5 PASS — after hard reload, snapshot A reloaded with the same KPIs,
+  equity path, charts, and Ending Equity and without a legacy notice,
+  proving LocalStorage JSON persistence of `equityPath`.
+- V-6 PASS — saved-result selection and rename remained functional;
+  only the newly created Phase 26 result B was renamed. No result was
+  deleted and historical controls were untouched.
+
+Adjacent pre-existing finding, recorded but not fixed:
+- Before reload, new-result Core Analytics rendered `Avg Risk ($)` as
+  `-$NaN`; after LocalStorage JSON round-trip it rendered `—` because
+  JSON serialisation converts non-finite numeric values such as NaN to
+  null. This value originates in the pre-existing `_rv`/Core Analytics
+  path, which Phase 26 did not change. It is not caused by
+  `equityPath`, is not treated as a Phase 26 regression, and remains
+  outside this phase. All persisted equity-path values were finite and
+  the endpoint reconciled exactly.
+
+Files changed (exact frozen manifest, 9):
+- src/types/backtest.ts
+- src/calculations/backtest.ts
+- src/pages/Backtest.tsx
+- src/components/backtest/BacktestResultView.tsx
+- src/components/backtest/BacktestComparison.tsx
+- src/calculations/backtest.test.ts
+- docs/ARCHITECTURE_DECISIONS.md.txt
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Verification:
+- git diff --check — clean.
+- npm run typecheck — 0 errors.
+- npm run lint — 0 errors, exactly 7 pre-existing warnings.
+- npm run test — 123/123 passing across 8 files.
+- npm run verify — full chain green.
+- npm run build — succeeds, 994 modules transformed.
+- Final diff and changed-file manifest reviewed against the frozen RFC;
+  no tenth file, no journal-data change, no saved-history migration,
+  and no Phase 27 work.
+
+Known limitations:
+- Legacy equity paths are permanently unrecoverable. Their curve,
+  Ending Equity, and comparison series remain reconstructed from
+  current journal trades and must retain the notices introduced here.
+- BacktestResults remain local-only and excluded from Backup & Restore
+  under AD-014.
+- The adjacent non-finite Core Analytics JSON-serialization finding
+  remains open and separately scoped.
+
+---
+
 # Phase 25 — Insights Evidence Transparency
 
 Status:

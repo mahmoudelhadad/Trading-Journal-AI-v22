@@ -16,10 +16,9 @@
  * useBacktests.ts) are separate, later steps layered on top of this
  * function, not part of it.
  *
- * The equity curve (EquityPoint[]) is computed here only as an
- * intermediate input to computeDrawdown() — it is deliberately not
- * part of the returned BacktestResult (types/backtest.ts's file header
- * explains why: recomputable on demand, not persisted).
+ * The equity sequence (EquityPoint[]) is computed once, then used both
+ * for drawdown and to persist the raw cumulative equity path so saved
+ * results remain immutable when underlying trades later change.
  *
  * id/createdAt are generated here, not by the caller — matching
  * filterEngine.ts's own createSavedFilter()/createFilterGroup()
@@ -76,6 +75,7 @@ export function computeBacktestResult(
 
     matchedTradeIds: matched.map((t) => t._tid),
     tradeCount:      matched.length,
+    equityPath:      equitySequence.slice(1).map((p) => p.equity),
 
     summary:        summarizeTrades(matched),
     drawdown,

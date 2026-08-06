@@ -47,6 +47,7 @@ export interface BacktestResultViewProps {
   currentEquity:   number;
   /** matchedTradeIds that no longer resolve to a live trade */
   unresolvedCount: number;
+  legacy?:          boolean;
 }
 
 // ─── Display helper ──────────────────────────────────────────
@@ -63,7 +64,7 @@ const num = (v: number | null): string => (v === null ? '—' : v.toFixed(2));
 
 // ─── Component ───────────────────────────────────────────────
 
-export function BacktestResultView({ result, equityData, currentEquity, unresolvedCount }: BacktestResultViewProps) {
+export function BacktestResultView({ result, equityData, currentEquity, unresolvedCount, legacy }: BacktestResultViewProps) {
   const { summary, drawdown, core, streaks, averageStreaks, longestStreaks, startingCapital } = result;
 
   // Label/value pairs for the core analytics table. Every value is a
@@ -124,6 +125,14 @@ export function BacktestResultView({ result, equityData, currentEquity, unresolv
           </Badge>
         )}
       </div>
+
+      {legacy && (
+        <div style={{ marginBottom: 10 }}>
+          <Badge color={C.gold}>
+            Legacy result — Equity Curve and Ending Equity are reconstructed from current journal trades and are not part of the historical snapshot. All other metrics are stored snapshot values.
+          </Badge>
+        </div>
+      )}
 
       {/* ── KPI row ──────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

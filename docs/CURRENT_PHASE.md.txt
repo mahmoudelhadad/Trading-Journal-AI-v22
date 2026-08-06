@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 25 — Insights Evidence Transparency
+Phase 26 — Immutable Backtest Equity Snapshots
 
 Status:
 
@@ -14,315 +14,206 @@ COMPLETE
 
 ## Objective
 
-Make the Insights page honest about the evidence behind each card,
-without changing what any card says numerically or whether it appears.
-
-Two defects, and only two. The empty state promised "at least 5 trades
-with full data", a minimum nothing enforced — rules fire at n=1, and
-the 5 existed nowhere as a constant, test, or architecture decision.
-And the page header advertised "based on N trades" above cards resting
-on much smaller populations: a setup/session/hour bucket gated at 2, a
-plan-followed subset, a paired planned/actual-R subset, or two
-different populations compared inside one sentence.
-
-Everything else about the current rule behaviour is unqualified, not
-incorrect. So this phase introduces no threshold, suppresses nothing,
-and scores nothing.
+Make every newly saved BacktestResult an immutable analytical snapshot
+for the equity outputs that were previously rebuilt from mutable
+journal trades: the Equity Curve, Ending Equity, and comparison return
+series. Preserve old saved results without fabricating a historical
+path, and identify their reconstructed current-data outputs clearly.
 
 ---
 
 ## Scope (as delivered)
 
-Nine string-literal replacements in pages/Insights.tsx — lines 213,
-215, 217, 218, 224, 232, 243, 256, 271 — and nothing else.
+New results persist one additive field:
 
-1. R-01 header — "Automated analysis across ${n} visible trades ·
-   individual insights may cover a smaller subset · Updated in real
-   time". Deliberately hedged with "may", so it stays true for the
-   cards genuinely backed by the whole population.
-2. R-02 empty state — "Add more trades with relevant setup, session,
-   plan, and R data to generate more insights". "Relevant", not
-   "complete": different rules use different eligible populations, so
-   a universal completeness claim would have recreated the removed
-   falsehood in new words. No number replaces the 5.
-3. R-03 Avoid Setup, R-04 Best Session, R-05 Best Entry Hour, R-06
-   Risky Hour — each gained "across ${...n} trades" for its own
-   bucket.
-4. R-07 Plan Adherence — gained both subset sizes, planYes.length and
-   planNo.length.
-5. R-08 Execution Ratio — gained "across ${execPairs.length} trades
-   with both a planned and an actual R".
-6. R-09 Planned vs Real R — names BOTH populations: planned "across
-   trades that have a planned R", actual "across all ${n} trades".
+`equityPath?: number[]`
 
-Every identifier interpolated was ALREADY in scope in the same useMemo
-closure. No variable, expression, import, or type was added — which is
-what made the change provably string-only.
+It contains raw, unrounded cumulative equity after each matched trade,
+in matched order. `startingCapital` is the implicit point zero; `[]`
+means zero matched trades. Presence of the property is the sole frozen-
+result discriminator. Absence — not null and not an empty array — means
+legacy.
 
-Two cards were deliberately left untouched because they already
-disclosed their population: Best Setup (line 212) and Overall Negative
-P/L (line 247). The win-rate and avg-R cards were also left alone —
-their population is the header's n, already named per AD-017 — as were
-the streak cards, whose displayed number is the finding itself rather
-than an estimate from a sample.
+`computeBacktestResult()` captures the path from the equity sequence it
+already computes for drawdown. The result page uses it for the Equity
+Curve and Ending Equity. Comparison uses it for each result's
+percentage-return series. Current journal trades remain relevant to new
+results only for existing traceability such as unresolved matched IDs,
+not as the source of these frozen analytical outputs.
+
+Legacy results are not migrated, backfilled, or rewritten. Their
+original paths were never stored and cannot be authenticated or
+recovered. They retain the existing current-trade reconstruction, with
+a prominent notice covering the Equity Curve and Ending Equity; each
+legacy side in a comparison receives its own notice. Stored legacy
+metrics remain unchanged.
+
+AD-018 records the architecture change and supersedes AD-015 clause 2
+only. AD-015 clauses 1 and 3 remain approved. AD-015 is preserved as
+historical record, and AD-014 is untouched.
 
 ---
 
 ## Files Changed
 
-Modified (1):
-- src/pages/Insights.tsx
+Production and tests (6):
+- src/types/backtest.ts
+- src/calculations/backtest.ts
+- src/pages/Backtest.tsx
+- src/components/backtest/BacktestResultView.tsx
+- src/components/backtest/BacktestComparison.tsx
+- src/calculations/backtest.test.ts
 
-Documentation, at phase close only (2):
+Documentation, at close only (3):
+- docs/ARCHITECTURE_DECISIONS.md.txt
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Three files, exactly matching the frozen RFC's Allowed Files list —
-proven by SHA-256 manifest diff against a 170-entry pre-flight
-baseline, not by inspection. No AD-018: no architectural decision was
-made (see Approved Decisions).
+Nine files total, exactly matching the frozen RFC. No tenth file.
 
 ---
 
 ## Out of Scope (respected)
 
-- No minimum sample threshold, global or per-rule. None was invented,
-  and the repository establishes none.
-- No gating, suppression, or hiding of any insight.
-- No confidence qualifier system, level, or statistical score.
-- No trigger, threshold, formula, title, card type/colour, or ordering
-  change. The values 0.6, 0.4, 0.5, 0, 2, 3, -0.5 and 10 are all
-  unchanged.
-- No filtering, hook, or analytics-input change. calculations/
-  analytics.ts, rolling.ts, streaks.ts and visibleTrades.ts were not
-  edited at all.
-- No storage key, no DATABASE_VERSION bump (still 1), no migration, no
-  backfill, no dependency.
-- No test file, and no component-test infrastructure — no jsdom, no
-  testing-library.
-- Rule 12's mixed-population comparison and its avgPlanned <= 0 type
-  selector were NOT corrected; R-09 discloses the mismatch in words
-  only.
-- The dead avgR !== null guard, Best Setup's inline win-rate
-  denominator under AD-017, the Best/Avoid and Best/Risky same-bucket
-  behaviour, the unused bestDay/worstDay computation, and the
-  conditional hook call with its eslint suppressions were all left
-  untouched.
-- The 7 pre-existing lint warnings remain, including the two in
-  Insights.tsx itself.
+- No migration, lazy backfill, or rewrite of a legacy BacktestResult.
+- No edit, deletion, or re-save of a historical control result.
+- No journal-trade edit, deletion, import, seed, or Futures data.
+- No full matched-trade snapshot and no persisted chart presentation
+  objects or separately rounded/normalised series.
+- No new generic equity helper; accumulation at render disappears for
+  new results and the legacy fallback remains local.
+- No storage-key change, DATABASE_VERSION bump, IndexedDB store,
+  resolver, Sync Engine, cutover, or Backup & Restore expansion.
+- No dependency or test-infrastructure change.
+- No AD-014 amendment. No change to AD-015 clauses 1 or 3.
+- No AD-017 BacktestComparison Win Rate label cleanup.
+- No fix for the pre-existing non-finite Avg Risk JSON-serialization
+  behaviour.
+- No commit, stage, tag, push, or Phase 27 work.
 
 ---
 
-## Verification (all performed)
+## Automated Verification
 
-Automated:
 - git diff --check — clean.
 - npm run typecheck — 0 errors.
 - npm run lint — 0 errors, exactly 7 pre-existing warnings.
-- npm run test — 116/116 passing across 8 files, unchanged.
+- npm run test — 123/123 passing across 8 files.
 - npm run verify — full chain green.
-- npm run build — succeeds, 994 modules (a string change adds no
-  module to the runtime import graph).
-- All six gates were re-measured on the untouched tree at pre-flight
-  before any edit, and matched the Phase 24 documented figures exactly,
-  so the baseline was measured rather than assumed.
+- npm run build — succeeds, 994 modules transformed.
 
-Evidence-based, not inspection-based:
-- V-diff PASS. git diff --numstat reported exactly "9 9" — nine line
-  replacements, nothing inserted or removed; 277 lines before and
-  after. No operator, condition, ternary, threshold literal, push
-  order, function call, import, hook call or dependency array appears
-  in the diff. The type: selectors (lines 222, 230, 241) and the Best
-  Setup push (line 212) appear only as unchanged context.
-- V-trigger PASS. A line-by-line comparison against the HEAD blob gave
-  the differing line numbers as exactly 213 215 217 218 224 232 243
-  256 271. Reconstructing the file by restoring ONLY those nine lines
-  from HEAD reproduced the pre-flight SHA-256 byte-for-byte:
-    pre-flight    ec99006cfe2ee99290903bae93dd5fad9b45eff6384dcaac1bb0d23a54aca9f9
-    reconstructed ec99006cfe2ee99290903bae93dd5fad9b45eff6384dcaac1bb0d23a54aca9f9
-    post-change   330d132a7c9656c5d6940ef2be420c98abfdebf929c51c3e5dedf369937df29a
-  Every other byte of the file is therefore provably untouched.
-- V-scope PASS. The 170-entry pre-flight manifest differed, after the
-  production edit, at exactly one entry: src/pages/Insights.tsx.
-- The two Insights.tsx lint warnings (149:11 'bestDay', 150:11
-  'worstDay') survived at the same line numbers. Holding at 7 rather
-  than falling to 5 is positive evidence the deferred dead-computation
-  finding was not opportunistically fixed.
-- Line endings unchanged (LF before and after).
+The test suite contains T-1 through T-8 for the new contract:
+hand-derived raw-path capture; drawdown and endpoint consistency;
+exact JSON round-trip; immutability under source-trade P/L edits;
+immutability when matched trades, including all, are deleted; empty
+matches; null `_netPL`; and the presence-vs-absence legacy
+discriminator.
 
-Manual, in a running browser against the real authenticated account
-with 74 trades, after a hard reload. The "before" captures were
-recorded against the untouched baseline BEFORE any edit was delegated,
-so the comparison is a true diff rather than a recollection.
-- V-1 PASS: unfiltered, 74 trades. 12 cards before, 12 after,
-  identical order, every pre-existing number unchanged, no card added
-  or removed, types/colours/emoji unchanged.
-- V-2 PASS: narrowed to 16 of 74 via the EXISTING saved filter
-  "Green f". 8 cards before, 8 after, identical order, every
-  pre-existing number unchanged, no card added or removed. Applying
-  the filter is a pure in-memory lens and wrote nothing.
-- V-3 PASS: newly disclosed counts checked wherever reachable — Avoid
-  IFVG 15, Best Session NY am 74, Best Entry Hour 10:00 11, Risky Hour
-  8:00 13, Execution Ratio 67; and under the lens, Best Session 16,
-  Best Entry Hour 9:00 9, Execution Ratio 16. The two Best Session
-  figures are cross-consistent at 74 of 74 and 16 of 16.
-- V-4 PASS: the header count matched the active visible population in
-  both captures — 74 and 16, the latter agreeing with the FilterBar
-  chip's "16 of 74".
-- V-6 PASS: card ordering unchanged in both captures.
-- V-5 NOT RUNTIME-OBSERVED: R-02's EmptyState needs at least one trade
-  AND zero insights, a state not safely reachable from existing
-  journal data or filters. Reaching it would have required altering
-  journal data, which the frozen RFC forbids. Recorded as
-  diff-verified only.
-- R-07 NOT RUNTIME-OBSERVED: the Plan Adherence card rendered in
-  NEITHER population, because the journal holds no planFollowed
-  Yes/No pair. Its interpolations are type-checked and its identifiers
-  verified in scope, but the card has not been seen to render.
-  Recorded as diff-verified only.
+---
+
+## Runtime Verification
+
+All frozen steps V-1 through V-6 passed against the real authenticated
+journal without changing journal trades or historical saved results.
+
+- V-1 PASS — new `P26 Immutable Snapshot A` matched 74 trades from a
+  $10,000 start. It rendered Net P&L +$5,286.75, Win Rate (W/L only)
+  26.2% (16W/45L), Profit Factor 1.15, Max Drawdown -$17,383
+  (-53.2%), Ending Equity $15,287, and the complete Equity Curve,
+  Drawdown, Streaks, and Core Analytics. No legacy notice appeared.
+- V-2 PASS — fresh-result values matched the pre-change/Phase 24
+  baseline. Endpoint reconciliation closed exactly before display
+  rounding: $10,000 + $5,286.75 = $15,286.75.
+- V-3 PASS — untouched legacy `V12 Label Check` displayed its stored
+  metrics unchanged and the required result-level legacy notice. Its
+  Equity Curve and Ending Equity remained available as explicitly
+  reconstructed values; Recovery Factor remained `—`.
+- V-4 PASS — new-vs-new comparison displayed no legacy notices.
+  New-vs-legacy displayed exactly one notice, on the legacy side only;
+  comparison KPIs remained available and unqualified.
+- V-5 PASS — after hard reload, snapshot A reloaded with the same KPIs,
+  full path and charts, and Ending Equity, with no legacy notice. This
+  verified `equityPath` through the LocalStorage JSON round-trip.
+- V-6 PASS — saved-result selection and rename continued to work. Only
+  newly created `P26 Immutable Snapshot B` was renamed to
+  `P26 Immutable Snapshot B Renamed`; nothing was deleted and the
+  historical controls were untouched.
+
+---
+
+## Approved Decision
+
+AD-018 — New BacktestResults persist a raw cumulative equity path;
+legacy results remain unmigrated and visibly reconstructed.
+
+AD-018 supersedes AD-015 clause 2 only. It does not rewrite AD-015 and
+does not amend AD-014.
+
+---
+
+## Adjacent Finding
+
+`Avg Risk ($)` rendered as `-$NaN` on the freshly created result and as
+`—` after reload. JSON serialisation converts non-finite numeric values
+such as NaN to null. The value comes from the pre-existing `_rv` / Core
+Analytics path, untouched by Phase 26; it is unrelated to `equityPath`
+and is not a Phase 26 regression. It was recorded, not fixed. The
+equity path itself contained finite values and its endpoint reconciled
+with stored Net P&L.
 
 ---
 
 ## Exit Criteria
 
-- [x] Changed-file set equals the Allowed Files list exactly, proven by
-      manifest diff rather than inspection.
-- [x] Insights.tsx changes are presentation-only; V-diff passes.
-- [x] V-trigger passes — no trigger, threshold, type: selector, title,
-      or ordering change, proven by byte-identity reconstruction.
-- [x] The "at least 5 trades" promise is removed, and the replacement
-      contains no numeric threshold.
-- [x] R-03..R-09 disclose their populations accurately where reachable
-      (V-3); R-02 and R-07 recorded as diff-verified only, by name.
-- [x] The header no longer implies the global count backs every card.
-- [x] No card appeared, disappeared, reordered, or changed a rendered
-      number versus the before captures.
-- [x] All six automated gates green at the pre-flight baseline.
-- [x] No storage key, schema, DATABASE_VERSION, migration, or
-      dependency change.
-- [x] No test file and no test infrastructure added.
-- [x] Documentation updated only at close, only the two files above.
-- [x] No new AD created.
+- [x] New results persist one raw, unrounded equity point per matched
+      trade; empty matches persist `[]`.
+- [x] New result view and comparison consume `equityPath` without
+      rebuilding those analytical outputs from current trades.
+- [x] Editing or deleting source trades cannot mutate a new saved
+      path or any stored metric, proven by tests.
+- [x] JSON persistence preserves a finite `equityPath` exactly.
+- [x] Legacy records remain unmigrated and are discriminated only by
+      absence of `equityPath`.
+- [x] Legacy result and comparison notices accurately qualify only
+      reconstructed equity outputs; stored metrics remain unchanged.
+- [x] AD-018 supersedes AD-015 clause 2 only; AD-014 is untouched.
+- [x] Runtime V-1 through V-6 all pass.
+- [x] Final changed-file manifest contains exactly the frozen 9 files.
+- [x] All six automated gates match the frozen baseline.
+- [x] No data, persistence architecture, dependency, or Phase 27 scope
+      was added.
 
-All exit criteria passed. Phase 25 is closed.
-
----
-
-## Approved Decisions
-
-None. No new architectural decision was made, so no ADR was written and
-docs/ARCHITECTURE_DECISIONS.md.txt was not modified. This phase changes
-presentation text only. Declining to add a component-test harness
-inside a text-only phase is a scoping choice rather than an
-architectural decision: adding jsdom + testing-library would have been
-larger and riskier than the change it protected, and would have
-introduced a new module class to a suite that is entirely pure-function
-tests under calculations/. Playbook §9 requires an ADR for
-architectural decisions and there is none here; Phase 24 set the
-precedent of closing without one. AD-001 through AD-017 unchanged, not
-reopened.
-
-Note that AD-016 recorded small samples reaching fixed-threshold
-analyses as "a known risk, not addressed". Phase 25 does not overturn
-that acceptance — it makes the samples visible without gating them.
+All exit criteria passed. Phase 26 is closed.
 
 ---
 
-## Known Risks
+## Known Risks / Limitations
 
-Introduced by this phase:
-
-- Low: R-02 and R-07 carry diff-verification only, not runtime
-  observation. Their correctness rests on the V-trigger byte-identity
-  proof plus typecheck. R-02's state is close to unreachable by
-  construction — any population with at least one trade produces a
-  win rate of 0% or 100% at n=1, which fires rule 1 — so it is
-  unlikely ever to be observed without editing data.
-- Low: disclosure does not soften imperative wording. "Consider
-  removing it from your playbook" still reads as an instruction even
-  when it now says "across 2 trades". This phase makes evidence
-  visible; it does not adjudicate it.
-- Low: the new header wording is itself a claim. It is deliberately
-  hedged ("may cover a smaller subset") so that cards genuinely backed
-  by the whole population do not make it false. Strengthening it to a
-  universal promise would recreate the defect this phase removed.
-
-Carried forward, unchanged:
-
-- DEFERRED PRODUCT DECISION: minimum sample-size policy, and whether
-  under-threshold rules should be suppressed or qualified. Phase 25
-  deliberately does not settle this and must not be cited as having
-  done so. Discovery established that a global gate over the visible
-  trade count would be the wrong axis, since a large visible set can
-  still contain a 2-trade bucket, a 1-vs-1 plan comparison, or a
-  single execution pair.
-- Low: rule 12's avgR / avgPlanned type selector misbehaves when
-  avgPlanned is 0 or negative, while its body defensively prints 0%;
-  and its avgR !== null guard is dead. R-09 discloses the mixed
-  populations in words but corrects nothing.
-- Low: Best Setup's inline "% win rate" uses an all-trades denominator
-  without naming it — an AD-017 clause-1 gap at a site outside that
-  AD's six-entry label map.
-- Low: Best/Avoid Setup and Best/Risky Hour can name the same bucket
-  when only one is eligible. Confirmed live twice: "Best Session: NY
-  am" now reads "across 74 trades" unfiltered and "across 16 trades"
-  filtered — in both cases the entire visible population, because only
-  one session bucket clears n >= 2. Invisible before this phase,
-  legible now; correcting the rule is out of scope.
-- Low: bestDay / worstDay are computed and never consumed, producing
-  two of the seven lint warnings.
-- Low: the conditional hook call in Insights.tsx and its two eslint
-  suppressions.
-- Low: the same all-trades quantity renders as 22% on Insights
-  (Math.round) and 21.6% in the Backtest table (fr.pct, toFixed(1)) —
-  a display precision difference, not a formula or denominator
-  difference.
-- Low: getWinLossBreakdown's `closed` means DECISIVE, not closed;
-  payoffRatio also returns null when avgLoserDollar is exactly 0;
-  avgCommission's parseFloat tolerance; getWeekKey's timezone
-  dependency at UTC offsets >= +12 or <= -12.
-- Low: the FilterBar chip's "N of M" denominator is the total
-  unfiltered count (Phase 22).
-- Low: calculations/backtest.ts's stale composition header (Phase 24).
-- Medium: onIndexedDbBlocked has no subscriber (G-3, Phase 6h).
-  Unreachable at DATABASE_VERSION = 1, confirmed still 1.
-- Low/Medium items from Phase 6g-2/6h.
-- The 7 pre-existing lint warnings.
+- Legacy equity paths are permanently unrecoverable. Their Equity
+  Curve, Ending Equity, and comparison series depend on currently
+  resolvable journal trades and must retain the Phase 26 notices.
+- BacktestResults remain local-only, capped Class-B data and remain
+  excluded from Backup & Restore under AD-014.
+- The adjacent non-finite Avg Risk JSON-serialization issue remains
+  open and separately scoped.
+- The 7 pre-existing lint warnings remain.
+- Previously recorded risks and deferred items from earlier phases
+  remain unchanged unless explicitly superseded by AD-018 clause 2.
 
 ---
 
 ## Repository Statistics (measured at phase close)
 
-- src/ files: 157
-- .ts files: 77 · .tsx files: 70 · .test.ts files: 8
-  (the .test.ts files are a subset of the .ts count, matching the
-  convention used in earlier entries)
-- Tests: 116 passing across 8 files
-- Production build: 994 modules transformed
-- tsc: 0 errors · eslint: 0 errors, 7 warnings
-
-Identical to Phase 24's close on every figure. This phase adds no file,
-no module, and no test; the only production delta is nine string
-literals inside one existing file.
+- Tests: 123 passing across 8 files.
+- Production build: 994 modules transformed.
+- tsc: 0 errors.
+- eslint: 0 errors, 7 warnings.
+- Changed files: exactly 9; no new source or test file.
 
 ---
 
 ## Next Phase
 
-Not yet selected — requires the standard re-derivation-and-approval
-workflow before any scope is set. No Phase 26 scope has been defined or
-implied.
-
-Statistical-confidence thresholds and rule-specific minimum-sample
-policy remain an open product decision, unchanged by Phase 25 and
-requiring separate approval before any future phase acts on them. The
-adjacent Insights findings listed under Known Risks — rule 12's mixed
-populations, the dead guard, the AD-017 denominator label, the
-same-bucket behaviour, and the dead bestDay/worstDay computation — are
-separable and remain unscoped.
-
-Also still open and unscoped, unchanged: Trade Review integration
-(components/trade/TradeReview.tsx remains a dead-end capability with its
-persistence layer already built and unused), Prop Firm Tracker and
-Position Size Calculator (never migrated from the original app), Sync
-Engine enablement (built, flagged off), and the AI Insights Layer.
+Not selected. Phase 27 has not started and no scope is implied by this
+close. Any next phase requires the standard re-derivation and approval
+workflow.

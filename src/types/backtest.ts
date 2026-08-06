@@ -20,14 +20,9 @@
  * derivation of the matched trade set and is cheap to recompute if
  * ever needed again.
  *
- * The equity curve (drawdown.ts's EquityPoint[]) is deliberately NOT
- * part of this type — only its derived summary (`drawdown`,
- * DrawdownResult) is persisted. The full per-trade sequence is
- * recomputable on demand from `matchedTradeIds` + `startingCapital`
- * via buildEquitySequence(), consistent with AD-014's framing of a
- * backtest result as regenerable from its inputs. This was the sole
- * Blocking finding of the phase's pre-implementation review, resolved
- * before this file was written.
+ * The raw cumulative equity path is persisted alongside its derived
+ * summary (`drawdown`, DrawdownResult), so a stored result remains an
+ * immutable historical snapshot when underlying trades later change.
  */
 
 import type { FilterGroup } from '@calculations/filterEngine.js';
@@ -51,6 +46,8 @@ export interface BacktestResult {
 
   matchedTradeIds: number[];
   tradeCount:      number;
+  /** Raw, unrounded cumulative equity after each matched trade, in matched order. startingCapital is implicit point 0; [] means zero matches; ABSENT (not [] or null) on legacy records, and presence is the sole legacy discriminator. */
+  equityPath?:     number[];
 
   summary:        TradeSummary;
   drawdown:       DrawdownResult;

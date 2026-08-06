@@ -1767,3 +1767,147 @@ user-narrowable and so raised the cost of an ambiguous metric).
 - A Class-B function in rolling.ts gains a documented contract, at
   which point it becomes eligible for the coverage this phase
   deliberately withheld.
+
+---
+
+# AD-018
+
+## Title
+
+New BacktestResults persist a raw cumulative equity path; legacy
+results remain unmigrated and visibly reconstructed.
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-05
+
+---
+
+## Context
+
+AD-015 clause 2 deliberately excluded the full equity curve from
+BacktestResult because it was considered recomputable from
+matchedTradeIds plus startingCapital. That was valid for a regenerable
+result, but it is not valid for an immutable historical snapshot.
+Opening a saved result resolved matchedTradeIds against current journal
+trades and rebuilt its equity curve, Ending Equity, and comparison
+return series from current _netPL values. Editing or deleting a matched
+trade could therefore change those analytical outputs while the stored
+summary, drawdown, streak, and core metrics remained fixed.
+
+The original path of a result created before the path was persisted is
+not recoverable. Reconstructing it from current trades and writing that
+reconstruction back would fabricate history rather than migrate it.
+
+---
+
+## Decision
+
+1. Every new BacktestResult persists equityPath: the raw, unrounded
+   cumulative equity after each matched trade, in matched order.
+   startingCapital is the implicit point zero. The array has exactly
+   tradeCount entries; [] means zero matched trades. A null _netPL
+   contribution repeats the preceding cumulative value, matching the
+   calculation contract used when the result is created.
+2. Presence of equityPath is the sole discriminator for a new frozen
+   result. For such a result, the Equity Curve, Ending Equity, and both
+   sides of a comparison return chart derive from equityPath and
+   startingCapital, not from current journal trades.
+3. Absence of equityPath identifies a legacy result. Legacy records are
+   not migrated, backfilled, or rewritten. Their Equity Curve and
+   Ending Equity may continue to be reconstructed from currently
+   resolvable journal trades, but the result view must label those two
+   outputs as reconstructed current-data values rather than part of the
+   historical snapshot. A comparison must label each legacy series on
+   its own side. Stored legacy metrics remain unchanged.
+4. AD-015 clause 2 only is superseded. Its prohibition on a persisted
+   equity curve and its recomputation requirement no longer govern new
+   BacktestResults. AD-015 clauses 1 and 3 remain approved and
+   unchanged. AD-014 is not amended: BacktestResults remain capped,
+   unsynced Class-B LocalStorage data outside the resolver, IndexedDB,
+   Sync Engine, cutover, and Backup & Restore.
+
+---
+
+## Reason
+
+The saved-result card must not combine frozen metrics with a curve and
+endpoint that silently move when source trades change. Persisting the
+already-computed cumulative path is the smallest sufficient additive
+snapshot: one numeric array serves the absolute equity chart, Ending
+Equity, and percentage-return comparison without persisting full
+trades or chart presentation objects. Raw values preserve the existing
+unrounded comparison precision; display rounding remains a rendering
+concern.
+
+Keeping equityPath optional provides backward compatibility without a
+version field or a storage migration. Explicit legacy notices preserve
+the utility of old results without claiming that an unrecoverable path
+is historical.
+
+---
+
+## Consequences
+
+- New saved results remain analytically and visually stable after
+  matched trades are edited or deleted and after a JSON persistence
+  round-trip.
+- Storage grows by one number per matched trade. The existing cap of 50
+  results still applies.
+- Legacy results remain readable and retain their stored metrics, but
+  their reconstructed curve, Ending Equity, and comparison series are
+  permanently qualified. This limitation cannot be removed for
+  already-saved records because their original paths were never stored.
+- No DATABASE_VERSION bump, migration, sync change, resolver change,
+  IndexedDB change, cutover change, backup expansion, or new dependency
+  is introduced.
+- matchedTradeIds and unresolved-count disclosure remain for
+  traceability; they are not the analytical source for a new result's
+  frozen equity outputs.
+
+---
+
+## Alternatives Considered
+
+- Persist full matched trades. Rejected: duplicates journal records and
+  greatly exceeds the information needed by the affected outputs.
+- Persist rounded chart points or separate absolute and percentage
+  presentation series. Rejected: duplicates derivations, bakes UI shape
+  into storage, and can lose comparison precision.
+- Persist per-trade net P/L instead of cumulative equity. Sufficient,
+  but rejected because the cumulative sequence is already computed at
+  run time and can be consumed directly without render-time
+  accumulation.
+- Migrate or lazily backfill legacy records. Rejected: current trades
+  cannot authenticate or reproduce the original historical path, so
+  backfill would freeze a reconstruction as if it were history.
+- Suppress legacy curves and Ending Equity entirely. Rejected: clear,
+  local notices preserve useful current-data reconstruction without
+  misrepresentation.
+
+---
+
+## Spec References
+
+AD-014 (BacktestResults remain unsynced Class-B local data); AD-015
+(clauses 1 and 3 remain in force; clause 2 is superseded only by this
+decision); the Phase 26 Immutable Backtest Equity Snapshots RFC.
+
+---
+
+## Revisit Only If
+
+- BacktestResults gain a concrete cross-device sync or backup
+  requirement, which would reopen AD-014 independently of this equity
+  snapshot decision.
+- A future analytical output requires historical trade attributes not
+  derivable from the stored result and equityPath; that output needs its
+  own snapshot contract rather than silently reading mutable trades.

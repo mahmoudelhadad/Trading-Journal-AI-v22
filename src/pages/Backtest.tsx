@@ -135,6 +135,30 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
   const equity = useMemo(() => {
     const startingCapital = selectedResult?.startingCapital ?? 0;
 
+    if (selectedResult?.equityPath !== undefined) {
+      const equityData: EquityCurvePoint[] = [
+        { x: 0, eq: startingCapital, above: startingCapital, below: startingCapital, ref: startingCapital },
+      ];
+
+      selectedResult.equityPath.forEach((rawEquity, i) => {
+        const eq = Math.round(rawEquity * 100) / 100;
+        equityData.push({
+          x:     i + 1,
+          eq,
+          above: eq >= startingCapital ? eq : startingCapital,
+          below: eq <  startingCapital ? eq : startingCapital,
+          ref:   startingCapital,
+        });
+      });
+
+      return {
+        equityData,
+        currentEquity: selectedResult.equityPath.length > 0
+          ? selectedResult.equityPath[selectedResult.equityPath.length - 1]
+          : startingCapital,
+      };
+    }
+
     let running = startingCapital;
     const equityData: EquityCurvePoint[] = [
       { x: 0, eq: startingCapital, above: startingCapital, below: startingCapital, ref: startingCapital },
@@ -180,6 +204,12 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
 
     const returnSeries = (result: BacktestResult): (number | null)[] => {
       const cap = result.startingCapital;
+      if (result.equityPath !== undefined) {
+        return [
+          cap > 0 ? 0 : null,
+          ...result.equityPath.map((e) => cap > 0 ? ((e - cap) / cap) * 100 : null),
+        ];
+      }
       // cap <= 0 makes a percentage return undefined — emit null
       // rather than Infinity/NaN.
       const series: (number | null)[] = [cap > 0 ? 0 : null];
@@ -232,6 +262,8 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
           <BacktestComparison
             resultA={selectedResult}
             resultB={comparisonResult}
+            legacyA={selectedResult.equityPath === undefined}
+            legacyB={comparisonResult.equityPath === undefined}
             data={comparisonData}
             onClose={() => setComparisonId(null)}
           />
@@ -243,6 +275,7 @@ export function BacktestPage({ allTrades, accounts }: BacktestPageProps) {
             equityData={equity.equityData}
             currentEquity={equity.currentEquity}
             unresolvedCount={resolved.unresolvedCount}
+            legacy={selectedResult.equityPath === undefined}
           />
         </div>
       ) : null}

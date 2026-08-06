@@ -32,6 +32,7 @@ import type { RawTradeContent } from '@apptypes/trade.js';
 
 const accounts: Account[] = [{ id: 'acc_1', name: 'Main', capital: 1000 } as Account];
 const STARTING_CAPITAL = 1000;
+const TOLERANCE = 1e-9;
 
 function trade(tid: number, exitPrice: string): RawTradeContent {
   return {
@@ -130,9 +131,84 @@ describe('computeBacktestResult', () => {
     expect(result.name).toBe('My Setup');
   });
 
-  it('does not persist a full equity-curve array — regression guard for the resolved blocking item', () => {
-    const result = computeBacktestResult(greenOnly, trades, STARTING_CAPITAL);
-    expect(result).not.toHaveProperty('equitySequence');
+  // Phase 26 deliberately reverses the prior acceptance criterion:
+  // AD-015 clause 2 is superseded by AD-018, so equityPath is persisted.
+  it('T-1 persists the independently hand-derived raw equity path with one point per matched trade', () => {
+    const result = computeBacktestResult(createFilterGroup('AND', []), trades, STARTING_CAPITAL);
+
+    expect(result).toHaveProperty('equityPath');
+    expect(result.equityPath).toHaveLength(result.tradeCount);
+    expect(result.equityPath).toEqual([1100, 1200, 1150, 1250, 1200]);
+  });
+
+  it('T-2 keeps equityPath consistent with stored drawdown and its endpoint within tolerance of net P&L', () => {
+    const result = computeBacktestResult(createFilterGroup('AND', []), trades, STARTING_CAPITAL);
+
+    expect(result.drawdown.maxDrawdownDollar).toBe(50);
+    expect(result.equityPath).toEqual([1100, 1200, 1150, 1250, 1200]);
+    const endpoint = result.equityPath && result.equityPath.length > 0
+      ? result.equityPath[result.equityPath.length - 1]
+      : STARTING_CAPITAL;
+    expect(Math.abs(endpoint - (STARTING_CAPITAL + result.summary.netPL))).toBeLessThan(TOLERANCE);
+  });
+
+  it('T-3 preserves equityPath exactly through a JSON round-trip', () => {
+    const result = computeBacktestResult(createFilterGroup('AND', []), trades, STARTING_CAPITAL);
+    const saved = JSON.parse(JSON.stringify(result)) as typeof result;
+
+    expect(saved.equityPath).toEqual([1100, 1200, 1150, 1250, 1200]);
+    expect(saved.equityPath).toEqual(result.equityPath);
+  });
+
+  it('T-4 leaves the saved path and every stored metric unchanged when source trades keep ids but change net P&L', () => {
+    const result = computeBacktestResult(createFilterGroup('AND', []), trades, STARTING_CAPITAL);
+    const saved = JSON.parse(JSON.stringify(result)) as typeof result;
+    const snapshot = JSON.parse(JSON.stringify(saved)) as typeof result;
+    const replacedTrades = trades.map((t, i) => ({ ...t, _netPL: (i + 1) * 1000 }));
+
+    expect(replacedTrades.map((t) => t._tid)).toEqual(saved.matchedTradeIds);
+    expect(replacedTrades.map((t) => t._netPL)).toEqual([1000, 2000, 3000, 4000, 5000]);
+    expect(saved.equityPath).toEqual([1100, 1200, 1150, 1250, 1200]);
+    expect(saved).toEqual(snapshot);
+  });
+
+  it('T-5 leaves the saved path and every stored metric unchanged when matched source trades are deleted, including all', () => {
+    const result = computeBacktestResult(createFilterGroup('AND', []), trades, STARTING_CAPITAL);
+    const saved = JSON.parse(JSON.stringify(result)) as typeof result;
+    const snapshot = JSON.parse(JSON.stringify(saved)) as typeof result;
+    const withoutMatchedTrades = trades.filter((t) => !saved.matchedTradeIds.includes(t._tid));
+
+    expect(withoutMatchedTrades).toEqual([]);
+    expect(saved.equityPath).toEqual([1100, 1200, 1150, 1250, 1200]);
+    expect(saved).toEqual(snapshot);
+  });
+
+  it('T-6 persists an empty equityPath when no trades match', () => {
+    const result = computeBacktestResult(matchesNothing, trades, STARTING_CAPITAL);
+
+    expect(result.equityPath).toEqual([]);
+  });
+
+  it('T-7 retains a point with repeated cumulative equity for a null _netPL', () => {
+    const nullThenWin = [
+      { ...trades[0], _tid: 6, _netPL: null },
+      { ...trades[0], _tid: 7 },
+    ];
+    const result = computeBacktestResult(createFilterGroup('AND', []), nullThenWin, STARTING_CAPITAL);
+
+    expect(result.tradeCount).toBe(2);
+    expect(result.equityPath).toEqual([1000, 1100]);
+  });
+
+  it('T-8 treats absence of equityPath as legacy and never as a frozen snapshot', () => {
+    const result = computeBacktestResult(matchesNothing, trades, STARTING_CAPITAL);
+    const { equityPath: _equityPath, ...legacyRecord } = result;
+
+    expect(_equityPath).toEqual([]);
+    expect('equityPath' in legacyRecord).toBe(false);
+    expect((legacyRecord as Partial<typeof result>).equityPath).toBeUndefined();
+    expect('equityPath' in result).toBe(true);
+    expect(result.equityPath).toEqual([]);
   });
 
   // ── Phase 24 — Recovery Factor wiring ──────────────────────

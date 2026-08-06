@@ -51,6 +51,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import { loadAccounts, saveAccounts } from '@services/localDatabase.js';
 import { DEFAULT_ACCOUNTS } from '@constants/lists.js';
 import type { Account, AccountContent } from '@apptypes/account.js';
@@ -65,6 +66,61 @@ import { reportLocalPersistenceFailure } from '@services/localPersistenceEvents.
 // '@hooks/useAccounts.js'` call site (10+ files) continues to work
 // completely unchanged. See types/account.ts for the full rationale.
 export type { Account, AccountContent };
+
+export type DeleteAccountResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'last_account' | 'referenced_by_trades' | 'not_found';
+    };
+
+export interface AccountDeletionPlan {
+  result: DeleteAccountResult;
+  accounts: Account[];
+}
+
+/**
+ * Pure account-deletion planner. `activeTrades` is App's unfiltered
+ * `rawTrades` read path, so tombstoned trades are excluded before this
+ * boundary. `now` is supplied to keep repeated evaluation deterministic.
+ */
+export function planAccountDeletion(
+  accounts: Account[],
+  id: string,
+  activeTrades: readonly { accountId?: string }[],
+  now: string,
+): AccountDeletionPlan {
+  const activeCount = accounts.filter((account) => account.deletedAt === null).length;
+  if (activeCount <= 1) {
+    return { result: { ok: false, reason: 'last_account' }, accounts };
+  }
+
+  const target = accounts.find((account) => account.id === id && account.deletedAt === null);
+  if (!target) {
+    return { result: { ok: false, reason: 'not_found' }, accounts };
+  }
+
+  if (activeTrades.some((trade) => trade.accountId === id)) {
+    return { result: { ok: false, reason: 'referenced_by_trades' }, accounts };
+  }
+
+  if (target.baseUpdatedAt === null) {
+    return {
+      result: { ok: true },
+      accounts: accounts.filter((account) => account.id !== id),
+    };
+  }
+
+  const withTombstone: Account = { ...target, deletedAt: now };
+  const tombstoned: Account = {
+    ...withTombstone,
+    ...refreshForLocalWrite(withTombstone, now),
+  };
+  return {
+    result: { ok: true },
+    accounts: accounts.map((account) => (account.id === id ? tombstoned : account)),
+  };
+}
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -103,11 +159,13 @@ export interface UseAccountsReturn {
    */
   editAccount: (account: AccountContent) => void;
   /**
-   * Remove an account by ID.
-   * Matches original: delAccount(id) → setAccounts(p => p.filter(...))
-   * Note: caller is responsible for re-assigning trades if needed.
+   * Remove an account by ID only when no active raw trade references it.
+   * The explicit result lets the UI distinguish both deletion guards.
    */
-  deleteAccount: (id: string) => void;
+  deleteAccount: (
+    id: string,
+    activeTrades: readonly { accountId?: string }[],
+  ) => DeleteAccountResult;
 }
 
 // ─── Hook ────────────────────────────────────────────────────
@@ -232,21 +290,25 @@ export function useAccounts(): UseAccountsReturn {
    * "how many accounts do I have." Matches original AccManager guard
    * (accounts.length > 1) in spirit.
    */
-  const deleteAccount = useCallback((id: string) => {
+  const deleteAccount = useCallback((
+    id: string,
+    activeTrades: readonly { accountId?: string }[],
+  ): DeleteAccountResult => {
     const now = new Date().toISOString();
-    setStoredAccounts((prev) => {
-      const activeCount = prev.filter((a) => a.deletedAt === null).length;
-      if (activeCount <= 1) return prev; // Guard
-      const target = prev.find((a) => a.id === id);
-      if (!target || target.deletedAt !== null) return prev;
-      if (target.baseUpdatedAt === null) {
-        return prev.filter((a) => a.id !== id);
-      }
-      const withTombstone: Account = { ...target, deletedAt: now };
-      const tombstoned: Account = { ...withTombstone, ...refreshForLocalWrite(withTombstone, now) };
-      return prev.map((a) => (a.id === id ? tombstoned : a));
+    let result: DeleteAccountResult = { ok: false, reason: 'not_found' };
+
+    // Called only from AccManager's Delete click. flushSync makes the
+    // latest-state updater decision available before that event returns.
+    flushSync(() => {
+      setStoredAccounts((prev) => {
+        const plan = planAccountDeletion(prev, id, activeTrades, now);
+        result = plan.result;
+        return plan.accounts;
+      });
     });
-    notifyLocalMutation('accounts');
+
+    if (result.ok) notifyLocalMutation('accounts');
+    return result;
   }, []);
 
   return { accounts, getAccount, addAccount, editAccount, deleteAccount, hydrated };

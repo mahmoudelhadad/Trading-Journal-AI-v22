@@ -25,7 +25,7 @@ import { FormField } from '@components/ui/FormField.js';
 import { Input } from '@components/ui/Input.js';
 import { Divider } from '@components/ui/Divider.js';
 import { SectionHeader } from '@components/ui/SectionHeader.js';
-import type { Account, AccountContent } from '@hooks/useAccounts.js';
+import type { Account, AccountContent, DeleteAccountResult } from '@hooks/useAccounts.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ export interface AccManagerProps {
   // addAccount/editAccount are what actually stamp/merge it.
   onAdd:    (account: AccountContent) => void;
   onEdit:   (account: AccountContent) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string) => DeleteAccountResult;
   onClose:  () => void;
 }
 
@@ -52,6 +52,7 @@ interface EditState {
 export function AccManager({ accounts, onAdd, onEdit, onDelete, onClose }: AccManagerProps) {
   const [form, setForm] = useState({ name: '', capital: '10000', color: '#3B82F6' });
   const [editing, setEditing] = useState<EditState | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   function setField(k: keyof typeof form) {
     return (v: string) => setForm((p) => ({ ...p, [k]: v }));
@@ -74,6 +75,17 @@ export function AccManager({ accounts, onAdd, onEdit, onDelete, onClose }: AccMa
     if (!editing) return;
     onEdit({ id: editing.id, name: editing.name.trim() || 'Account', capital: parseFloat(editing.capital) || 10000, color: editing.color });
     setEditing(null);
+  }
+
+  function deleteAcc(id: string) {
+    const result = onDelete(id);
+    if (result.ok) {
+      setDeleteError(null);
+      return;
+    }
+    setDeleteError(result.reason === 'referenced_by_trades'
+      ? 'This account cannot be deleted because it is referenced by active trades. Reassign or delete those trades first.'
+      : null);
   }
 
   return (
@@ -120,13 +132,17 @@ export function AccManager({ accounts, onAdd, onEdit, onDelete, onClose }: AccMa
                     </div>
                     <button onClick={() => startEdit(a)} style={{ background: '#1A3A6B', border: 'none', color: C.blue, borderRadius: 5, padding: '3px 9px', fontSize: 10, marginRight: 4, cursor: 'pointer' }}>Edit</button>
                     {accounts.length > 1 && (
-                      <button onClick={() => onDelete(a.id)} style={{ background: '#3A1A1A', border: 'none', color: C.red, borderRadius: 5, padding: '3px 8px', fontSize: 10, cursor: 'pointer' }}>Delete</button>
+                      <button onClick={() => deleteAcc(a.id)} style={{ background: '#3A1A1A', border: 'none', color: C.red, borderRadius: 5, padding: '3px 8px', fontSize: 10, cursor: 'pointer' }}>Delete</button>
                     )}
                   </div>
                 )}
               </div>
             );
           })}
+
+          {deleteError && (
+            <div style={{ color: C.red, fontSize: 11, marginBottom: 10 }}>{deleteError}</div>
+          )}
 
           <Divider />
           <SectionHeader color={C.teal} label="Add New Account" />

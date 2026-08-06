@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 29 — Recovery-Complete Delete All
+Phase 30 — Referenced-Account Deletion Safety
 
 Status:
 
@@ -14,148 +14,154 @@ COMPLETE
 
 ## Objective
 
-Make the visible Delete ALL trade action follow the existing Recovery Bin
-deletion-safety workflow so it no longer uniquely bypasses recoverable
-deletion while single-row and selected-row deletion remain recoverable.
-
-Phase 29 provides parity with existing Recovery Bin semantics. It does not
-introduce stronger persistence guarantees.
+Prevent deletion of an account while one or more active raw journal trades
+still reference it, without modifying those trades or changing the existing
+valid account-deletion lifecycle.
 
 ---
 
 ## Delivered Scope
 
-- Added deterministic batch construction for existing-shape Recovery Bin
-  entries.
-- Added `softDeleteMany()` with an empty-input no-op and one functional state
-  append for a nonempty batch.
-- Centralized the established trade Recovery Bin label convention.
-- Added an App-owned recoverable Delete ALL wrapper.
-- Routed RawPage's Delete ALL contract through that wrapper instead of the
-  raw `deleteAllTrades()` callback.
-- Replaced the irreversible Delete ALL confirmation with exact recoverability
-  wording.
-- Added focused pure Node tests without jsdom, React Testing Library, new
-  dependencies, or test-configuration changes.
+- Added an authoritative referenced-active-trade guard to
+  `useAccounts.deleteAccount`.
+- Added an explicit synchronous `DeleteAccountResult` contract.
+- Routed the current unfiltered active `rawTrades` collection from App into
+  the deletion boundary.
+- Preserved last-active-account protection and deterministic precedence.
+- Preserved existing valid unsynced purge and synced tombstone deletion
+  behavior.
+- Added exact inline blocked-deletion feedback in Account Manager.
+- Added focused pure Node tests without jsdom, React Testing Library, a new
+  dependency, or test-configuration changes.
 
 ---
 
 ## Files Changed
 
-Production (5):
-- src/calculations/recoveryBin.ts
-- src/hooks/useRecoveryBin.ts
+Production (3):
+- src/hooks/useAccounts.ts
 - src/App.jsx
-- src/pages/Raw.tsx
-- src/components/trade/TradeTable.tsx
+- src/components/account/AccManager.tsx
 
 Tests (1):
-- src/calculations/recoveryBin.test.ts (new)
+- src/hooks/useAccounts.test.ts (new)
 
 Documentation (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Eight files total, exactly matching the approved close manifest.
+Six files total, exactly matching the approved close manifest.
 
 ---
 
-## Recovery Contract
+## Referenced-Account Definition
 
-- Delete ALL snapshots every currently active `RawTrade` targeted by the
-  operation.
-- Exactly one new Recovery Bin entry is created per targeted active trade.
-- The original raw object/data and every raw field are retained; no enriched
-  projection is stored.
-- Original `_tid` values are preserved exactly.
-- No captured trade is omitted or duplicated within the new batch.
-- Empty input creates no Recovery Bin entries.
-- The persisted Recovery Bin entry schema and storage key are unchanged.
+A reference is an active trade from App's current unfiltered `rawTrades`
+collection whose persisted/raw `accountId` strictly equals the target
+account ID:
 
----
+`trade.accountId === target account ID`
 
-## Batch Semantics
-
-- `RecoveryBinCapture<T>` contains only `item` and `label`.
-- Entry construction receives one operation timestamp and one unique
-  `nextId('recovery')` result per capture.
-- Every entry in one batch shares the operation timestamp.
-- Entry order matches snapshot/capture order deterministically.
-- `softDeleteMany()` appends all new entries through one functional Recovery
-  Bin state update rather than N independent updates.
-- Existing `softDelete(item, label)` retains its public behavior and produces
-  the established single-entry shape.
+The population excludes trade tombstones, Recovery Bin snapshots, backups,
+Restore Points, saved Backtest IDs, remote-only records, and filtered or
+enriched trade projections.
 
 ---
 
-## Delete Ordering
+## Authoritative Guard Boundary
 
-The implemented order is:
+The implemented ownership flow is:
 
-1. Snapshot current active `rawTrades`.
-2. Map the snapshot to Recovery captures in snapshot order.
-3. Invoke `softDeleteMany(captures)`.
-4. Invoke the existing `deleteAllTrades()` lifecycle.
-5. Preserve TradeTable's existing selection-clearing behavior.
+1. App owns current active `rawTrades` and active accounts.
+2. App passes `rawTrades` to `useAccounts.deleteAccount` at deletion time.
+3. `useAccounts` evaluates the deletion decision against the latest account
+   state inside its functional state updater.
+4. AccManager only interprets the returned result.
 
-Recovery state-update invocation precedes active deletion invocation. This
-ordering is not a durable storage acknowledgment.
-
----
-
-## Exact Confirmation Wording
-
-"Delete ALL active trades? They will be moved to the Recovery Bin and can be restored from there."
-
-The wording intentionally makes no promise about cloud backup, Sync,
-automatic Restore Points, or durability under storage failure.
+Neither App nor AccManager duplicates the account-reference policy. No new
+service, provider, global state, or production helper file was introduced.
 
 ---
 
-## Restore All Compatibility
+## DeleteAccountResult Contract
 
-- Existing Restore All is unchanged.
-- It already consumes multiple non-expired Recovery Bin entries, returns
-  their original `item` payloads, and clears the bin in one state update.
-- App continues to restore all returned records through one `importTrades()`
-  call, preserving supplied `_tid` values under the existing import path.
-- Existing ordering, retention, and `_tid` conflict policies are unchanged.
-- Restore All continues to restore every current bin entry, including older
-  entries unrelated to the latest Delete ALL operation.
+Supported results are exactly:
 
----
+- `{ ok: true }`
+- `{ ok: false, reason: 'last_account' }`
+- `{ ok: false, reason: 'referenced_by_trades' }`
+- `{ ok: false, reason: 'not_found' }`
 
-## Explicit Out of Scope (respected)
-
-- No global storage behavior or persistence acknowledgment.
-- No transaction, rollback, read-back verification, or retry mechanism.
-- No Recovery Bin schema, storage-key, retention, or count-cap change.
-- No `useTrades`, resolver, IndexedDB, Sync, cutover, or authentication
-  change.
-- No backup format, backup section, or Restore Point change.
-- No `_tid` conflict redesign.
-- No migration, backfill, repair, or historical normalization.
-- No dependency, configuration, jsdom, or test-framework change.
-- No input validation, Futures/import, Insights, AD-017, Trade Review, Prop
-  Firm, Position Calculator, AI/agent/MCP, or Phase 30 work.
+Every failure is non-mutating and returns the original account-state
+collection from the planner.
 
 ---
 
-## Persistence Limitation
+## Last-Account Precedence
 
-Recovery Bin persistence remains best-effort through the existing effect.
-Phase 29 guarantees only that Recovery Bin state-update invocation occurs
-before active deletion invocation. It does not wait for or verify a durable
-storage write.
+Decision order is:
 
-Storage quota, browser-storage denial, or another persistence failure can
-therefore still prevent durable Recovery Bin capture. This limitation was
-not redesigned or strengthened.
+1. `last_account`
+2. `not_found`
+3. `referenced_by_trades`
+4. existing valid deletion lifecycle
 
-Pre-implementation retention review found no count cap or trimming rule
-capable of immediately truncating the newly captured Delete ALL batch. New
-batch entries share a current timestamp and are not immediately expired by
-the existing 30-day age policy.
+If the sole active account is referenced, `last_account` wins. The existing
+hidden Delete button and hook-level protection remain unchanged.
+
+---
+
+## flushSync Control Flow
+
+- ReactDOM `flushSync` is localized to the Account Manager deletion
+  user-event boundary.
+- One operation timestamp is captured outside the updater.
+- The functional updater runs the bounded deterministic planner against its
+  latest `prev` account collection.
+- A blocked plan returns the original `prev`; an allowed plan constructs the
+  established purge-or-tombstone next state.
+- The synchronous `DeleteAccountResult` therefore matches the authoritative
+  updater decision.
+- The updater/planner performs no external side effects.
+- `notifyLocalMutation('accounts')` remains outside the updater and executes
+  exactly once only after an actual successful deletion.
+- `flushSync` is not used elsewhere as a general state-management pattern.
+
+---
+
+## Exact Blocked-Deletion Wording
+
+"This account cannot be deleted because it is referenced by active trades. Reassign or delete those trades first."
+
+The message uses the existing local inline red-error idiom. No toast, alert
+framework, or new modal was introduced.
+
+---
+
+## Valid Deletion Lifecycle Preservation
+
+- A never-synced valid account retains the existing immediate local purge.
+- A previously synced valid account retains the existing tombstone,
+  metadata refresh, and `pending_delete` behavior.
+- Unrelated accounts retain their object identity and content.
+- `notifyLocalMutation('accounts')` runs once after successful deletion.
+- No trade state, trade object, Recovery entry, backup, or Backtest is
+  modified.
+
+---
+
+## Explicit Out of Scope (Respected)
+
+- No automatic trade reassignment or other trade mutation.
+- No account archival or account Recovery Bin support.
+- No existing orphan detection, repair, migration, or normalization.
+- No account/trade schema, account-ID, or trade-`accountId` change.
+- No change to the synthetic $10,000 missing-account fallback.
+- No change to zero or negative starting-capital semantics.
+- No storage-key, Backup, Restore Point, Sync, IndexedDB, resolver, cutover,
+  authentication, user-namespacing, dependency, or configuration change.
+- No Futures, Insights, AD-017, Trade Review, Prop Tracker, Position
+  Calculator, AI, agent, MCP, or Phase 31 implementation.
 
 ---
 
@@ -163,36 +169,56 @@ the existing 30-day age policy.
 
 - TypeScript: 0 errors.
 - ESLint: 0 errors, exactly 7 existing warnings at unchanged sites.
-- Focused Phase 29 tests: 9/9.
-- Full tests: 212/212 passing across 12 files.
+- Focused Phase 30 tests: 17/17.
+- Full tests: 229/229 passing across 13 files.
 - `npm.cmd run verify`: green.
 - Production build: succeeds, 994 modules transformed.
 - `git diff --check`: clean.
-- Exact implementation manifest: 5 production files and 1 test file.
-- Exact close manifest: 5 production, 1 test, and 2 documentation files.
+- Exact implementation manifest: 3 production files and 1 test file.
+- Exact close manifest: 3 production, 1 test, and 2 documentation files.
 - Dependency and configuration changes: none.
 
 ---
 
 ## Runtime Verification
 
-Authenticated destructive runtime testing was not performed because no
-disposable authenticated profile or account was confirmed. No account was
-created for testing, and the user's real journal was not used.
+Authenticated destructive runtime verification was not performed because no
+safe disposable authenticated profile or account was confirmed. No account
+was created solely for testing, and the user's real accounts and trades were
+not used.
 
-Delete ALL, Restore All, single-delete, and selected-delete behavior is
-therefore automated/source-diff verified through focused tests, full tests,
-typecheck, lint, verify, build, and source/diff inspection. It is not claimed
-as directly runtime-observed, and no full authenticated runtime pass is
-claimed.
+V-1 through V-4 are automated/source-diff verified through focused tests,
+full tests, typecheck, lint, verify, build, and source/diff inspection. They
+are not claimed as directly runtime-observed.
+
+---
+
+## Exit Criteria
+
+- [x] One or more active raw trade references block account deletion.
+- [x] Exact strict `accountId` matching is used.
+- [x] The guard runs before every account mutation and Sync notification.
+- [x] Referenced accounts and supplied trades remain unchanged.
+- [x] No automatic reassignment or orphan creation occurs.
+- [x] Last-account protection and precedence remain intact.
+- [x] `not_found` remains non-mutating.
+- [x] Existing unsynced purge and synced tombstone lifecycles remain intact.
+- [x] Exact blocked-deletion wording is rendered.
+- [x] Focused and full tests, typecheck, lint, verify, build, diff check, and
+      exact-manifest verification passed.
+- [x] No schema, persistence architecture, dependency, configuration, or
+      user-data change occurred.
+
+All approved automated and source/diff exit criteria passed. Authenticated
+destructive runtime verification remains explicitly unobserved.
 
 ---
 
 ## Architecture Decision
 
-No new ADR was required. Phase 29 extends the already-established Recovery
-Bin deletion-safety policy to the one destructive trade-deletion path that
-previously bypassed it. No persistence architecture changed.
+No new ADR was required. Phase 30 adds a bounded referential-integrity
+deletion rule without changing persistence, identity, Sync, ownership, or
+migration architecture.
 
 docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
 
@@ -200,7 +226,7 @@ docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
 
 ## Historical / User Data
 
-- No real journal trade changed.
+- No real account or trade changed.
 - No LocalStorage or Recovery Bin data was manually altered.
 - No saved Backtest Result changed.
 - No backup or Restore Point changed.
@@ -209,57 +235,37 @@ docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
 
 ---
 
-## Exit Criteria
+## Repository Statistics (Measured at Phase Close)
 
-- [x] Delete ALL captures every targeted active raw trade exactly once.
-- [x] Original raw payloads, fields, and `_tid` values are preserved.
-- [x] Batch ordering is deterministic and uses one shared timestamp.
-- [x] Every batch entry receives a unique Recovery Bin ID.
-- [x] Empty capture creates no entries or Recovery state update.
-- [x] Capture invocation precedes active deletion invocation.
-- [x] Existing single-row and selected-row deletion remain behaviorally
-      unchanged.
-- [x] Existing Restore All remains unchanged and compatible.
-- [x] Exact recoverability confirmation wording is present.
-- [x] No schema, key, retention, persistence, Sync, backup, dependency, or
-      configuration change occurred.
-- [x] Focused tests, full tests, typecheck, lint, verify, build, diff check,
-      and exact manifest verification passed.
-- [x] Historical and real user data remained untouched.
-
-All approved automated and source/diff exit criteria passed. Authenticated
-destructive runtime verification remains explicitly unobserved.
-
----
-
-## Known Risks / Limitations
-
-- Recovery capture is not persistence-acknowledged.
-- Storage failure can prevent durable Recovery Bin persistence.
-- Existing `_tid` conflict behavior remains unchanged.
-- Restore All restores all current bin entries, including older entries.
-- Authenticated UI behavior was not directly runtime-observed.
-- Authenticated local-user isolation remains separate.
-- Insights correctness and AD-017 vocabulary completion remain separate.
-- Trade Review activation remains separate.
-- Futures and broker import contracts remain separate.
-
----
-
-## Repository Statistics (measured at phase close)
-
-- Tests: 212 passing across 12 files.
-- Focused Phase 29 tests: 9 passing.
+- Tests: 229 passing across 13 files.
+- Focused Phase 30 tests: 17 passing.
 - Production build: 994 modules transformed.
 - TypeScript: 0 errors.
 - ESLint: 0 errors, 7 warnings.
-- Changed files: exactly 8 — 5 production, 1 test, 2 documentation.
-- New files: 1 test file (`src/calculations/recoveryBin.test.ts`).
+- Changed files: exactly 6 — 3 production, 1 test, 2 documentation.
+- New files: 1 test file (`src/hooks/useAccounts.test.ts`).
 - Dependencies/configuration changed: none.
 - Architecture-decision files changed: none.
 
 ---
 
+## Known Risks / Limitations
+
+- Phase 30 prevents only this account-deletion workflow from creating new
+  orphaned active trades.
+- It does not repair orphaned trades that may already exist from historical
+  data, old backups, imports, or previous application behavior.
+- The synthetic $10,000 missing-account capital fallback remains unchanged.
+- Zero and negative account-capital behavior remains unchanged.
+- The authoritative trade population is App's current unfiltered active
+  `rawTrades` collection.
+- Authenticated behavior was not directly observed in a disposable account.
+- Existing orphan repair, authenticated local-user isolation, Insights
+  correctness, AD-017 vocabulary completion, Trade Review activation,
+  Futures import, and Sync/cutover readiness remain separate work.
+
+---
+
 ## Next Phase
 
-Unselected and not started. Phase 30 scope is not defined by this close.
+Unselected and not started. Phase 31 scope is not defined by this close.

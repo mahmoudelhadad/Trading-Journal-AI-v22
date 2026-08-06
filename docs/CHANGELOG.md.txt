@@ -1,3 +1,135 @@
+# Phase 30 — Referenced-Account Deletion Safety
+
+Status:
+COMPLETE
+
+Summary:
+Account deletion now enforces referential integrity against the current
+unfiltered active raw journal. An account referenced by one or more active
+raw trades cannot be deleted, so this workflow can no longer create new
+orphaned active trades or send them into missing-account calculation fallback
+behavior.
+
+What shipped:
+- The authoritative guard lives in `useAccounts.deleteAccount`, not only in
+  Account Manager UI logic.
+- App supplies the current unfiltered active `rawTrades` collection at the
+  account-deletion boundary.
+- Reference matching is exact: `trade.accountId === target account ID`.
+- Referenced-account deletion returns a blocked result before account state,
+  purge, tombstone, metadata refresh, persistence effect, or Sync mutation
+  notification can be initiated.
+- A blocked account and every supplied trade remain unchanged. No automatic
+  trade reassignment or other trade mutation occurs.
+- Existing last-active-account protection remains and is evaluated before
+  target lookup or referenced-account blocking.
+- Existing valid deletion behavior is preserved: never-synced accounts are
+  purged locally, while previously synced accounts retain the established
+  tombstone / `pending_delete` lifecycle.
+- `not_found` remains non-mutating.
+- `notifyLocalMutation('accounts')` runs exactly once and only after an
+  authoritative successful deletion.
+- AccManager interprets the deletion result only; it does not duplicate the
+  reference policy.
+
+Delete result contract:
+- `{ ok: true }`
+- `{ ok: false, reason: 'last_account' }`
+- `{ ok: false, reason: 'referenced_by_trades' }`
+- `{ ok: false, reason: 'not_found' }`
+- Precedence is `last_account`, then `not_found`, then
+  `referenced_by_trades`, then the existing allowed deletion lifecycle.
+
+flushSync control flow:
+- ReactDOM `flushSync` is used only at the account-deletion user-event
+  boundary.
+- It synchronously flushes the functional account-state update so the
+  returned `DeleteAccountResult` matches the authoritative latest-state
+  mutation decision.
+- The bounded planner is deterministic for the account collection, target
+  ID, active-trade snapshot, and externally captured operation timestamp.
+- The functional updater/planner performs no external side effects.
+- `notifyLocalMutation` remains outside the updater.
+- `flushSync` was not introduced as a general application state-management
+  pattern.
+
+Exact blocked-deletion UI copy:
+"This account cannot be deleted because it is referenced by active trades. Reassign or delete those trades first."
+
+Explicit out of scope / unchanged:
+- No trade was modified or reassigned, and no existing orphan was repaired,
+  migrated, or normalized.
+- Account/trade schemas, account IDs, and trade `accountId` semantics are
+  unchanged.
+- No account archival or account Recovery behavior was introduced.
+- The synthetic $10,000 missing-account fallback is unchanged.
+- Zero and negative starting-capital semantics are unchanged.
+- Recovery Bin, Backup, Restore Points, Sync architecture, IndexedDB,
+  resolver, cutover, authentication, and user namespacing are unchanged.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- Focused Phase 30 tests: 17/17.
+- Full tests: 229/229 passing across 13 files.
+- `npm.cmd run verify`: green.
+- Production build: succeeds, 994 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation manifest: 3 production files and 1 test file.
+- No dependency, configuration, jsdom, or test-framework change.
+
+Runtime characterization:
+- Authenticated destructive runtime verification was not performed because
+  no safe disposable authenticated profile or account was confirmed.
+- No account was created solely for testing, and the user's real accounts
+  and trades were not used.
+- V-1 through V-4 are automated/source-diff verified, not directly
+  runtime-observed.
+
+Historical / user data:
+- No real account or trade changed.
+- No Recovery Bin data, LocalStorage, or saved Backtest Result was manually
+  altered.
+- No backup or Restore Point changed.
+- No Futures data was added.
+
+Architecture:
+- No new ADR was required. Phase 30 adds a bounded referential-integrity
+  deletion rule without changing persistence, identity, Sync, or migration
+  architecture.
+- `docs/ARCHITECTURE_DECISIONS.md.txt` is unchanged.
+
+Known limitations / carry-forward:
+- Phase 30 prevents only this account-deletion workflow from creating new
+  orphaned active trades. Existing orphans from historical data, old
+  backups, imports, or previous application behavior are not repaired.
+- The authoritative population is the current unfiltered active `rawTrades`
+  supplied by App.
+- The synthetic $10,000 missing-account fallback and zero/negative account
+  capital semantics remain unchanged.
+- Authenticated local-user isolation, Insights correctness, AD-017
+  vocabulary completion, Trade Review activation, the Futures import
+  contract, and Sync/cutover readiness remain separate work.
+- Phase 31 is unselected and not started.
+
+Files changed:
+
+Production (3):
+- src/hooks/useAccounts.ts
+- src/App.jsx
+- src/components/account/AccManager.tsx
+
+Tests (1):
+- src/hooks/useAccounts.test.ts (new)
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Six files total. No architecture-decision file changed.
+
+---
+
 # Phase 29 — Recovery-Complete Delete All
 
 Status:

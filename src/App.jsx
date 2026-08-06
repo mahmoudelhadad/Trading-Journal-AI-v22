@@ -133,6 +133,12 @@ export default function App() {
     deleteAllTrades();
   }, [rawTrades, softDeleteMany, deleteAllTrades]);
 
+  // useAccounts owns the deletion decision; App supplies its current
+  // unfiltered active RawTrade view without duplicating eligibility logic.
+  const handleDeleteAccount = useCallback((id) => (
+    deleteAccount(id, rawTrades)
+  ), [deleteAccount, rawTrades]);
+
   // handleRestoreFromBin(id): calls the EXISTING restore() (removes
   // the bin entry, returns the original trade), then reinserts that
   // exact trade via the EXISTING importTrades() — which appends whole
@@ -291,7 +297,7 @@ export default function App() {
               accounts={accounts}
               onAdd={addAccount}
               onEdit={editAccount}
-              onDelete={deleteAccount}
+              onDelete={handleDeleteAccount}
               onClose={() => setShowAccManager(false)}
             />
           )}

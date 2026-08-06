@@ -60,6 +60,18 @@ export function RecoveryBinPanel<T>({
     }
   }
 
+  function handlePermanentlyDeleteClick(id: string) {
+    if (window.confirm('Permanently delete this Recovery Bin entry? This action cannot be undone through the Recovery Bin.')) {
+      onPermanentlyDelete(id);
+    }
+  }
+
+  function handleEmptyBinClick() {
+    if (window.confirm('Permanently delete ALL Recovery Bin entries? This action cannot be undone through the Recovery Bin.')) {
+      onEmptyBin();
+    }
+  }
+
   return (
     <Card>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -69,7 +81,7 @@ export function RecoveryBinPanel<T>({
             <button onClick={handleRestoreAllClick} style={{ background: 'none', border: `1px solid ${C.green}44`, color: C.green, borderRadius: 6, padding: '3px 10px', fontSize: 10, cursor: 'pointer' }}>
               Restore All
             </button>
-            <button onClick={onEmptyBin} style={{ background: 'none', border: `1px solid ${C.red}44`, color: C.red, borderRadius: 6, padding: '3px 10px', fontSize: 10, cursor: 'pointer' }}>
+            <button onClick={handleEmptyBinClick} style={{ background: 'none', border: `1px solid ${C.red}44`, color: C.red, borderRadius: 6, padding: '3px 10px', fontSize: 10, cursor: 'pointer' }}>
               Empty Bin
             </button>
           </div>
@@ -94,7 +106,7 @@ export function RecoveryBinPanel<T>({
               <button onClick={() => onRestore(entry.id)} style={{ background: `${C.green}22`, border: `1px solid ${C.green}44`, color: C.green, borderRadius: 6, padding: '4px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
                 Restore
               </button>
-              <button onClick={() => onPermanentlyDelete(entry.id)} style={{ background: 'none', border: 'none', color: C.red, fontSize: 14, cursor: 'pointer', padding: '0 4px' }} title="Delete permanently">
+              <button onClick={() => handlePermanentlyDeleteClick(entry.id)} style={{ background: 'none', border: 'none', color: C.red, fontSize: 14, cursor: 'pointer', padding: '0 4px' }} title="Delete permanently">
                 🗑
               </button>
             </div>

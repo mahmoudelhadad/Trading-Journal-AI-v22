@@ -1,3 +1,94 @@
+# Phase 31 — Recovery Bin Permanent-Deletion Safety
+
+Status:
+COMPLETE
+
+Summary:
+Recovery Bin actions that permanently remove the remaining in-app recovery
+copy now require explicit browser confirmation. Cancelling either action
+invokes no destructive callback and therefore initiates no Recovery Bin state
+mutation. Accepting invokes the existing destructive callback exactly once,
+without changing its downstream behavior.
+
+What shipped:
+- Single-entry permanent deletion now confirms immediately before invoking the
+  existing `onPermanentlyDelete` callback.
+- Acceptance preserves the exact selected Recovery Bin entry ID and invokes
+  the callback exactly once.
+- Empty Bin now uses a stronger all-entry confirmation immediately before
+  invoking the existing `onEmptyBin` callback exactly once.
+- Cancellation invokes neither destructive callback and causes no Recovery Bin
+  state or persistence mutation.
+- Restore and Restore All behavior remain unchanged.
+- Empty-state behavior remains unchanged: destructive controls are not rendered
+  when the Recovery Bin is empty.
+
+Exact confirmation strings:
+
+Single entry:
+"Permanently delete this Recovery Bin entry? This action cannot be undone through the Recovery Bin."
+
+Empty Bin:
+"Permanently delete ALL Recovery Bin entries? This action cannot be undone through the Recovery Bin."
+
+Explicit out of scope / unchanged:
+- Recovery retention, expiry, schema, storage key, and persistence semantics
+  are unchanged.
+- Active-trade behavior, trade deletion, Phase 29 Delete ALL capture, Restore,
+  Restore All, Backup, and Restore Points are unchanged.
+- No persistence acknowledgement, transaction, rollback, migration, backfill,
+  normalization, or data rewrite was added.
+- No dependency or configuration changed.
+- No automated test was added because the approved RFC deliberately kept this
+  browser confirmation wiring outside the existing Node-only test suite.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- Tests: 229/229 passing across 13 files.
+- `npm.cmd run verify`: green.
+- Production build: green, 994 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation manifest: 1 production file and no test files.
+- Exact documentation-close manifest: 2 documentation files.
+- No dependency or configuration change.
+
+Runtime characterization:
+- Runtime V-1 through V-6 were not directly observed because no safe disposable
+  authenticated profile was available.
+- No account was created solely for verification.
+- The real journal and real Recovery Bin were not used.
+- Confirmation behavior is supported by exact source/diff inspection and the
+  unchanged full regression suite; it is not claimed as authenticated runtime
+  observation.
+
+Historical / user data:
+- No real journal trade, Recovery Bin entry, account, Backtest Result, backup,
+  or Restore Point was intentionally modified during Phase 31 verification.
+- No LocalStorage or IndexedDB user data was intentionally modified.
+- No Futures data was added.
+
+Architecture:
+- No ADR was required. Phase 31 is a bounded UI safety guard around existing
+  destructive callbacks and does not alter persistence architecture.
+- `docs/ARCHITECTURE_DECISIONS.md.txt` is unchanged.
+
+Files changed:
+
+Production (1):
+- src/components/trade/RecoveryBinPanel.tsx
+
+Tests:
+- None.
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Three files total. Phase 32 remains unselected and not started.
+
+---
+
 # Phase 30 — Referenced-Account Deletion Safety
 
 Status:

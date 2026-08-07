@@ -107,9 +107,23 @@ aliasEntries.push({ find: '@', replacement: srcDir });
 export default defineConfig({
   plugins: [react()],
 
-  // Base path for GitHub Pages deployment
-  // Matches: https://mahmoudelhadad.github.io/Trading-Journal-AI/
-  base: '/Trading-Journal-AI/',
+  // Base path for GitHub Pages deployment.
+  //
+  // Release Hardening (H-2): this was previously '/Trading-Journal-AI/',
+  // inherited unchanged from this repository's first commit. That path is
+  // stale — the repository that owned the `Trading-Journal-AI` name was
+  // renamed to `Trading-Journal-AI-v1`, so the old URL 404s and its slot
+  // now belongs to a different app. This repository had no GitHub Pages
+  // deployment at all (Settings → Pages: disabled, Branch: None).
+  //
+  // Frozen production target: project-pages site of THIS repository,
+  // deployed by .github/workflows/deploy.yml.
+  // Matches: https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/
+  //
+  // NOTE: contexts/AuthContext.tsx builds the Supabase auth redirect from
+  // `window.location.origin + import.meta.env.BASE_URL`, so this value
+  // determines the redirect URL that must be allow-listed in Supabase.
+  base: '/Trading-Journal-AI-v22/',
 
   resolve: {
     alias: aliasEntries,

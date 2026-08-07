@@ -1,0 +1,94 @@
+# Production deployment — GitHub Pages (Release Hardening H-2)
+#
+# Builds the Vite application and publishes the generated `dist/` output to
+# this repository's GitHub Pages project site:
+#
+#   https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/
+#
+# WHY A WORKFLOW AND NOT A BRANCH SOURCE: publishing `main` at root would
+# serve the raw source tree, not the build. `index.html` references the
+# dev-only specifier `/src/main.jsx`, which does not exist after bundling,
+# so a root publish renders a blank page. `dist/` is gitignored and is not
+# committed. Publishing `main` under `/docs` is also wrong here: `docs/`
+# holds this project's written documentation, not build output.
+#
+# NO NEW DEPENDENCY: deployment uses only GitHub-maintained actions. The
+# `gh-pages` npm package is deliberately NOT used.
+#
+# REQUIRED ONE-TIME SETUP (performed manually, outside this file):
+#   1. Settings → Pages → Source: "GitHub Actions".
+#   2. Settings → Secrets and variables → Actions: define
+#      VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.
+#   3. Supabase → Authentication → URL Configuration: allow-list
+#      https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/
+#      (AuthContext.tsx derives its redirect from import.meta.env.BASE_URL).
+#
+# WHY THE BUILD ENV IS MANDATORY: services/supabaseClient.ts only logs a
+# console error when these are missing and then constructs the client with
+# empty strings. A build without them produces a site that LOOKS fine but
+# where every auth call fails silently. They are read at BUILD time by
+# Vite, so they must be present in the build step, not at runtime.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: read the repo, write the Pages deployment, and mint the
+# OIDC token actions/deploy-pages requires.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two publishes at once; let a newer commit supersede a queued
+# run, but do not cancel a deployment already in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Node 24 matches the toolchain the build was verified against locally.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      # `base` is fixed in vite.config.js, so the build output is already
+      # rooted at /Trading-Journal-AI-v22/ and needs no override here.
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -32,6 +32,7 @@
 
 import { isStamped } from '@sync/record.js';
 import { USER_STORAGE_LOGICAL_KEYS } from '@services/storageNamespace.js';
+import { reportLocalPersistenceFailure } from '@services/localPersistenceEvents.js';
 
 // ─── Storage Key Constants ───────────────────────────────────
 // These match the exact strings used in the original app.
@@ -127,11 +128,30 @@ export const createStorageService = (scope) => {
   const get = (key) => {
     try { return parseRaw(scope.getRaw(key)); } catch { return null; }
   };
+  // Release Hardening (H-1): a failed scoped write used to be swallowed
+  // here entirely. Because createScopedLocalDatabase wraps these calls in
+  // `async` methods that therefore always RESOLVED, the hooks' existing
+  // `.catch(reportLocalPersistenceFailure)` could never fire and the §3.4
+  // blocking notice was unreachable — the UI reported success while the
+  // write was lost on the next reload. These now report the failure through
+  // that same existing mechanism.
+  //
+  // Deliberately still NON-THROWING: every caller contract (hooks, the
+  // scoped database, backup/restore, Recovery Bin, Backtests, saved
+  // filters, Trade Review) is unchanged. Only the silence is removed.
   const set = (key, value) => {
-    try { scope.setRaw(key, JSON.stringify(value)); } catch { /* Preserve legacy silent-write behavior. */ }
+    try {
+      scope.setRaw(key, JSON.stringify(value));
+    } catch (err) {
+      reportLocalPersistenceFailure(`localstorage:${key}`, err);
+    }
   };
   const remove = (key) => {
-    try { scope.remove(key); } catch { /* Preserve legacy silent-remove behavior. */ }
+    try {
+      scope.remove(key);
+    } catch (err) {
+      reportLocalPersistenceFailure(`localstorage:${key}`, err);
+    }
   };
   const loadArray = (key) => {
     const data = get(key);

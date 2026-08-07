@@ -1,3 +1,192 @@
+# Production v1.0 — Release Hardening
+
+Status:
+IMPLEMENTATION + RUNTIME COMPLETE — AWAITING GIT / DEPLOYMENT / LIVE
+ACCEPTANCE CLOSURE
+
+Summary:
+Two release blockers found by the v1.0 discovery pass are closed. H-1 removes
+a silent-data-loss path: failed browser-local writes are no longer swallowed,
+so the existing blocking persistence notice can finally reach the user. H-2
+establishes a real, reproducible production deployment for this repository,
+which had none. Production v1.0 is NOT released by this entry — a live
+post-push acceptance gate remains.
+
+## H-1 — Persistence failure surfacing
+
+What shipped:
+- The scoped storage facade's write and remove paths no longer discard the
+  caught error. Each failure is reported through the EXISTING local
+  persistence failure mechanism (`reportLocalPersistenceFailure`).
+- The facade remains NON-THROWING. Every caller contract is unchanged:
+  hooks, the scoped local database, Backup/Restore, Recovery Bin, Restore
+  Points, Backtests, saved filters, and Trade Review all behave exactly as
+  before on success, and are no longer silent on failure.
+- The existing blocking `LocalPersistenceNotice` (§3.4) is now reachable. It
+  previously could not fire at all: the scoped database wraps these writes in
+  `async` methods that always RESOLVED, so the hooks' existing
+  `.catch(reportLocalPersistenceFailure)` never ran. Recovery Bin, Backtests,
+  saved filters, and Trade Review had no failure channel whatsoever.
+- Before this change a failed write produced false success — the UI showed
+  the change as saved and it was gone after the next reload.
+
+Explicitly unchanged:
+- No caller contract, storage key, namespace, schema, backup format, or
+  persistence architecture change. No new notification infrastructure. No
+  hook or local-database change. No new dependency.
+
+Runtime evidence (disposable authenticated user, isolated browser profile,
+synthetic data only):
+- A targeted `QuotaExceededError` was injected for exactly one key (the
+  active user's trades key) by temporary browser-API patching in the
+  disposable profile. No repository code was altered to produce it, and no
+  storage was bulk-filled.
+- Exactly ONE failure report occurred — no duplicate for one failed write.
+- The blocking notice appeared, reading:
+  "Couldn't save your changes — A local save failed and could not be
+  completed (localstorage:fxj_v4_trades): QuotaExceededError: ..."
+- The failed write did not persist: the UI briefly showed the new trade while
+  stored data remained byte-identical to the pre-test snapshot.
+- After removing the injection and reloading, durable state was intact and
+  the failed mutation was absent.
+- The app remained operational throughout, confirming the non-throwing
+  contract — no error boundary, no thrown error.
+- A second disposable user namespace in the same profile remained
+  byte-identical.
+
+Known P2 (carried forward, deliberately NOT fixed in this phase):
+- A genuine browser `QuotaExceededError` is a `DOMException` carrying `.name`,
+  while the reporting helper derives its classification from `.kind`. Real
+  quota exhaustion therefore currently maps to `errorKind: 'unknown'` and
+  shows the GENERIC blocking message rather than the tailored
+  storage-full/free-up-space wording. This does not block v1: the failure is
+  visible, blocking, and no longer silent. Only the message specificity is
+  degraded.
+
+## H-2 — Deployment hardening
+
+Findings:
+- `Trading-Journal-AI-v22` had GitHub Pages DISABLED (Source: none). There
+  was no existing production URL for this repository to preserve.
+- The previous Vite base `/Trading-Journal-AI/` was stale configuration
+  inherited unchanged from this repository's first commit. The repository
+  that owned the `Trading-Journal-AI` name was renamed to
+  `Trading-Journal-AI-v1`, so that URL 404s and its slot belongs to a
+  different application.
+
+What shipped:
+- Intended production URL:
+  `https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/`
+- Vite `base` changed to `/Trading-Journal-AI-v22/`.
+- The stale hardcoded `/Trading-Journal-AI/favicon.svg` reference was rebased
+  to a Vite base-relative form.
+- A GitHub Actions Pages workflow was added. It builds the Vite application
+  and uploads `dist/` as the Pages artifact, deploying through the official
+  GitHub Pages actions with minimum `pages`/`id-token` permissions and the
+  `github-pages` environment.
+- No raw main/root publication: publishing the branch root would serve the
+  unbuilt source tree, whose `index.html` references the dev-only specifier
+  `/src/main.jsx` that does not exist after bundling.
+- No `gh-pages` package and no npm deployment dependency. `dist/` is not
+  committed.
+- Build-time `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are read from
+  GitHub repository secrets in the build step. No secret value is committed
+  or present in any repository file.
+
+External setup — USER-ATTESTED, not independently machine-verified:
+- GitHub Pages source set to GitHub Actions.
+- Repository secret `VITE_SUPABASE_URL` exists.
+- Repository secret `VITE_SUPABASE_ANON_KEY` exists.
+- Supabase Authentication redirect URL
+  `https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/` added; the
+  existing Site URL was left unchanged.
+- Secret values were never exposed.
+- These are private configuration surfaces and were NOT readable by the
+  agent: no authenticated GitHub access was available, and anonymous
+  requests cannot read repository settings, secret names, or Supabase
+  project configuration.
+
+Source-level deployment evidence (no deployment performed):
+- Built `dist/index.html` contains no `/Trading-Journal-AI/` reference and no
+  `/src/main.jsx`.
+- All built assets and the favicon resolve under `/Trading-Journal-AI-v22/`.
+- The base is baked into the bundle, so the Supabase auth redirect derived
+  from `import.meta.env.BASE_URL` now carries the correct path.
+
+Known P2 (carried forward, deliberately NOT fixed):
+- `%BASE_URL%favicon.svg` doubles the base path under the DEV SERVER only
+  (it still resolves). The production build output is correct and not
+  doubled.
+
+## Verification
+
+- Focused storage tests: 4/4.
+- Full tests: 312/312 passing across 20 files.
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- `npm.cmd run verify`: green.
+- Production build: green, 997 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation/test manifest before documentation: 5 paths.
+- No dependency, test-framework, or test-configuration change.
+
+## Runtime regression smoke
+
+Performed on the disposable user, isolated profile, synthetic data:
+- Create/edit/save a trade — persisted, with no false failure notice.
+- Delete a trade to the Recovery Bin, then restore it.
+- Account and market filters, including reset.
+- Dashboard, Raw, Equity, Calendar, Strategy, Insights, Backtest — all
+  rendered with no hook-order error and no error boundary.
+- Restore Point creation, exercising the shared `buildBackup()` path.
+- Valid synthetic restore of a v2 payload.
+- Hard reload, with a clean console.
+- The primary account was not used. No real journal data or real backup was
+  used. No Futures data was added.
+- Backup FILE DOWNLOAD was not exercised; the Restore Point path covers the
+  same `buildBackup()` code without one.
+
+## Remaining release gate — v1.0 is NOT released yet
+
+`deploy.yml` triggers on push to `main`, so the FIRST deployment will occur
+automatically on the future approved closure push. There is no separate
+manual deploy step.
+
+A live post-push acceptance gate therefore remains outstanding:
+- the workflow run succeeds;
+- the Pages URL becomes live;
+- cold load works;
+- hard refresh works;
+- assets resolve under `/Trading-Journal-AI-v22/`;
+- the favicon loads;
+- one disposable authenticated sign-in succeeds;
+- no auth redirect failure occurs.
+
+Only after that evidence should the v1.0.0 release be considered fully
+closed.
+
+Files changed:
+
+Implementation/config (4):
+- .github/workflows/deploy.yml
+- index.html
+- src/services/storage.js
+- vite.config.js
+
+Tests (1):
+- src/services/storage.test.ts
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Architecture:
+- No new architecture decision. H-1 restores the intended §3.4 local
+  persistence failure contract rather than creating one, and H-2 is
+  deployment/configuration. ARCHITECTURE_DECISIONS.md.txt is unchanged.
+
+---
+
 # Phase 32C — Data Integrity and Deterministic Correctness
 
 Status:

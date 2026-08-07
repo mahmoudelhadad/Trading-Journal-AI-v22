@@ -4,298 +4,256 @@
 
 ## Phase
 
-Phase 32C — Data Integrity and Deterministic Correctness
+Production v1.0 — Release Hardening
 
 Status:
 
-COMPLETE
+IMPLEMENTATION + RUNTIME COMPLETE
+AWAITING GIT / DEPLOYMENT / LIVE ACCEPTANCE CLOSURE
+
+**Release Hardening is complete. Production v1.0 is NOT released.** Those are
+two different things and are deliberately kept separate below: the repository
+work and its synthetic runtime evidence are finished, but no deployment has
+occurred and the live acceptance gate has not been run.
 
 ---
 
 ## Objective
 
-Ensure active deterministic calculations never invent account, direction,
-instrument, numeric, or date truth; reject new invalid data before it is
-persisted; and leave existing inconsistent historical data raw and unmodified,
-with only the affected derived calculations becoming unavailable through the
-existing null contract.
+Close the two release-blocking defects found by the v1.0 discovery pass — a
+silent browser-local persistence failure path (H-1) and the absence of any
+working, reproducible production deployment (H-2) — without pulling post-v1
+features into scope.
 
 ---
 
 ## Delivered Scope
 
-- Added a shared trade-content validation service consumed by the manual
-  form, the import path, and restore.
-- Replaced import account guessing with exact, case-insensitive active-account
-  resolution plus sole-account inference, and made zero, multiple, unmatched,
-  duplicate, and tombstoned cases explicit rejections.
-- Made import date handling deterministic and removed the locale-dependent
-  `new Date(string)` fallback.
-- Removed the generic instrument fallback from the hardened calculation paths
-  so unsupported symbols yield no invented result.
-- Added TradeForm validation before persistence.
-- Separated accepted from rejected rows in the import wizard, with per-row
-  reasons and a truthful import summary.
-- Preserved historical orphan trades exactly while making only
-  account-capital-derived values unavailable, and surfaced them in the trade
-  row.
-- Removed the historical synthetic $10,000 account-capital fallback.
-- Added restore preflight structural, domain, and referential-integrity
-  validation before any write.
-- Repaired Insights hook order and removed the two rules-of-hooks
-  suppressions.
-- Applied the remaining AD-017 W/L-only label corrections.
+H-1 — Persistence failure surfacing:
+- The scoped storage facade reports write/remove failures through the
+  existing local persistence failure mechanism instead of discarding them.
+- The facade remains non-throwing, so no caller contract changed.
+- The existing blocking `LocalPersistenceNotice` is now reachable. It could
+  not fire before, because the scoped database wraps these writes in `async`
+  methods that always resolved.
+- Recovery Bin, Backtests, saved filters, and Trade Review — which had no
+  failure channel at all — are covered by the same single chokepoint.
+
+H-2 — Deployment hardening:
+- Vite `base` corrected to `/Trading-Journal-AI-v22/`.
+- Stale hardcoded favicon path rebased to a Vite base-relative form.
+- GitHub Actions Pages workflow added: builds the Vite app, uploads `dist/`,
+  deploys via the official Pages actions with minimum permissions.
+- No raw main/root publication, no `gh-pages` package, no committed `dist/`,
+  no new dependency.
+- Build-time Supabase values are supplied by GitHub repository secrets.
 
 ---
 
 ## Exact Implementation Manifest
 
-Production (12):
-- src/calculations/tradeCalc.ts
-- src/components/backtest/BacktestComparison.tsx
-- src/components/charts/EntrySetupWinRateChart.tsx
-- src/components/import/ImportWizard.tsx
-- src/components/trade/TradeForm.tsx
-- src/components/trade/TradeRow.tsx
-- src/constants/pipValues.js
-- src/pages/Insights.tsx
-- src/pages/Strategy.tsx
-- src/services/backupService.ts
-- src/services/importService.ts
-- src/services/tradeValidation.ts
+Implementation/config (4):
+- .github/workflows/deploy.yml
+- index.html
+- src/services/storage.js
+- vite.config.js
 
-Tests (4):
-- src/calculations/tradeCalc.test.ts
-- src/services/backupService.test.ts
-- src/services/importService.test.ts
-- src/services/tradeValidation.test.ts
+Tests (1):
+- src/services/storage.test.ts
 
 Documentation (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Final close manifest: exactly 18 changed paths — 12 production, 4 tests, and
-2 documentation files. ARCHITECTURE_DECISIONS.md.txt is unchanged.
+Final close manifest: exactly 7 changed paths — 4 implementation/config,
+1 test, and 2 documentation files. ARCHITECTURE_DECISIONS.md.txt is
+unchanged.
 
 ---
 
-## Validation Contract
+## H-1 Contract
 
-New manual, imported, and restored active records must satisfy:
+A failed scoped browser-local write or remove:
 
-- `accountId` present and resolving to an active account.
-- `date` canonical `YYYY-MM-DD` and calendar-valid.
-- `symbol` present and supported by the calculation table.
-- `direction` exactly `Long` or `Short`; blank is permitted only for
-  incomplete records carrying no direction-dependent calculation inputs.
-- Optional price fields and position size, when present, finite and greater
-  than zero.
-- Commission, when present, finite; zero and negative are permitted.
-- Times, when present, canonical `HH:mm`.
+- is reported once, through `reportLocalPersistenceFailure`;
+- raises the existing blocking §3.4 notice;
+- does NOT throw, so the application remains operational;
+- does NOT produce false success in the UI without a visible notice.
 
-`NaN`, `Infinity`, malformed numeric strings, invalid calendar dates, and
-ambiguous slash dates are rejected. Browser locale must not decide an
-ambiguous import's meaning.
+Unchanged by this work: caller contracts, storage keys, the user namespace,
+schema, backup format/version, and persistence architecture.
 
 ---
 
-## Account Resolution Contract
+## H-2 Deployment Contract
 
-When account or broker text is present:
+Production URL:
 
-- Matching is case-insensitive and exact against active account names.
-- Exactly one match is accepted; zero and multiple are rejected.
+`https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/`
 
-When no account text is present:
+Development repository remains `mahmoudelhadad/Trading-Journal-AI-v22`; it was
+not renamed or moved.
 
-- Exactly one active account is assigned.
-- Zero and multiple active accounts are rejected.
+Before this phase the repository had GitHub Pages disabled and no production
+URL. The previous `/Trading-Journal-AI/` base was stale inherited
+configuration — that name now belongs to the renamed `Trading-Journal-AI-v1`
+repository and the URL 404s.
 
-Tombstoned accounts are never candidates. There is no substring matching, no
-first-account guessing, and no `acc_1` truth fallback.
-
----
-
-## Historical Orphan Contract
-
-An active historical trade referencing no active account is preserved exactly.
-It is not reassigned, deleted, quarantined, or marked in storage.
-
-Derived behavior:
-
-- `_capital` is null.
-- `_rPct` is null.
-- No running-capital bucket is created for the orphan.
-- Account-independent calculations remain available when their own inputs are
-  valid.
-
-The trade row displays `⚠ Unresolved account` with the tooltip
-"This trade references an account that is no longer available. Account-capital
-calculations are unavailable."
+Deployment is by GitHub Actions only. Publishing the branch root is invalid
+here: it would serve the unbuilt source tree, whose `index.html` references
+the dev-only `/src/main.jsx`.
 
 ---
 
-## Calculation Contract
+## External Setup — USER-ATTESTED
 
-The synthetic $10,000 account-capital fallback is removed with no replacement
-number. Formulas are unchanged; a calculation returns null when required truth
-is unavailable. Direction-dependent calculations require exactly `Long` or
-`Short`; instrument-dependent calculations require a supported symbol; numeric
-operands must satisfy the finite and positive rules where applicable. Risk
-remains direction-independent.
+The following were performed manually by the product owner and are recorded
+as user-attested, NOT independently machine-verified:
 
----
+- GitHub Pages source set to GitHub Actions.
+- Repository secret `VITE_SUPABASE_URL` exists.
+- Repository secret `VITE_SUPABASE_ANON_KEY` exists.
+- Supabase redirect URL
+  `https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/` added; existing
+  Site URL unchanged.
+- Secret values were never exposed.
 
-## Restore Contract
-
-The portable v1/v2 backup format and version are unchanged. Before any save,
-restore performs structural validation, RawTrade domain validation,
-determination of the effective active accounts, and relationship validation.
-Supplied backup accounts are used when present; the currently persisted
-accounts are loaded when accounts are omitted. An active orphan supplied trade
-is rejected before the first write. Tombstoned historical trades remain
-preservable. No transaction or rollback redesign was made.
+Why not machine-verified: these are private configuration surfaces. No
+authenticated GitHub access was available in the working environment, and
+anonymous requests cannot read repository settings, secret names, or Supabase
+project configuration. The first successful workflow run plus one live
+sign-in will prove all four at once.
 
 ---
 
 ## Runtime Evidence
 
-Performed in an isolated browser profile against a disposable authenticated
-test user with synthetic data only.
+Disposable authenticated user, isolated browser profile, synthetic data only.
 
-Passed:
+H-1:
+- Targeted `QuotaExceededError` injected for exactly one key via temporary
+  browser-API patching in the disposable profile; no repository code altered,
+  no bulk storage filling.
+- Exactly one failure report — no duplicate.
+- Blocking notice appeared: "Couldn't save your changes — A local save failed
+  and could not be completed (localstorage:fxj_v4_trades): ...".
+- The failed write did not persist; stored data stayed byte-identical.
+- After removing the injection and reloading, durable state was intact and
+  the failed mutation absent.
+- The app remained operational — non-throwing contract confirmed.
+- A second disposable user namespace remained byte-identical.
 
-- R1 sole-account import with no account column; both rows accepted and
-  assigned the sole active account.
-- R3 multi-account missing-account rejection with no first-account fallback
-  and no persistence.
-- R4 exact-versus-substring resolution, including a row naming the second
-  account resolving to that account rather than the first.
-- R5 ambiguous-date rejection with canonical and unambiguous slash dates
-  accepted.
-- R6 unsupported-symbol rejection before persistence.
-- R7 manual-save validation across blank symbol, blank account, zero entry
-  price, and blank date, with nothing persisted.
-- R8 historical orphan presentation, exact warning text and tooltip,
-  unavailable capital-derived values, retained account-independent
-  calculations, and an unchanged raw record.
-- R9 invalid-restore rejection identifying the trade relationship failure,
-  with trades and accounts byte-identical to the pre-restore snapshot.
-- R10 valid v2 restore succeeding with no format or version change.
-- R11 Insights empty → populated → empty on the same mounted component with
-  no hook-order error and no error boundary.
-- R12 label verification on the Strategy performance tables, the
-  before/after-9:30 cards, the Entry Setup section title, the Entry Setup
-  chart series, and the Backtest comparison panel.
+Regression smoke:
+- Create/edit/save; delete → Recovery Bin → restore; filters; Dashboard, Raw,
+  Equity, Calendar, Strategy, Insights, Backtest; Restore Point creation via
+  the shared `buildBackup()` path; valid synthetic v2 restore; hard reload
+  with a clean console.
 
 Not overstated:
-
-- R2 zero-active-account import rejection was NOT exercised at runtime. The
-  product does not render a Delete control when only one account exists, and
-  that safety control was not bypassed. R2 remains automated/source-verified
-  only.
-- The multi-filter comparison label site is source-identical to the four
-  verified performance-table headers but was not rendered during the bounded
-  runtime test.
-- Calendar-invalid date entry is prevented by the native date control, so
-  that validator retains automated-test evidence.
-- The primary account and real journal data were not used. Only a disposable
-  authenticated test user and synthetic data were used.
-- No Futures data was imported.
-
-No runtime blocker was found.
+- Backup FILE DOWNLOAD was not exercised. The Restore Point path covers the
+  same `buildBackup()` code without a download.
+- No primary account, no real journal data, no real backup, no Futures data.
+- No live deployment evidence exists yet.
 
 ---
 
 ## Automated Verification
 
+- Focused storage tests: 4/4.
+- Full tests: 312/312 passing across 20 files.
 - TypeScript: passed, 0 errors.
 - ESLint: passed, 0 errors and exactly 7 existing warnings.
-- Focused tests: 115 passing across the 4 phase test files.
-- Full tests: 308/308 passing across 19 files.
 - `npm.cmd run verify`: passed.
 - Production build: passed, 997 modules transformed.
 - `git diff --check`: passed.
-- Implementation/test manifest before documentation: exactly 12 production
-  files and 4 test files.
-- Dependency, configuration, environment, schema, persistence, and backup
-  format changes: none.
-- Futures data/functionality added: none.
+- Implementation/test manifest before documentation: exactly 5 paths.
+- Dependency, configuration, environment, schema, key/namespace, and backup
+  format changes: none beyond the authorized `vite.config.js` base value.
 
 ---
 
-## Known Limitations
+## P2 Carry-Forward — recorded, NOT fixed
 
-- Zero-active-account import rejection retains automated/source-only
-  evidence.
-- Historical inconsistent data is characterized, not repaired; no
-  reconciliation of orphan trades back to an account is provided.
-- Validation is scoped to the current domain rules and is not the generalized
-  import framework deferred to a later phase.
-- The multi-filter comparison label and the calendar-invalid date validator
-  retain source/automated evidence as described above.
+1. A genuine browser `QuotaExceededError` is a `DOMException` carrying
+   `.name`, while the reporting helper classifies from `.kind`. Real quota
+   exhaustion therefore maps to `errorKind: 'unknown'` and shows the generic
+   blocking message instead of tailored storage-full wording. Not a v1
+   blocker: the failure is visible, blocking, and no longer silent.
+2. `%BASE_URL%favicon.svg` doubles the base path under the dev server only
+   and still resolves; the production build output is correct.
+
+Neither is a v1 blocker. Both are candidates for v1.1+.
 
 ---
 
-## Explicit Exclusions
+## Remaining Release Gate — v1.0 NOT released
 
-Phase 32C does not establish:
+`deploy.yml` triggers on push to `main`, so the FIRST deployment happens
+automatically on the future approved closure push. There is no separate
+manual deploy step.
 
-- Futures functionality;
-- IndexedDB work;
-- Sync or Cutover work;
-- a generalized import architecture;
-- historical rewrite or account auto-reassignment;
-- persisted integrity markers or historical quarantine/deletion;
-- new analytics or AI;
-- Trade Review changes; or
-- any storage key/namespace or backup format/version change.
+Outstanding live post-push acceptance gate:
+
+- [ ] workflow run succeeds
+- [ ] Pages URL becomes live
+- [ ] cold load works
+- [ ] hard refresh works
+- [ ] assets resolve under `/Trading-Journal-AI-v22/`
+- [ ] favicon loads
+- [ ] one disposable authenticated sign-in succeeds
+- [ ] no auth redirect failure
+
+Only after that evidence should the v1.0.0 release be considered fully
+closed.
 
 ---
 
 ## Exit Criteria
 
-- [x] Trade-domain validation is centralized and shared.
-- [x] Import account resolution is exact, with sole-account inference and no
-      guessing.
-- [x] Ambiguous dates, unsupported symbols, and invalid numerics are rejected
-      before persistence.
-- [x] Manual saves are validated before persistence.
-- [x] Restore validates structure, domain, and referential integrity before
-      any write.
-- [x] Historical orphans are preserved raw with only capital-derived values
-      unavailable.
-- [x] The synthetic $10,000 account-capital fallback is removed.
-- [x] Insights hooks are unconditional.
-- [x] AD-017 W/L-only labels are applied to the approved surfaces.
-- [x] Required bounded runtime verification passed, with R2 accurately
-      recorded as automated/source-verified only.
+- [x] Failed scoped local writes are reported, not silently swallowed.
+- [x] The blocking persistence notice is reachable.
+- [x] The storage facade remains non-throwing.
+- [x] Production base path matches the intended Pages URL.
+- [x] A reproducible GitHub Actions deployment exists for the Vite build.
+- [x] No secret value is committed.
+- [x] Synthetic runtime verification and regression smoke passed.
 - [x] Typecheck, lint, tests, verify, build, diff, and manifest checks passed.
-- [x] Documentation was completed without widening scope.
+- [x] Documentation completed without widening scope.
+- [ ] Live post-push deployment acceptance — OUTSTANDING.
 
-All Phase 32C exit criteria are satisfied.
+Release Hardening exit criteria are satisfied. The v1.0 release exit
+criterion remains open.
 
 ---
 
 ## Architecture Decision
 
-No new architecture decision was recorded. Phase 32C widens the existing
-Phase 28 finite-or-null derived-value contract to cover missing account,
-direction, and instrument truth, and brings the remaining label surfaces into
-compliance with AD-017. It introduces no new cross-cutting architectural
-contract, no persistence-class change, and no storage or format change, so
-ARCHITECTURE_DECISIONS.md.txt is unchanged.
+No new architecture decision was recorded. H-1 restores the intended §3.4
+local persistence failure contract rather than creating a new one, and H-2 is
+deployment/configuration. Neither establishes a durable cross-cutting
+architectural contract, so ARCHITECTURE_DECISIONS.md.txt is unchanged.
+
+---
+
+## Migration Impact
+
+None. No schema, storage key, namespace, backup format/version, or persisted
+data-shape change. No historical data was rewritten.
 
 ---
 
 ## Repository State
 
 The implementation and documentation diff remains unstaged. No commit, tag,
-push, pull request, merge, or rebase has occurred. The repository awaits
-separate Git closure authorization.
+push, pull request, merge, or rebase has occurred, and no deployment has run.
+The repository awaits separate Git/deployment closure authorization.
 
 ---
 
 ## Next Phase
 
-No next phase is selected. Phase 32D, Phase 32E, and Phase 33 are not started.
+No next phase is selected. Phase 32D, Phase 32E, and Phase 33 are not
+started. Post-v1 items — versioned journal import contract, Futures work,
+per-user IndexedDB, Sync/Cutover, Backtesting V2, expanded analytics, Trade
+Review activation, Prop Firm Tracker, Position Calculator, and any AI/MCP
+layer — remain deferred.

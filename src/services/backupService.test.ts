@@ -66,7 +66,7 @@ vi.mock('./localDatabase.js', () => {
   };
 });
 
-import { buildBackup, createRestorePoint, restoreBackup } from './backupService.js';
+import { buildBackup, createBackupService, createRestorePoint, restoreBackup } from './backupService.js';
 
 const validBacktest = (id = 'bt-1') => ({
   id,
@@ -107,6 +107,49 @@ const backup = (data: Record<string, unknown> = validData(), version = 2) => ({
   data,
 });
 
+const createScopedBackupHarness = (initial: Record<string, unknown>) => {
+  const values: Record<string, unknown> = { ...initial, restorePoints: initial.restorePoints ?? [] };
+  const access = (key: string) => ({
+    load: () => values[key],
+    save: (value: unknown) => { values[key] = value; },
+  });
+  const trades = access('trades');
+  const accounts = access('accounts');
+  const lists = access('lists');
+  const settings = access('settings');
+  const propRules = access('propRules');
+  const savedFilters = access('savedFilters');
+  const checklistTemplates = access('checklistTemplates');
+  const checklistCompletions = access('checklistCompletions');
+  const customFieldDefs = access('customFieldDefs');
+  const customFieldValues = access('customFieldValues');
+  const recoveryBin = access('recoveryBin');
+  const backtestResults = access('backtestResults');
+  const restorePoints = access('restorePoints');
+  const storage = {
+    loadPropRules: propRules.load, savePropRules: propRules.save,
+    loadSavedFilters: savedFilters.load, saveSavedFilters: savedFilters.save,
+    loadChecklistTemplates: checklistTemplates.load, saveChecklistTemplates: checklistTemplates.save,
+    loadChecklistCompletions: checklistCompletions.load, saveChecklistCompletions: checklistCompletions.save,
+    loadCustomFieldDefs: customFieldDefs.load, saveCustomFieldDefs: customFieldDefs.save,
+    loadCustomFieldValues: customFieldValues.load, saveCustomFieldValues: customFieldValues.save,
+    loadRecoveryBin: recoveryBin.load, saveRecoveryBin: recoveryBin.save,
+    loadBacktestResults: backtestResults.load, saveBacktestResults: backtestResults.save,
+    loadRestorePoints: restorePoints.load, saveRestorePoints: restorePoints.save,
+  };
+  const database = {
+    loadTrades: trades.load, saveTrades: trades.save,
+    loadAccounts: accounts.load, saveAccounts: accounts.save,
+    loadLists: lists.load, saveLists: lists.save,
+    loadSettings: settings.load, saveSettings: settings.save,
+  };
+  const service = createBackupService(
+    storage as Parameters<typeof createBackupService>[0],
+    database as Parameters<typeof createBackupService>[1],
+  );
+  return { values, service };
+};
+
 beforeEach(() => {
   harness.values = { ...validData(), restorePoints: [] };
   harness.saves = [];
@@ -134,6 +177,43 @@ describe('backup v2 coverage', () => {
     expect(data).toHaveProperty('recoveryBin');
     expect(data).toHaveProperty('backtestResults');
     expect(data).not.toHaveProperty('restorePoints');
+  });
+});
+
+describe('authenticated scoped backup routing', () => {
+  it('backs up only the captured current scope without serializing namespace metadata', async () => {
+    const ownerA = '12345678-1234-4123-8123-1234567890ab';
+    const ownerB = '87654321-4321-4321-8321-ba0987654321';
+    const a = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 1, symbol: 'A' }] });
+    const b = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 2, symbol: 'B' }] });
+
+    const aBackup = await a.service.buildBackup();
+    const bBackup = await b.service.buildBackup();
+    expect(aBackup.data.trades).toEqual([{ _tid: 1, symbol: 'A' }]);
+    expect(bBackup.data.trades).toEqual([{ _tid: 2, symbol: 'B' }]);
+    const serialized = JSON.stringify(aBackup);
+    expect(serialized).not.toContain('fxj:user:v1:');
+    expect(serialized).not.toContain(ownerA);
+    expect(serialized).not.toContain(ownerB);
+  });
+
+  it('allows a portable backup from A to restore explicitly into B only', async () => {
+    const a = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 11, symbol: 'A' }] });
+    const b = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 22, symbol: 'B' }] });
+    const portable = await a.service.buildBackup();
+
+    expect((await b.service.restoreBackup(portable)).success).toBe(true);
+    expect(b.values.trades).toMatchObject([{ _tid: 11, symbol: 'A', syncStatus: 'dirty' }]);
+    expect(a.values.trades).toEqual([{ _tid: 11, symbol: 'A' }]);
+  });
+
+  it('keeps Restore Points inside the captured user scope', async () => {
+    const a = createScopedBackupHarness({ ...validData() });
+    const b = createScopedBackupHarness({ ...validData() });
+
+    const point = await a.service.createRestorePoint('A only');
+    expect(a.service.listRestorePoints()).toContainEqual(point);
+    expect(b.service.listRestorePoints()).toEqual([]);
   });
 });
 

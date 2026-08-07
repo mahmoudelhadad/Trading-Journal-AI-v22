@@ -20,7 +20,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { loadSavedFilters, saveSavedFilters } from '@services/storage.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import {
   createSavedFilter,
   type FilterGroup, type SavedFilter,
@@ -42,11 +42,12 @@ export interface UseAdvancedFiltersReturn {
 }
 
 export function useAdvancedFilters(): UseAdvancedFiltersReturn {
-  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(() => loadSavedFilters() as SavedFilter[]);
+  const { storage } = useUserStorage();
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(() => storage.loadSavedFilters() as SavedFilter[]);
 
   useEffect(() => {
-    saveSavedFilters(savedFilters);
-  }, [savedFilters]);
+    storage.saveSavedFilters(savedFilters);
+  }, [storage, savedFilters]);
 
   const saveFilter = useCallback((name: string, group: FilterGroup) => {
     const newFilter = createSavedFilter(name || 'Untitled Filter', group);

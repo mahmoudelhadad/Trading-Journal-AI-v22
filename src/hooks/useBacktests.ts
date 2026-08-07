@@ -20,7 +20,7 @@
  * trimmed or evicted.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { loadBacktestResults, saveBacktestResults } from '@services/storage.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import { computeBacktestResult } from '@calculations/backtest.js';
 import type { FilterGroup } from '@calculations/filterEngine.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
@@ -60,14 +60,15 @@ export interface UseBacktestsReturn {
 }
 
 export function useBacktests(): UseBacktestsReturn {
+  const { storage } = useUserStorage();
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>(
-    () => loadBacktestResults() as BacktestResult[],
+    () => storage.loadBacktestResults() as BacktestResult[],
   );
   const resultsRef = useRef(backtestResults);
 
   useEffect(() => {
-    saveBacktestResults(backtestResults);
-  }, [backtestResults]);
+    storage.saveBacktestResults(backtestResults);
+  }, [storage, backtestResults]);
 
   const runBacktest = useCallback((
     filterGroup: FilterGroup,

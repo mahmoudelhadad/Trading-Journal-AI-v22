@@ -47,7 +47,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { loadLists, saveLists } from '@services/localDatabase.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import { DEFAULT_LISTS } from '@constants/lists.js';
 import { createSyncMetadata, refreshForLocalWrite } from '@sync/record.js';
 import type { SingletonRecord } from '@sync/record.js';
@@ -123,6 +123,7 @@ const mergeLists = (saved: Partial<ListsState> | null): ListsState => {
  *   updateList('Session', [...lists.Session, 'Tokyo']);
  */
 export function useLists(): UseListsReturn {
+  const { database } = useUserStorage();
   // PHASE 6f — ASYNC HYDRATION. See useSettings.ts for the full
   // rationale; the pattern is identical. Initial state is the
   // "nothing saved yet" branch of the old synchronous initializer;
@@ -139,7 +140,7 @@ export function useLists(): UseListsReturn {
   // Read-failure handling (audit Issue #1) also mirrors useSettings.ts.
   useEffect(() => {
     let cancelled = false;
-    loadLists()
+    database.loadLists()
       .then((saved) => {
         if (cancelled) return;
         if (saved) {
@@ -155,7 +156,7 @@ export function useLists(): UseListsReturn {
         if (!cancelled) setHydrated(true);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [database]);
 
   // Persist whenever the record changes — never before hydration, and
   // never after a failed read (which would replace the user's real
@@ -164,8 +165,8 @@ export function useLists(): UseListsReturn {
   useEffect(() => {
     if (!hydrated || loadFailed) return;
     // Phase 6g-1 (BD-1): see useTrades.ts for the full rationale.
-    saveLists(record).catch((err) => reportLocalPersistenceFailure('lists', err));
-  }, [record, hydrated, loadFailed]);
+    database.saveLists(record).catch((err) => reportLocalPersistenceFailure('lists', err));
+  }, [database, record, hydrated, loadFailed]);
 
   const lists = record.data;
 

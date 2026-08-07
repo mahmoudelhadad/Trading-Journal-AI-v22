@@ -1,3 +1,149 @@
+# Phase 32B — Authenticated Local User Isolation
+
+Status:
+COMPLETE
+
+Summary:
+Authenticated browser-local journal persistence is now isolated by exact
+authenticated user ID. Phase 32B adds a captured per-session storage scope,
+an explicit and verified legacy-ownership gate, fail-closed global IndexedDB
+preflight, and current-user-only Backup/Restore while leaving Sync, Cutover,
+and per-user IndexedDB deferred. AD-020 records the durable architecture.
+
+What shipped:
+- The frozen 14-key logical inventory is physically namespaced as
+  `fxj:user:v1:<encodeURIComponent(exactUserId)>:<logicalKey>`.
+- The exact authenticated UUID is preserved without case or byte
+  normalization. The exact `user.id` is also the keyed session boundary.
+- Authenticated storage is captured per user/session rather than selected
+  through mutable global current-user state.
+- The React boundary is `AuthProvider → AuthGate → LocalOwnershipGate → keyed
+  LocalOwnershipSession → UserStorageProvider → App/notice`.
+- The scoped facade/database routes accounts, trades, lists, settings,
+  advanced filters, Trade Review, Recovery Bin, Restore Points, Backtests,
+  Backup/Restore, and the local database/stamping paths covered by Phase 32B.
+- Authenticated startup no longer starts the legacy global Sync/Cutover path.
+  Enabled Sync or Cutover fails closed at LocalOwnershipGate, and
+  SyncConflictReview is not mounted on the authenticated scoped path.
+  Dormant global compatibility accessors remain but are not reachable through
+  normal authenticated business persistence.
+
+Legacy ownership:
+- Physical raw presence is authoritative. `[]`, `{}`, `null`, and
+  default-looking values still count as present legacy data; malformed JSON
+  under a recognized key is quarantined.
+- Claim and decline are explicit. Authority has five states:
+  `legacy_absent`, `legacy_detected_unclaimed`, `claim_in_progress`,
+  `claim_failed_retryable`, and `claim_verified`.
+- Ownership transitions are serialized by Web Locks under
+  `trading-journal-ai:legacy-claim:v1`; there is no LocalStorage lease or
+  polyfill fallback.
+- Claim freezes a canonical SHA-256 source digest, reserves the owner, copies
+  eligible data, reads it back, re-digests the preserved source, verifies the
+  result, and commits/reads back `claim_verified` last. Partial residue is not
+  authority, and only the reserved owner may retry or overwrite that residue.
+- The legacy source is preserved after claim. An explicit wrong-user
+  reservation can strand ownership pending future handling.
+- The legacy Sync cursor participates in detection, snapshot, and digest, but
+  remains global and is intentionally not copied. A scoped cursor starts
+  absent.
+
+IndexedDB preflight:
+- The existing global `trading-journal-ai` database marker is inspected
+  read-only. An absent database is not created by preflight.
+- Marker presence, unsafe enumeration, or inability to read safely fails
+  closed. Runtime Gate A was A1: the database was absent in the tested real
+  browser profile. Broader per-user IndexedDB work remains deferred.
+
+Backup and restore:
+- Backup reads only the current authenticated scope while retaining the
+  portable v1/v2 logical payload contract. Physical namespace keys and owner
+  UUIDs are not exported.
+- Restore Points remain scoped and excluded from portable backup. Sync cursors
+  remain excluded.
+- Explicit A→B portability was verified: restoring A's backup replaced B's
+  disposable journal data without mutating A's namespace, while B's Restore
+  Points remained B-scoped.
+
+Runtime verification:
+- Passed User A/User B confidentiality isolation and A→B/return-to-A
+  account, trade, Backtest, and Restore Point checks.
+- Passed Recovery A→B isolation and User A Recovery retention after the B
+  session. A separate B→A Recovery entry was optional and not exercised.
+- Passed current-user-only backup and explicit A→B portable restore.
+- Passed physical legacy detection, explicit decline, decline-source
+  preservation, confirmed claim, claim-source preservation, Web Locks
+  supported behavior, legacy cursor preservation, scoped cursor absence, and
+  malformed quarantine.
+- Direct A→B session replacement was not naturally exercised. Failure
+  injection/residue retry, Web Locks unavailable, Sync/Cutover override
+  fail-closed, marker-present, and IDB read-failure paths remain
+  automated/source evidence as applicable.
+- Only disposable Users A and B were used. Primary browser storage was not
+  modified; destructive legacy checks used Guest/Incognito contexts.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- Tests: 266/266 passing across 17 files.
+- `npm.cmd run verify`: green.
+- Production build: green, 996 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation manifest before documentation: 20 production files
+  and 5 test files.
+- No dependency, configuration, environment, schema, or calculation change.
+- No Futures data or functionality was added.
+
+Known limitations and exclusions:
+- The preserved global legacy source is not deleted.
+- Wrong-user explicit reservation can strand legacy ownership until a future
+  approved design handles it.
+- General auth-transition cancellation/generation, per-user IndexedDB, full
+  Sync reactivation, and full Cutover reactivation remain deferred.
+- Unsafe or unsupported global IndexedDB enumeration fails closed.
+- Phase 32C, 32D, 32E, and Phase 33 remain unstarted.
+
+Files changed:
+
+Production (20):
+- src/components/auth/LocalOwnershipGate.tsx
+- src/components/settings/BackupPanel.tsx
+- src/contexts/AuthContext.tsx
+- src/contexts/UserStorageContext.tsx
+- src/hooks/useAccounts.ts
+- src/hooks/useAdvancedFilters.ts
+- src/hooks/useBacktests.ts
+- src/hooks/useLists.ts
+- src/hooks/useRecoveryBin.ts
+- src/hooks/useRestorePoints.ts
+- src/hooks/useSettings.ts
+- src/hooks/useTradeReview.ts
+- src/hooks/useTrades.ts
+- src/main.jsx
+- src/services/backupService.ts
+- src/services/legacyOwnership.ts
+- src/services/localDatabase.ts
+- src/services/storage.js
+- src/services/storageNamespace.ts
+- src/sync/stamp.ts
+
+Tests (5):
+- src/services/backupService.test.ts
+- src/services/legacyOwnership.test.ts
+- src/services/localDatabase.test.ts
+- src/services/storageNamespace.test.ts
+- src/sync/stamp.test.ts
+
+Documentation (3):
+- docs/ARCHITECTURE_DECISIONS.md.txt
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Architecture:
+- AD-020 — Authenticated Local Ownership and Per-User Storage Isolation.
+
+---
+
 # Phase 31 — Recovery Bin Permanent-Deletion Safety
 
 Status:

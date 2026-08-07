@@ -19,11 +19,13 @@
 // untouched; the owning hook's own initializer creates a fresh record
 // the first time that happens (§6.1: "User creates a record" -> `dirty`).
 
-import { storageGet, storageSet, STORAGE_KEYS } from '@services/storage.js';
+import { STORAGE_KEYS, type createStorageService } from '@services/storage.js';
 import { createSyncMetadata, isStamped } from '@sync/record.js';
 
-function stampCollection(key: string): void {
-  const raw = storageGet(key);
+type ScopedStorageService = ReturnType<typeof createStorageService>;
+
+function stampCollection(storage: ScopedStorageService, key: string): void {
+  const raw = storage.storageGet(key);
   if (!Array.isArray(raw) || raw.length === 0) return;
 
   let changed = false;
@@ -33,20 +35,21 @@ function stampCollection(key: string): void {
     return { ...createSyncMetadata(), ...item };
   });
 
-  if (changed) storageSet(key, stamped);
+  if (changed) storage.storageSet(key, stamped);
 }
 
-function stampSingleton(key: string): void {
-  const raw = storageGet(key);
+function stampSingleton(storage: ScopedStorageService, key: string): void {
+  const raw = storage.storageGet(key);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return; // nothing existing to wrap
   if (isStamped(raw)) return; // already stamped
 
-  storageSet(key, { ...createSyncMetadata(), data: raw });
+  storage.storageSet(key, { ...createSyncMetadata(), data: raw });
 }
 
-export function runSyncMetadataStampingPass(): void {
-  stampCollection(STORAGE_KEYS.TRADES);
-  stampCollection(STORAGE_KEYS.ACCOUNTS);
-  stampSingleton(STORAGE_KEYS.LISTS);
-  stampSingleton(STORAGE_KEYS.SETTINGS);
+export function runSyncMetadataStampingPass(storage?: ScopedStorageService): void {
+  if (!storage) throw new Error('Authenticated scoped storage is required for metadata stamping.');
+  stampCollection(storage, STORAGE_KEYS.TRADES);
+  stampCollection(storage, STORAGE_KEYS.ACCOUNTS);
+  stampSingleton(storage, STORAGE_KEYS.LISTS);
+  stampSingleton(storage, STORAGE_KEYS.SETTINGS);
 }

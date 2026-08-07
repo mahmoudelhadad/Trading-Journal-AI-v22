@@ -156,6 +156,7 @@ import {
   saveSettingsIndexedDb,
   removeSettingsIndexedDb,
   indexedDbCursors,
+  loadMigrationStateIndexedDb,
 } from '@services/indexedDbStores.js';
 import { isCutoverComplete } from '@services/storageCutover.js';
 import { DEFAULT_CURSOR_ROW, type CursorRowAccess, type TableCursorRow } from '@sync/localStores.js';
@@ -163,6 +164,7 @@ import type { SyncTableName } from '@sync/scheduler.js';
 import type { SingletonRecord } from '@sync/record.js';
 import type { RawTrade } from '@apptypes/trade.js';
 import type { Account } from '@apptypes/account.js';
+import type { createStorageService } from '@services/storage.js';
 
 type SingletonPayload = SingletonRecord<Record<string, unknown>>;
 
@@ -321,3 +323,76 @@ export const cursors: CursorRowAccess = {
     else localStorageCursors.set(table, patch);
   },
 };
+
+type ScopedStorageService = ReturnType<typeof createStorageService>;
+
+export interface ScopedLocalDatabase {
+  readonly backend: 'localstorage';
+  loadTrades(): Promise<RawTrade[]>;
+  saveTrades(trades: RawTrade[]): Promise<void>;
+  loadAccounts(): Promise<Account[] | null>;
+  saveAccounts(accounts: Account[]): Promise<void>;
+  loadLists(): Promise<SingletonPayload | null>;
+  saveLists(record: SingletonPayload): Promise<void>;
+  removeLists(): Promise<void>;
+  loadSettings(): Promise<SingletonPayload | null>;
+  saveSettings(record: SingletonPayload): Promise<void>;
+  removeSettings(): Promise<void>;
+  cursors: CursorRowAccess;
+}
+
+/** Phase 32B resolver: permanently LocalStorage-only for one captured user scope. */
+export function createScopedLocalDatabase(storage: ScopedStorageService): ScopedLocalDatabase {
+  const scopedCursors: CursorRowAccess = {
+    get(table: SyncTableName): TableCursorRow {
+      const all = storage.loadSyncCursors() as Record<string, TableCursorRow>;
+      return all[table] ?? DEFAULT_CURSOR_ROW;
+    },
+    set(table: SyncTableName, patch: Partial<TableCursorRow>): void {
+      const all = storage.loadSyncCursors() as Record<string, TableCursorRow>;
+      const current = all[table] ?? DEFAULT_CURSOR_ROW;
+      storage.saveSyncCursors({ ...all, [table]: { ...current, ...patch } });
+    },
+  };
+  return Object.freeze({
+    backend: 'localstorage' as const,
+    async loadTrades() { return storage.loadTrades() as RawTrade[]; },
+    async saveTrades(value: RawTrade[]) { storage.saveTrades(value); },
+    async loadAccounts() { return storage.loadAccounts() as Account[] | null; },
+    async saveAccounts(value: Account[]) { storage.saveAccounts(value); },
+    async loadLists() { return storage.loadLists() as SingletonPayload | null; },
+    async saveLists(value: SingletonPayload) { storage.saveLists(value); },
+    async removeLists() { storage.storageRemove(STORAGE_KEYS.LISTS); },
+    async loadSettings() { return storage.loadSettings() as SingletonPayload | null; },
+    async saveSettings(value: SingletonPayload) { storage.saveSettings(value); },
+    async removeSettings() { storage.storageRemove(STORAGE_KEYS.SETTINGS); },
+    cursors: scopedCursors,
+  });
+}
+
+export type GlobalIndexedDbPreflight =
+  | { kind: 'clear' }
+  | { kind: 'blocked'; reason: 'marker_present' | 'marker_read_failed' };
+
+async function readExistingGlobalMigrationState() {
+  if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') {
+    throw new Error('IndexedDB database enumeration is unavailable.');
+  }
+  const databases = await indexedDB.databases();
+  if (!databases.some((database) => database.name === 'trading-journal-ai')) return null;
+  return loadMigrationStateIndexedDb();
+}
+
+/** Read-only preflight. It never creates an absent global database. */
+export async function preflightGlobalIndexedDb(
+  readMarker: () => Promise<{ cutoverCompletedAt: string | null } | null> = readExistingGlobalMigrationState,
+): Promise<GlobalIndexedDbPreflight> {
+  try {
+    const state = await readMarker();
+    return state?.cutoverCompletedAt != null
+      ? { kind: 'blocked', reason: 'marker_present' }
+      : { kind: 'clear' };
+  } catch {
+    return { kind: 'blocked', reason: 'marker_read_failed' };
+  }
+}

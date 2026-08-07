@@ -50,7 +50,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { loadTrades, saveTrades } from '@services/localDatabase.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import { enrichTrades } from '@calculations/tradeCalc.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
@@ -136,6 +136,7 @@ export interface UseTradesReturn {
  *   const { allTrades, addTrade, deleteTrade } = useTrades(accounts);
  */
 export function useTrades(accounts: Account[]): UseTradesReturn {
+  const { database } = useUserStorage();
   // ── State ────────────────────────────────────────────────
   // `storedTrades` is the FULL local record set, tombstones included —
   // this is what persists to LocalStorage and what the Sync Engine's
@@ -156,7 +157,7 @@ export function useTrades(accounts: Account[]): UseTradesReturn {
   // Read-failure handling (audit Issue #1) also mirrors useSettings.ts.
   useEffect(() => {
     let cancelled = false;
-    loadTrades()
+    database.loadTrades()
       .then((saved) => {
         if (cancelled) return;
         // Matches original: if (r && Array.isArray(r)) setRaw(r)
@@ -171,7 +172,7 @@ export function useTrades(accounts: Account[]): UseTradesReturn {
         if (!cancelled) setHydrated(true);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [database]);
 
   // ── Persistence ──────────────────────────────────────────
   // Never before hydration finishes (see useSettings.ts) — otherwise the
@@ -185,8 +186,8 @@ export function useTrades(accounts: Account[]): UseTradesReturn {
     // Phase 6g-1 (BD-1): a rejected save must not become a silent,
     // unhandled promise rejection — §3.4 requires it be surfaced to the
     // user as a distinct, blocking notice. See localPersistenceEvents.ts.
-    saveTrades(storedTrades).catch((err) => reportLocalPersistenceFailure('trades', err));
-  }, [storedTrades, hydrated, loadFailed]);
+    database.saveTrades(storedTrades).catch((err) => reportLocalPersistenceFailure('trades', err));
+  }, [database, storedTrades, hydrated, loadFailed]);
 
   // ── Read-path filtering (§3.2, §9.2) ──────────────────────
   // A tombstoned trade (deletedAt set) is excluded here, immediately,

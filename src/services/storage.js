@@ -31,6 +31,7 @@
  */
 
 import { isStamped } from '@sync/record.js';
+import { USER_STORAGE_LOGICAL_KEYS } from '@services/storageNamespace.js';
 
 // ─── Storage Key Constants ───────────────────────────────────
 // These match the exact strings used in the original app.
@@ -59,6 +60,8 @@ export const STORAGE_KEYS = {
   // key, no existing user data affected
   BACKTEST_RESULTS: 'fxj_v4_backtest_results', // Array of BacktestResult
 };
+
+export { USER_STORAGE_LOGICAL_KEYS };
 
 // ─── Core Primitives ────────────────────────────────────────
 
@@ -109,6 +112,87 @@ export const storageRemove = (key) => {
   } catch {
     // Silent
   }
+};
+
+const parseRaw = (raw) => {
+  try {
+    return raw !== null ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Build the complete typed storage API over one immutable user scope. */
+export const createStorageService = (scope) => {
+  const get = (key) => {
+    try { return parseRaw(scope.getRaw(key)); } catch { return null; }
+  };
+  const set = (key, value) => {
+    try { scope.setRaw(key, JSON.stringify(value)); } catch { /* Preserve legacy silent-write behavior. */ }
+  };
+  const remove = (key) => {
+    try { scope.remove(key); } catch { /* Preserve legacy silent-remove behavior. */ }
+  };
+  const loadArray = (key) => {
+    const data = get(key);
+    return Array.isArray(data) ? data : [];
+  };
+
+  return Object.freeze({
+    scope,
+    storageGet: get,
+    storageSet: set,
+    storageRemove: remove,
+    loadTrades: () => loadArray(STORAGE_KEYS.TRADES),
+    saveTrades: (value) => set(STORAGE_KEYS.TRADES, value),
+    loadAccounts: () => {
+      const value = get(STORAGE_KEYS.ACCOUNTS);
+      return Array.isArray(value) && value.length > 0 ? value : null;
+    },
+    saveAccounts: (value) => set(STORAGE_KEYS.ACCOUNTS, value),
+    loadLists: () => {
+      const value = get(STORAGE_KEYS.LISTS);
+      return isStamped(value) ? value : null;
+    },
+    saveLists: (value) => set(STORAGE_KEYS.LISTS, value),
+    loadPropRules: () => {
+      const value = get(STORAGE_KEYS.PROP_RULES);
+      return value && Array.isArray(value.rules) ? value : { rules: [] };
+    },
+    savePropRules: (value) => set(STORAGE_KEYS.PROP_RULES, value),
+    loadSettings: () => {
+      const value = get(STORAGE_KEYS.SETTINGS);
+      return isStamped(value) ? value : null;
+    },
+    saveSettings: (value) => set(STORAGE_KEYS.SETTINGS, value),
+    loadSavedFilters: () => loadArray(STORAGE_KEYS.SAVED_FILTERS),
+    saveSavedFilters: (value) => set(STORAGE_KEYS.SAVED_FILTERS, value),
+    loadChecklistTemplates: () => loadArray(STORAGE_KEYS.CHECKLIST_TEMPLATES),
+    saveChecklistTemplates: (value) => set(STORAGE_KEYS.CHECKLIST_TEMPLATES, value),
+    loadChecklistCompletions: () => {
+      const value = get(STORAGE_KEYS.CHECKLIST_COMPLETIONS);
+      return value && typeof value === 'object' ? value : {};
+    },
+    saveChecklistCompletions: (value) => set(STORAGE_KEYS.CHECKLIST_COMPLETIONS, value),
+    loadCustomFieldDefs: () => loadArray(STORAGE_KEYS.CUSTOM_FIELD_DEFS),
+    saveCustomFieldDefs: (value) => set(STORAGE_KEYS.CUSTOM_FIELD_DEFS, value),
+    loadCustomFieldValues: () => {
+      const value = get(STORAGE_KEYS.CUSTOM_FIELD_VALUES);
+      return value && typeof value === 'object' ? value : {};
+    },
+    saveCustomFieldValues: (value) => set(STORAGE_KEYS.CUSTOM_FIELD_VALUES, value),
+    loadRecoveryBin: () => loadArray(STORAGE_KEYS.RECOVERY_BIN),
+    saveRecoveryBin: (value) => set(STORAGE_KEYS.RECOVERY_BIN, value),
+    loadRestorePoints: () => loadArray(STORAGE_KEYS.RESTORE_POINTS),
+    saveRestorePoints: (value) => set(STORAGE_KEYS.RESTORE_POINTS, value),
+    loadSyncCursors: () => {
+      const value = get(STORAGE_KEYS.SYNC_CURSORS);
+      return value && typeof value === 'object' ? value : {};
+    },
+    saveSyncCursors: (value) => set(STORAGE_KEYS.SYNC_CURSORS, value),
+    loadBacktestResults: () => loadArray(STORAGE_KEYS.BACKTEST_RESULTS),
+    saveBacktestResults: (value) => set(STORAGE_KEYS.BACKTEST_RESULTS, value),
+  });
 };
 
 // ─── Typed Accessors ────────────────────────────────────────

@@ -4,9 +4,8 @@ import App from './App.jsx';
 import { ErrorBoundary } from '@components/ErrorBoundary.js';
 import { AuthProvider } from '@contexts/AuthContext.js';
 import { AuthGate } from '@components/auth/AuthGate.js';
-import { SyncConflictReview } from '@components/sync/SyncConflictReview.js';
+import { LocalOwnershipGate } from '@components/auth/LocalOwnershipGate.js';
 import { LocalPersistenceNotice } from '@components/LocalPersistenceNotice.js';
-import { runSyncMetadataStampingPass } from '@sync/stamp.js';
 import './index.css';
 
 // Sync architecture rewrite (SYNC_ARCHITECTURE_SPEC.md §13 Step 3): stamp
@@ -15,8 +14,6 @@ import './index.css';
 // run on every load (see stamp.ts's header for why). Must run before the
 // React tree renders so useLists/useSettings never observe an un-stamped
 // singleton value.
-runSyncMetadataStampingPass();
-
 // Phase 20B — Production Readiness Fixes (item 3): the app root is now
 // wrapped in a global ErrorBoundary. Previously, any render-time error
 // anywhere in the component tree (e.g. the Dashboard crash also fixed
@@ -50,9 +47,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <ErrorBoundary>
       <AuthProvider>
         <AuthGate>
-          <App />
-          <SyncConflictReview />
-          <LocalPersistenceNotice />
+          <LocalOwnershipGate>
+            <App />
+            <LocalPersistenceNotice />
+          </LocalOwnershipGate>
         </AuthGate>
       </AuthProvider>
     </ErrorBoundary>

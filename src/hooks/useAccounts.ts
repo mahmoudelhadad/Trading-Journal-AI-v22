@@ -52,7 +52,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { flushSync } from 'react-dom';
-import { loadAccounts, saveAccounts } from '@services/localDatabase.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import { DEFAULT_ACCOUNTS } from '@constants/lists.js';
 import type { Account, AccountContent } from '@apptypes/account.js';
 import { createSyncMetadata, refreshForLocalWrite } from '@sync/record.js';
@@ -179,6 +179,7 @@ export interface UseAccountsReturn {
  *   const { accounts, addAccount, editAccount, deleteAccount } = useAccounts();
  */
 export function useAccounts(): UseAccountsReturn {
+  const { database } = useUserStorage();
   // `storedAccounts` is the FULL local record set, tombstones included
   // — persists to LocalStorage and is what the Sync Engine's store
   // layer (services/syncStores.ts) sees in full. `accounts` (below) is
@@ -201,7 +202,7 @@ export function useAccounts(): UseAccountsReturn {
   // Read-failure handling (audit Issue #1) also mirrors useSettings.ts.
   useEffect(() => {
     let cancelled = false;
-    loadAccounts()
+    database.loadAccounts()
       .then((saved) => {
         if (cancelled) return;
         // Matches original: if (a && Array.isArray(a) && a.length) setAccounts(a)
@@ -216,7 +217,7 @@ export function useAccounts(): UseAccountsReturn {
         if (!cancelled) setHydrated(true);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [database]);
 
   // Persist whenever accounts change — never before hydration, and never
   // after a failed read (which would replace the user's real accounts
@@ -225,8 +226,8 @@ export function useAccounts(): UseAccountsReturn {
   useEffect(() => {
     if (!hydrated || loadFailed) return;
     // Phase 6g-1 (BD-1): see useTrades.ts for the full rationale.
-    saveAccounts(storedAccounts).catch((err) => reportLocalPersistenceFailure('accounts', err));
-  }, [storedAccounts, hydrated, loadFailed]);
+    database.saveAccounts(storedAccounts).catch((err) => reportLocalPersistenceFailure('accounts', err));
+  }, [database, storedAccounts, hydrated, loadFailed]);
 
   // ── Read-path filtering (§3.2, §9.2) ──────────────────────
   // A tombstoned account (deletedAt set) is excluded here, immediately,

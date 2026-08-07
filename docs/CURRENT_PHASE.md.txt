@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 31 — Recovery Bin Permanent-Deletion Safety
+Phase 32B — Authenticated Local User Isolation
 
 Status:
 
@@ -14,226 +14,274 @@ COMPLETE
 
 ## Objective
 
-Require explicit confirmation before permanently deleting one Recovery Bin
-entry or emptying the entire Recovery Bin, while preserving the existing
-destructive callbacks and downstream behavior.
+Prevent authenticated users sharing one browser profile from reading or
+mutating another authenticated user's browser-local journal data, while
+preserving portable Backup/Restore and handling pre-existing global local data
+through an explicit, fail-closed ownership contract.
 
 ---
 
 ## Delivered Scope
 
-- Added browser-native confirmation at the single-entry permanent-delete UI
-  boundary.
-- Added a stronger browser-native confirmation at the Empty Bin UI boundary.
-- Cancellation invokes no destructive callback and therefore initiates no
-  Recovery Bin state or persistence mutation.
-- Single-entry acceptance invokes the existing permanent-delete callback
-  exactly once with the exact selected entry ID.
-- Empty Bin acceptance invokes the existing empty-bin callback exactly once.
-- Restore, Restore All, empty-state, retention, expiry, persistence, and
-  active-trade behavior remain unchanged.
-- No automated test was added because the approved RFC kept this browser
-  confirmation wiring outside the existing Node-only test suite.
+- Added an exact-user-ID LocalStorage namespace and captured per-session
+  storage facade/database.
+- Added the authenticated ownership/storage provider boundary recorded by
+  AD-020.
+- Routed the frozen Phase 32B business persistence surface through the scoped
+  database.
+- Added explicit legacy detection, claim, decline, reservation, verification,
+  retry ownership, and malformed-data quarantine.
+- Added read-only global IndexedDB preflight and fail-closed startup behavior.
+- Prevented authenticated startup from silently entering the old global
+  Sync/Cutover path.
+- Kept portable Backup/Restore user-ID agnostic while limiting backup and
+  restore writes to the current authenticated scope.
 
 ---
 
-## Exact Confirmation Strings
+## Exact Implementation Manifest
 
-Single entry:
+Production (20):
+- src/components/auth/LocalOwnershipGate.tsx
+- src/components/settings/BackupPanel.tsx
+- src/contexts/AuthContext.tsx
+- src/contexts/UserStorageContext.tsx
+- src/hooks/useAccounts.ts
+- src/hooks/useAdvancedFilters.ts
+- src/hooks/useBacktests.ts
+- src/hooks/useLists.ts
+- src/hooks/useRecoveryBin.ts
+- src/hooks/useRestorePoints.ts
+- src/hooks/useSettings.ts
+- src/hooks/useTradeReview.ts
+- src/hooks/useTrades.ts
+- src/main.jsx
+- src/services/backupService.ts
+- src/services/legacyOwnership.ts
+- src/services/localDatabase.ts
+- src/services/storage.js
+- src/services/storageNamespace.ts
+- src/sync/stamp.ts
 
-"Permanently delete this Recovery Bin entry? This action cannot be undone through the Recovery Bin."
+Tests (5):
+- src/services/backupService.test.ts
+- src/services/legacyOwnership.test.ts
+- src/services/localDatabase.test.ts
+- src/services/storageNamespace.test.ts
+- src/sync/stamp.test.ts
 
-Empty Bin:
-
-"Permanently delete ALL Recovery Bin entries? This action cannot be undone through the Recovery Bin."
-
-The strings make no promise about backup, Restore Point, cloud,
-transactional, browser-level, or other recovery availability.
-
----
-
-## Confirmation Boundary and Semantics
-
-RecoveryBinPanel owns both prompts next to their destructive controls.
-
-Cancellation:
-
-- returns without invoking the supplied destructive callback;
-- initiates no Recovery Bin React state update or persistence mutation;
-- leaves active trades and all Recovery Bin entries unchanged;
-- invokes no Restore or Restore All callback.
-
-Single-entry acceptance:
-
-- invokes `onPermanentlyDelete` exactly once;
-- passes the selected `entry.id` through exactly;
-- removes only the matching entry through unchanged hook behavior;
-- leaves other Recovery Bin entries and active trades unchanged.
-
-Empty Bin acceptance:
-
-- invokes `onEmptyBin` exactly once;
-- preserves the existing clear-all behavior;
-- does not modify active trades.
-
-App, SettingsModal, useRecoveryBin, and the existing persistence effect remain
-unchanged. No optimistic mutation occurs before confirmation.
-
----
-
-## Empty-State Behavior
-
-The existing `entries.length > 0` guard remains unchanged. Restore All and
-Empty Bin are hidden when the Recovery Bin is empty, and individual
-permanent-delete controls exist only for rendered entries.
-
----
-
-## Files Changed
-
-Production (1):
-- src/components/trade/RecoveryBinPanel.tsx
-
-Tests:
-- None.
-
-Documentation (2):
+Documentation (3):
+- docs/ARCHITECTURE_DECISIONS.md.txt
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Three files total, exactly matching the approved Phase 31 close manifest.
+Final close manifest: exactly 28 changed paths — 20 production, 5 tests, and
+3 documentation files.
 
 ---
 
-## Persistence and Backward Compatibility
+## Storage Namespace Contract
 
-- Permanent deletion and Empty Bin continue through the existing
-  useRecoveryBin state paths and `saveRecoveryBin` effect.
-- No durable acknowledgement, transaction, or rollback was added.
-- Recovery schema, storage key, retention, and expiry are unchanged.
-- Existing Recovery Bin entries remain valid.
-- Restore and Restore All remain unchanged.
-- Phase 29 Delete ALL recovery behavior remains unchanged.
-- Backup v2 and Restore Points remain unchanged.
-- No migration, backfill, normalization, or data rewrite occurred.
-- No dependency or configuration changed.
+The logical inventory is frozen at 14 keys. Each authenticated logical key is
+physically stored as:
+
+`fxj:user:v1:<encodeURIComponent(exactUserId)>:<logicalKey>`
+
+The exact authenticated UUID is validated and preserved; its case and bytes
+are not normalized. Storage routing is captured by the authenticated session
+and context, not selected from mutable global current-user state. The keyed
+session identity is the exact authenticated `user.id`.
 
 ---
 
-## Explicit Out of Scope (Respected)
+## Legacy Ownership Contract
 
-- No Recovery architecture, retention, expiry, or persistence redesign.
-- No storage, Backup, Restore Point, trade-delete, account-delete, Backtest,
-  saved-filter, checklist, or custom-field change.
-- No generic confirmation, modal, toast, or undo framework.
-- No auth, local-user isolation, Sync, IndexedDB, resolver, or cutover change.
-- No orphan-account, capital, Insights, AD-017, Trade Review, Futures, Prop
-  Firm, Position Calculator, AI, agent, or MCP work.
-- Phase 32 was not selected or started.
+Physical raw presence under any recognized legacy key is authoritative.
+Values such as `[]`, `{}`, `null`, and default-looking data remain claim
+candidates. Malformed recognized JSON is quarantined rather than normalized or
+hydrated.
+
+The five authority states are:
+
+- `legacy_absent`
+- `legacy_detected_unclaimed`
+- `claim_in_progress`
+- `claim_failed_retryable`
+- `claim_verified`
+
+Claim and decline are explicit user choices. A claim reserves an owner before
+copying. Only that reserved owner may retry or overwrite partial destination
+residue. Partial residue is not authority, and verified ownership is not
+established until `claim_verified` is committed and read back last. The
+preserved global source is not deleted.
+
+---
+
+## Locking and Verification Contract
+
+Legacy transitions are serialized by the Web Lock:
+
+`trading-journal-ai:legacy-claim:v1`
+
+No LocalStorage lease or lock polyfill exists. Claim freezes a canonical
+SHA-256 digest, copies the eligible snapshot, reads destination values back,
+re-digests the preserved source, verifies the completed copy and registry, and
+only then establishes `claim_verified` authority.
+
+---
+
+## Sync Cursor Rule
+
+The global legacy Sync cursor participates in physical detection, the frozen
+snapshot, and the source digest. It remains preserved globally and is
+intentionally not transferred into the authenticated namespace. A newly
+scoped Sync cursor starts absent.
+
+---
+
+## IndexedDB Preflight
+
+The existing global `trading-journal-ai` database marker is inspected
+read-only. Preflight must not create an absent database. Marker-present,
+unreadable, or unsafe enumeration/read conditions fail closed. Runtime Gate A
+was A1: the database was absent in the tested real browser profile. This phase
+does not establish per-user IndexedDB.
+
+---
+
+## Authenticated React and Persistence Routing
+
+The implemented ownership/session boundary is:
+
+`AuthProvider → AuthGate → LocalOwnershipGate → keyed LocalOwnershipSession → UserStorageProvider → App/notice`
+
+The captured scoped facade/database serves accounts, trades, lists, settings,
+advanced filters, Trade Review, Recovery Bin, Restore Points, Backtests,
+Backup/Restore, and the Phase 32B local database/stamping paths. Dormant global
+compatibility accessors are not normal authenticated write authority.
+
+Authenticated startup does not start the legacy global Sync/Cutover path.
+Enabled Sync or Cutover fails closed at LocalOwnershipGate.
+SyncConflictReview is not mounted on the authenticated scoped path.
+
+---
+
+## Backup and Restore
+
+- Backup reads the current authenticated scope only.
+- The existing portable v1/v2 payload remains logical and user-ID agnostic;
+  physical namespace keys and owner UUID requirements are not exported.
+- Restore writes only the current authenticated scope.
+- Restore Points remain user-scoped and excluded from portable backup.
+- Sync cursors remain excluded.
+- Explicit A→B restore portability was verified: A's backup replaced B's
+  disposable journal data without mutating A, and B's Restore Points remained
+  B-scoped.
+
+---
+
+## Runtime Evidence
+
+Passed:
+
+- User A/User B confidentiality isolation.
+- A→B and return-to-A account, trade, and Backtest isolation.
+- Restore Point isolation.
+- Recovery A→B isolation and User A Recovery retention after the B session.
+- Current-user-only backup and explicit A→B portable restore.
+- Physical legacy presence detection.
+- Explicit decline and declined-source preservation.
+- Confirmed claim and claim-source preservation.
+- Web Locks supported claim path.
+- Global legacy Sync cursor preservation and scoped cursor absence.
+- Malformed legacy quarantine without hydration or owner assignment.
+
+Not overstated:
+
+- A separate B→A Recovery entry was optional and was not exercised.
+- Direct A→B session replacement was not naturally exercised.
+- Failure-injection/residue retry remains automated-test evidence.
+- Web Locks unavailable remains automated/source verified.
+- Sync/Cutover override fail-closed remains automated/source verified.
+- Marker-present and IDB read-failure paths remain automated-test evidence.
+- Only disposable Users A and B were used. Primary browser storage was not
+  modified; legacy destructive checks used disposable Guest/Incognito
+  contexts.
 
 ---
 
 ## Automated Verification
 
-- TypeScript: 0 errors.
-- ESLint: 0 errors, exactly 7 existing warnings at unchanged sites.
-- Tests: 229/229 passing across 13 files.
-- `npm.cmd run verify`: green.
-- Production build: green, 994 modules transformed.
-- `git diff --check`: clean.
-- Exact implementation manifest: 1 production file and no test files.
-- Dependency and configuration changes: none.
-
-No automated test was added because the approved FINAL RFC explicitly kept
-browser-native `window.confirm` wiring outside the current Node-only suite.
-No jsdom, React Testing Library, component framework, production helper, or
-artificial test seam was introduced.
+- TypeScript: passed, 0 errors.
+- ESLint: passed, 0 errors and exactly 7 existing warnings.
+- Full tests: 266/266 passing across 17 files.
+- `npm.cmd run verify`: passed.
+- Production build: passed, 996 modules transformed.
+- `git diff --check`: passed.
+- Implementation/test manifest before documentation: exactly 20 production
+  files and 5 test files.
+- Dependency, configuration, environment, schema, and calculation changes:
+  none.
+- Futures data/functionality added: none.
 
 ---
 
-## Runtime Verification
+## Known Limitations
 
-Runtime V-1 through V-6 were not directly observed because no safe disposable
-authenticated profile was available.
+- An explicit wrong-user reservation can strand legacy ownership pending
+  future approved handling.
+- The global legacy source remains preserved rather than deleted.
+- Broader authentication-transition cancellation/generation is deferred.
+- Per-user IndexedDB is deferred.
+- Unsupported or unsafe global IndexedDB enumeration fails closed.
+- Direct session replacement and the failure paths listed above retain their
+  accurately bounded automated/source-only evidence.
 
-- No account was created solely for verification.
-- The real journal and real Recovery Bin were not used.
-- Confirmation behavior is supported by source/diff inspection and the
-  unchanged full regression suite.
-- It is not claimed as authenticated runtime observation.
+---
+
+## Explicit Exclusions
+
+Phase 32B does not establish:
+
+- per-user IndexedDB;
+- full Sync reactivation;
+- full Cutover reactivation;
+- general auth-transition cancellation/generation;
+- historical data repair beyond the frozen legacy-ownership flow; or
+- Futures functionality.
+
+No dependency, configuration, environment, schema, or calculation change was
+made.
 
 ---
 
 ## Exit Criteria
 
-- [x] Both destructive actions use their exact frozen confirmation strings.
-- [x] Cancellation invokes no destructive callback or Recovery mutation.
-- [x] Single-entry acceptance invokes the existing callback exactly once with
-      the exact selected entry ID.
-- [x] Empty Bin acceptance invokes the existing callback exactly once.
-- [x] Restore, Restore All, and empty-state behavior remain unchanged.
-- [x] Retention, expiry, schema, key, persistence, and active-trade behavior
-      remain unchanged.
-- [x] Typecheck, lint, tests, verify, build, diff check, and manifest checks
-      passed.
-- [x] No dependency, configuration, migration, or data rewrite was introduced.
+- [x] Authenticated LocalStorage is isolated by exact user ID.
+- [x] Storage routing is captured per authenticated session.
+- [x] Legacy data requires explicit claim or decline.
+- [x] Claim authority is serialized, digest-verified, and committed last.
+- [x] Malformed legacy data and unsafe IndexedDB conditions fail closed.
+- [x] Legacy cursor is preserved but never transferred into scoped authority.
+- [x] Frozen business persistence paths use the scoped facade/database.
+- [x] Backup/Restore remains portable and current-user scoped.
+- [x] Required bounded runtime verification passed.
+- [x] Typecheck, lint, tests, verify, build, diff, and manifest checks passed.
+- [x] Documentation and AD-020 were completed without widening scope.
 
-All automated, source/diff, and manifest exit criteria passed. Authenticated
-runtime V-1 through V-6 remain explicitly unobserved.
+All Phase 32B exit criteria are satisfied.
 
 ---
 
 ## Architecture Decision
 
-No new ADR was required. Phase 31 is a bounded UI safety guard around existing
-destructive callbacks and does not alter persistence architecture, data
-ownership, identity, Sync, or migration behavior.
-
-docs/ARCHITECTURE_DECISIONS.md.txt is unchanged.
-
----
-
-## Historical / User Data
-
-During Phase 31 verification, no real:
-
-- journal trade;
-- Recovery Bin entry;
-- account;
-- Backtest Result;
-- backup;
-- Restore Point; or
-- LocalStorage or IndexedDB user data
-
-was intentionally modified. No Futures data was added.
-
----
-
-## Repository Statistics (Measured at Phase Close)
-
-- Tests: 229 passing across 13 files.
-- Production build: 994 modules transformed.
-- TypeScript: 0 errors.
-- ESLint: 0 errors, 7 existing warnings.
-- Changed files: exactly 3 — 1 production and 2 documentation.
-- Test files changed or created: none.
-- Dependencies/configuration changed: none.
-- Architecture-decision files changed: none.
-
----
-
-## Known Risks / Limitations
-
-- Browser-native confirmation presentation is controlled by the browser.
-- Accepted confirmation still permits intentional permanent deletion.
-- Recovery persistence remains best-effort and unacknowledged.
-- Authenticated runtime behavior was not directly observed with a disposable
-  profile.
-- Other Phase 31 Discovery candidates remain separate and unselected.
+AD-020 — Authenticated Local Ownership and Per-User Storage Isolation records
+the durable ownership, identity, routing, legacy migration, cursor, IDB
+preflight, and portability invariants established by this phase.
 
 ---
 
 ## Next Phase
 
-Phase 32 is unselected and not started. No Phase 32 discovery,
-prioritization, RFC, or implementation was performed.
+No next phase is selected. Phase 32C, Phase 32D, Phase 32E, and Phase 33 are
+not started.

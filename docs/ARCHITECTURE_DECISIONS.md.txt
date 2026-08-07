@@ -2072,3 +2072,186 @@ Durability & Backup Integrity FINAL RFC.
 - Restore Point growth becomes impractical under measured browser quota
   pressure, requiring an independently approved retention or storage
   policy.
+
+---
+
+# AD-020
+
+## Title
+
+Authenticated Local Ownership and Per-User Storage Isolation
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-07
+
+---
+
+## Context
+
+Authentication previously identified the remote account while normal
+browser-local journal persistence continued to use shared global LocalStorage
+keys. Two authenticated users in one browser profile could therefore inherit,
+read, or overwrite the same local journal. Selecting storage through mutable
+global current-user state would also permit stale asynchronous work to write
+into a later session's namespace.
+
+Existing installations may contain physically present data under historical
+global keys, including default-looking values, malformed JSON, and a global
+Sync cursor. Automatically assigning that data to the next user would turn
+login order into an ownership decision. Existing global IndexedDB state has
+the same migration ambiguity and must not be opened or created incidentally.
+
+Portable backup files are different: they represent an explicit transfer of
+logical journal data. Binding them to an exporting UUID or exposing physical
+namespace keys would unnecessarily prevent intentional transfer.
+
+---
+
+## Decision
+
+1. Authenticated browser-local persistence is isolated by exact authenticated
+   user ID. Every key in the frozen 14-key inventory is addressed as
+   `fxj:user:v1:<encodeURIComponent(exactUserId)>:<logicalKey>`. The validated
+   UUID's case and bytes are preserved rather than normalized.
+2. Authenticated storage routing is captured by the session and provided
+   through a context-bound facade/database. Normal authenticated persistence
+   must use that captured scope, never mutable global current-user state. The
+   ownership/storage boundary is keyed by exact authenticated session ID and
+   completes before the journal application mounts.
+3. Existing global LocalStorage data uses explicit ownership, not automatic
+   adoption. Physical raw presence under a recognized key is authoritative;
+   `[]`, `{}`, `null`, and default-looking values are present data. Malformed
+   recognized JSON is quarantined.
+4. Legacy authority has five states: `legacy_absent`,
+   `legacy_detected_unclaimed`, `claim_in_progress`,
+   `claim_failed_retryable`, and `claim_verified`. Claim and decline are
+   explicit actions. Claim reserves one exact owner, and only that owner may
+   retry or overwrite partial destination residue.
+5. Ownership transitions are serialized by the Web Lock
+   `trading-journal-ai:legacy-claim:v1`. No LocalStorage lease or polyfill
+   fallback is acceptable; unsupported locking fails closed.
+6. Claim authority requires a canonical SHA-256 source digest, destination
+   copy, destination read-back, preserved-source re-digest, completed-copy
+   verification, and final registry verification. `claim_verified` is written
+   and read back only after all prior steps succeed. Partial copied residue is
+   not authority.
+7. The global legacy source remains preserved after claim. Preservation
+   supports audit and retry; it does not grant another user authority.
+8. The legacy global Sync cursor participates in detection, snapshot, and
+   digest. It remains preserved globally but is never transferred into an
+   authenticated namespace. A newly scoped Sync cursor starts absent.
+9. Existing global `trading-journal-ai` IndexedDB state is examined only by
+   the frozen read-only preflight. The preflight must not create an absent
+   database. Marker-present, unreadable, or unsafe enumeration/read conditions
+   fail closed pending a separately approved migration.
+10. Dormant global persistence accessors are compatibility surface, not
+    authority for authenticated business writes. Authenticated startup must
+    not silently reactivate the historical global Sync/Cutover path; an
+    incompatible enabled condition fails closed.
+11. Portable Backup/Restore remains user-ID agnostic. It carries logical
+    journal data, not physical namespace keys or owner UUID requirements, and
+    restore targets only the current authenticated scope. Restore Points remain
+    user-scoped and excluded; Sync cursors remain excluded.
+12. This decision does not establish per-user IndexedDB, full Sync
+    reactivation, full Cutover reactivation, or general authentication-
+    transition cancellation/generation. Each requires separate approval.
+
+---
+
+## Reason
+
+Authentication is not local-data isolation unless every persistence operation
+has an immutable owner for its lifetime. Exact-ID namespacing separates users,
+and captured scope prevents authentication transitions from retargeting work.
+
+Legacy ownership cannot be inferred safely from truthiness, default
+equivalence, or login order. Explicit choice plus serialized, digest-verified
+copy establishes authority without deleting the source or treating incomplete
+copy residue as success. Cursor exclusion prevents inheritance of remote
+progress belonging to an unknown historical identity.
+
+Fail-closed IndexedDB inspection extends the same rule across storage
+technologies. Backup stays portable because explicit import and logical payload
+form a separate boundary from ambient browser ownership.
+
+---
+
+## Tradeoff
+
+Successful claim duplicates data because the global source is preserved. An
+explicit wrong-user reservation can strand ownership pending future handling.
+Web Locks support is mandatory, and ambiguous global IndexedDB blocks local use
+rather than risking misassignment.
+
+Captured scope does not cancel every asynchronous operation created before an
+authentication transition. General cancellation/generation remains deferred.
+
+---
+
+## Alternatives Considered
+
+- Normalize or lowercase user IDs. Rejected: authenticated identity bytes are
+  the ownership key; normalization introduces aliasing.
+- Route through mutable global current-user state. Rejected: delayed work can
+  be retargeted after an authentication transition.
+- Assign legacy data to the first user. Rejected: login order is not ownership
+  evidence.
+- Ignore falsey or default legacy values. Rejected: physical presence remains
+  user-owned state and migration eligibility.
+- Move legacy data and delete its source. Rejected: deletion removes audit and
+  retry evidence.
+- Use a LocalStorage lease without Web Locks. Rejected: it creates a second,
+  weaker ownership protocol.
+- Transfer the legacy Sync cursor. Rejected: its authenticated owner is
+  unknown.
+- Open or create IndexedDB during preflight. Rejected: creation mutates absent
+  state and opening ambiguous global state can trigger unsafe migration.
+- Bind backups to the exporting UUID. Rejected: explicit portability is
+  intentional and destination ownership is supplied by authentication.
+
+---
+
+## Consequences
+
+- Authenticated users in one browser profile have distinct physical keys and
+  context-bound persistence routing.
+- The journal mounts only after ownership and IndexedDB safety are established.
+- Legacy claim is explicit, serialized, source-preserving, and verified;
+  decline creates an independent scope without authority.
+- Malformed data, unsupported locking, and unsafe IndexedDB fail closed.
+- Scoped Sync starts without a cursor, and authenticated startup cannot
+  silently use the global Sync/Cutover path.
+- Portable Backup/Restore may intentionally move logical journal data between
+  users; Restore Points remain isolated to their authenticated scope.
+- Global compatibility accessors may remain dormant but do not authorize a
+  scoped-persistence bypass.
+- Future phases may extend or supersede AD-020 only through a later explicit
+  decision; they must not silently violate it.
+
+---
+
+## Spec References
+
+Phase 32A Final RFC and amendments; Phase 32B implementation authorization and
+bounded runtime completion pass; AD-004 through AD-013 (resolver, Sync, and
+cutover architecture); AD-019 (portable Backup/Restore durability contract).
+
+---
+
+## Revisit Only If
+
+- Per-user IndexedDB receives an approved physical database and migration
+  contract.
+- Sync or Cutover is reactivated for authenticated scoped persistence.
+- General authentication-transition cancellation/generation is designed.
+- Safe administrative recovery for wrong-user reservation is required.
+- Portable backup identity or authorization requirements change.

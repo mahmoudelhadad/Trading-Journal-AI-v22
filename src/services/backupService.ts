@@ -82,6 +82,8 @@ import {
 import { nextId } from '@calculations/idGenerator.js';
 import { stampIncomingRecord } from '@sync/record.js';
 import type { MaybePromise } from '@sync/localStores.js';
+import type { createStorageService } from './storage.js';
+import type { ScopedLocalDatabase } from './localDatabase.js';
 
 // ─── Backup format ───────────────────────────────────────────
 
@@ -283,20 +285,28 @@ const semanticEqual = (left: unknown, right: unknown): boolean => {
  * Phase 27. Restore Points inherit them through buildBackup(), while
  * the Restore Point list itself never becomes recursive payload data.
  */
-const BACKUP_SECTIONS: BackupSection<unknown>[] = [
-  defineBackupSection({ key: 'trades',               load: loadTrades,               save: saveTrades,               validate: validateTrades,             reviveForRestore: stampCollectionForRestore }),
-  defineBackupSection({ key: 'accounts',             load: loadAccounts,              save: saveAccounts,             validate: validateAccounts,           reviveForRestore: stampCollectionForRestore }),
-  defineBackupSection({ key: 'lists',                load: loadLists,                 save: saveLists,                validate: validateNullableRecord,     reviveForRestore: stampSingletonForRestore }),
-  defineBackupSection({ key: 'propRules',            load: loadPropRules,             save: savePropRules,            validate: validatePropRules }),
-  defineBackupSection({ key: 'settings',             load: loadSettings,              save: saveSettings,             validate: validateNullableRecord,     reviveForRestore: stampSingletonForRestore }),
-  defineBackupSection({ key: 'savedFilters',         load: loadSavedFilters,          save: saveSavedFilters,         validate: validateSavedFilters }),
-  defineBackupSection({ key: 'checklistTemplates',   load: loadChecklistTemplates,    save: saveChecklistTemplates,   validate: validateChecklistTemplates }),
-  defineBackupSection({ key: 'checklistCompletions', load: loadChecklistCompletions,  save: saveChecklistCompletions, validate: (value) => validateNestedRecord(value, (leaf) => typeof leaf === 'boolean') }),
-  defineBackupSection({ key: 'customFieldDefs',      load: loadCustomFieldDefs,       save: saveCustomFieldDefs,      validate: validateCustomFieldDefs }),
-  defineBackupSection({ key: 'customFieldValues',    load: loadCustomFieldValues,     save: saveCustomFieldValues,    validate: (value) => validateNestedRecord(value, (leaf) => typeof leaf === 'string') }),
-  defineBackupSection({ key: 'recoveryBin',          load: loadRecoveryBin,           save: saveRecoveryBin,          validate: validateRecoveryBin }),
-  defineBackupSection({ key: 'backtestResults',      load: loadBacktestResults,       save: saveBacktestResults,      validate: validateBacktestResults }),
-];
+type ScopedStorageService = ReturnType<typeof createStorageService>;
+interface BackupRuntime { storage: ScopedStorageService; database: ScopedLocalDatabase }
+const adaptSave = (save: (data: never) => MaybePromise<void>) => (value: unknown) => save(value as never);
+
+function getBackupSections(runtime?: BackupRuntime): BackupSection<unknown>[] {
+  const direct = runtime?.storage;
+  const database = runtime?.database;
+  return [
+    defineBackupSection({ key: 'trades',               load: database ? () => database.loadTrades() : loadTrades,                  save: database ? (value) => database.saveTrades(value as never) : adaptSave(saveTrades),       validate: validateTrades,             reviveForRestore: stampCollectionForRestore }),
+    defineBackupSection({ key: 'accounts',             load: database ? () => database.loadAccounts() : loadAccounts,              save: database ? (value) => database.saveAccounts(value as never) : adaptSave(saveAccounts),    validate: validateAccounts,           reviveForRestore: stampCollectionForRestore }),
+    defineBackupSection({ key: 'lists',                load: database ? () => database.loadLists() : loadLists,                    save: database ? (value) => database.saveLists(value as never) : adaptSave(saveLists),          validate: validateNullableRecord,     reviveForRestore: stampSingletonForRestore }),
+    defineBackupSection({ key: 'propRules',            load: direct ? () => direct.loadPropRules() : loadPropRules,                 save: direct ? (value) => direct.savePropRules(value) : adaptSave(savePropRules),                validate: validatePropRules }),
+    defineBackupSection({ key: 'settings',             load: database ? () => database.loadSettings() : loadSettings,              save: database ? (value) => database.saveSettings(value as never) : adaptSave(saveSettings),    validate: validateNullableRecord,     reviveForRestore: stampSingletonForRestore }),
+    defineBackupSection({ key: 'savedFilters',         load: direct ? () => direct.loadSavedFilters() : loadSavedFilters,           save: direct ? (value) => direct.saveSavedFilters(value) : adaptSave(saveSavedFilters),          validate: validateSavedFilters }),
+    defineBackupSection({ key: 'checklistTemplates',   load: direct ? () => direct.loadChecklistTemplates() : loadChecklistTemplates, save: direct ? (value) => direct.saveChecklistTemplates(value) : saveChecklistTemplates, validate: validateChecklistTemplates }),
+    defineBackupSection({ key: 'checklistCompletions', load: direct ? () => direct.loadChecklistCompletions() : loadChecklistCompletions, save: direct ? (value) => direct.saveChecklistCompletions(value) : saveChecklistCompletions, validate: (value) => validateNestedRecord(value, (leaf) => typeof leaf === 'boolean') }),
+    defineBackupSection({ key: 'customFieldDefs',      load: direct ? () => direct.loadCustomFieldDefs() : loadCustomFieldDefs,     save: direct ? (value) => direct.saveCustomFieldDefs(value) : saveCustomFieldDefs,    validate: validateCustomFieldDefs }),
+    defineBackupSection({ key: 'customFieldValues',    load: direct ? () => direct.loadCustomFieldValues() : loadCustomFieldValues, save: direct ? (value) => direct.saveCustomFieldValues(value) : saveCustomFieldValues, validate: (value) => validateNestedRecord(value, (leaf) => typeof leaf === 'string') }),
+    defineBackupSection({ key: 'recoveryBin',          load: direct ? () => direct.loadRecoveryBin() : loadRecoveryBin,             save: direct ? (value) => direct.saveRecoveryBin(value) : saveRecoveryBin,            validate: validateRecoveryBin }),
+    defineBackupSection({ key: 'backtestResults',      load: direct ? () => direct.loadBacktestResults() : loadBacktestResults,     save: direct ? (value) => direct.saveBacktestResults(value) : saveBacktestResults,    validate: validateBacktestResults }),
+  ];
+}
 
 export interface BackupData {
   version:     number;
@@ -311,9 +321,9 @@ export interface BackupData {
  * Pure function — does not touch the DOM or trigger a download itself
  * (see downloadBackup() for that), so it's independently testable.
  */
-export async function buildBackup(): Promise<BackupData> {
+export async function buildBackup(runtime?: BackupRuntime): Promise<BackupData> {
   const data: Record<string, unknown> = {};
-  for (const section of BACKUP_SECTIONS) {
+  for (const section of getBackupSections(runtime)) {
     data[section.key] = await section.load();
   }
   return { version: BACKUP_VERSION, exportedAt: new Date().toISOString(), data };
@@ -323,8 +333,8 @@ export async function buildBackup(): Promise<BackupData> {
  * Trigger a browser download of a full backup as a JSON file.
  * Filename convention: trading_journal_backup_{YYYY-MM-DD}.json
  */
-export async function downloadBackup(): Promise<void> {
-  const backup = await buildBackup();
+export async function downloadBackup(runtime?: BackupRuntime): Promise<void> {
+  const backup = await buildBackup(runtime);
   const json = JSON.stringify(backup, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -358,7 +368,7 @@ export interface RestoreResult {
  *          writing anything (all-or-nothing validation before any
  *          write occurs).
  */
-export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
+export async function restoreBackup(raw: unknown, runtime?: BackupRuntime): Promise<RestoreResult> {
   if (!isRecord(raw)) {
     return { success: false, error: 'Invalid backup file: not a JSON object.' };
   }
@@ -370,14 +380,15 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
     return { success: false, error: 'Invalid backup file: missing version or data.' };
   }
 
-  for (const section of BACKUP_SECTIONS) {
+  const sections = getBackupSections(runtime);
+  for (const section of sections) {
     if (!Object.prototype.hasOwnProperty.call(backup.data, section.key)) continue;
     const error = section.validate(backup.data[section.key]);
     if (error) return { success: false, error: `Invalid backup section '${section.key}': ${error}` };
   }
 
   const restoredKeys: string[] = [];
-  for (const section of BACKUP_SECTIONS) {
+  for (const section of sections) {
     if (!Object.prototype.hasOwnProperty.call(backup.data, section.key)) continue;
     const sectionData = backup.data[section.key];
     if (sectionData === null) continue;
@@ -400,14 +411,14 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
  * Wraps JSON.parse errors into the same RestoreResult shape as
  * restoreBackup(), so callers only need to handle one error path.
  */
-export async function restoreBackupFromJSON(jsonText: string): Promise<RestoreResult> {
+export async function restoreBackupFromJSON(jsonText: string, runtime?: BackupRuntime): Promise<RestoreResult> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText);
   } catch {
     return { success: false, error: 'Could not parse file as JSON.' };
   }
-  return restoreBackup(parsed);
+  return restoreBackup(parsed, runtime);
 }
 
 // ─── Phase 18: Restore Points ─────────────────────────────────
@@ -430,38 +441,41 @@ export async function restoreBackupFromJSON(jsonText: string): Promise<RestoreRe
  * Enforces the MAX_RESTORE_POINTS cap via addRestorePoint()
  * (calculations/recoveryBin.ts) — oldest points are dropped first.
  */
-export async function createRestorePoint(label: string): Promise<RestorePoint> {
+export async function createRestorePoint(label: string, runtime?: BackupRuntime): Promise<RestorePoint> {
   const point: RestorePoint = {
     id: nextId('restore'),
     label: label || 'Restore Point',
     createdAt: Date.now(),
-    backup: await buildBackup(),
+    backup: await buildBackup(runtime),
   };
-  const existing = loadRestorePoints() as RestorePoint[];
-  saveRestorePoints(addRestorePoint(existing, point));
+  const existing = runtime ? runtime.storage.loadRestorePoints() as RestorePoint[] : loadRestorePoints() as RestorePoint[];
+  const updated = addRestorePoint(existing, point);
+  if (runtime) runtime.storage.saveRestorePoints(updated);
+  else saveRestorePoints(updated);
   return point;
 }
 
 /** List all saved restore points, most-recently-created not guaranteed sorted — callers sort as needed. */
-export function listRestorePoints(): RestorePoint[] {
-  return loadRestorePoints() as RestorePoint[];
+export function listRestorePoints(runtime?: BackupRuntime): RestorePoint[] {
+  return runtime ? runtime.storage.loadRestorePoints() as RestorePoint[] : loadRestorePoints() as RestorePoint[];
 }
 
 /**
  * Restore the app to a previously saved restore point.
  * Reuses restoreBackup() — no new restoration logic.
  */
-export async function restoreFromPoint(pointId: string): Promise<RestoreResult> {
-  const points = loadRestorePoints() as RestorePoint[];
+export async function restoreFromPoint(pointId: string, runtime?: BackupRuntime): Promise<RestoreResult> {
+  const points = listRestorePoints(runtime);
   const point = points.find((p) => p.id === pointId);
   if (!point) return { success: false, error: 'Restore point not found.' };
-  return restoreBackup(point.backup);
+  return restoreBackup(point.backup, runtime);
 }
 
 /** Delete a single restore point by id. */
-export function deleteRestorePoint(pointId: string): void {
-  const points = loadRestorePoints() as RestorePoint[];
-  saveRestorePoints(points.filter((p) => p.id !== pointId));
+export function deleteRestorePoint(pointId: string, runtime?: BackupRuntime): void {
+  const updated = listRestorePoints(runtime).filter((p) => p.id !== pointId);
+  if (runtime) runtime.storage.saveRestorePoints(updated);
+  else saveRestorePoints(updated);
 }
 
 /**
@@ -488,8 +502,8 @@ export const AUTO_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
  *
  * @returns The newly created restore point, or null if the interval hasn't elapsed yet.
  */
-export async function maybeCreateAutoBackup(): Promise<RestorePoint | null> {
-  const points = loadRestorePoints() as RestorePoint[];
+export async function maybeCreateAutoBackup(runtime?: BackupRuntime): Promise<RestorePoint | null> {
+  const points = listRestorePoints(runtime);
   const lastAuto = points
     .filter((p) => p.label.startsWith('Auto: '))
     .reduce<RestorePoint | null>((latest, p) => (!latest || p.createdAt > latest.createdAt ? p : latest), null);
@@ -498,5 +512,20 @@ export async function maybeCreateAutoBackup(): Promise<RestorePoint | null> {
     return null;
   }
 
-  return createRestorePoint(`Auto: ${new Date().toLocaleString()}`);
+  return createRestorePoint(`Auto: ${new Date().toLocaleString()}`, runtime);
+}
+
+export function createBackupService(storage: ScopedStorageService, database: ScopedLocalDatabase) {
+  const runtime = Object.freeze({ storage, database });
+  return Object.freeze({
+    buildBackup: () => buildBackup(runtime),
+    downloadBackup: () => downloadBackup(runtime),
+    restoreBackup: (raw: unknown) => restoreBackup(raw, runtime),
+    restoreBackupFromJSON: (json: string) => restoreBackupFromJSON(json, runtime),
+    createRestorePoint: (label: string) => createRestorePoint(label, runtime),
+    listRestorePoints: () => listRestorePoints(runtime),
+    restoreFromPoint: (id: string) => restoreFromPoint(id, runtime),
+    deleteRestorePoint: (id: string) => deleteRestorePoint(id, runtime),
+    maybeCreateAutoBackup: () => maybeCreateAutoBackup(runtime),
+  });
 }

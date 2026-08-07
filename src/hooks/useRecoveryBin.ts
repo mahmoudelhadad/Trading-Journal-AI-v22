@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { loadRecoveryBin, saveRecoveryBin } from '@services/storage.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import {
   buildRecoveryBinEntries, purgeExpiredEntries, isExpired,
   type RecoveryBinCapture,
@@ -50,13 +50,14 @@ export interface UseRecoveryBinReturn<T> {
 }
 
 export function useRecoveryBin<T>(): UseRecoveryBinReturn<T> {
+  const { storage } = useUserStorage();
   const [rawEntries, setRawEntries] = useState<RecoveryBinEntry<T>[]>(
-    () => loadRecoveryBin() as RecoveryBinEntry<T>[],
+    () => storage.loadRecoveryBin() as RecoveryBinEntry<T>[],
   );
 
   useEffect(() => {
-    saveRecoveryBin(rawEntries);
-  }, [rawEntries]);
+    storage.saveRecoveryBin(rawEntries);
+  }, [storage, rawEntries]);
 
   // Purge expired entries lazily on read, matching the pattern
   // documented in calculations/recoveryBin.ts (isExpired/purgeExpiredEntries)

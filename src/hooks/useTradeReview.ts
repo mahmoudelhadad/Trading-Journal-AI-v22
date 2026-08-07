@@ -14,12 +14,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import {
-  loadChecklistTemplates, saveChecklistTemplates,
-  loadChecklistCompletions, saveChecklistCompletions,
-  loadCustomFieldDefs, saveCustomFieldDefs,
-  loadCustomFieldValues, saveCustomFieldValues,
-} from '@services/storage.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import {
   createChecklistTemplate, createCustomFieldDef,
   type ChecklistTemplate, type ChecklistCompletions,
@@ -49,23 +44,24 @@ export interface UseTradeReviewReturn {
 }
 
 export function useTradeReview(): UseTradeReviewReturn {
+  const { storage } = useUserStorage();
   const [checklistTemplates, setChecklistTemplates] = useState<ChecklistTemplate[]>(
-    () => loadChecklistTemplates() as ChecklistTemplate[],
+    () => storage.loadChecklistTemplates() as ChecklistTemplate[],
   );
   const [checklistCompletions, setChecklistCompletions] = useState<ChecklistCompletions>(
-    () => loadChecklistCompletions() as ChecklistCompletions,
+    () => storage.loadChecklistCompletions() as ChecklistCompletions,
   );
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDef[]>(
-    () => loadCustomFieldDefs() as CustomFieldDef[],
+    () => storage.loadCustomFieldDefs() as CustomFieldDef[],
   );
   const [customFieldValues, setCustomFieldValues] = useState<CustomFieldValues>(
-    () => loadCustomFieldValues() as CustomFieldValues,
+    () => storage.loadCustomFieldValues() as CustomFieldValues,
   );
 
-  useEffect(() => { saveChecklistTemplates(checklistTemplates); }, [checklistTemplates]);
-  useEffect(() => { saveChecklistCompletions(checklistCompletions); }, [checklistCompletions]);
-  useEffect(() => { saveCustomFieldDefs(customFieldDefs); }, [customFieldDefs]);
-  useEffect(() => { saveCustomFieldValues(customFieldValues); }, [customFieldValues]);
+  useEffect(() => { storage.saveChecklistTemplates(checklistTemplates); }, [storage, checklistTemplates]);
+  useEffect(() => { storage.saveChecklistCompletions(checklistCompletions); }, [storage, checklistCompletions]);
+  useEffect(() => { storage.saveCustomFieldDefs(customFieldDefs); }, [storage, customFieldDefs]);
+  useEffect(() => { storage.saveCustomFieldValues(customFieldValues); }, [storage, customFieldValues]);
 
   // ── Checklist template CRUD ──
   const addChecklistTemplate = useCallback((name: string, itemTexts: string[]) => {

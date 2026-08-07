@@ -37,9 +37,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@services/supabaseClient.js';
-import { startSyncEngine, stopSyncEngine, startLeaderElection, stopLeaderElection } from '@sync/syncEngine.js';
-import { buildSyncEngineDependencies, isSyncEngineEnabled, isStorageCutoverEnabled } from '@services/syncEngineSetup.js';
-import { runStorageCutover } from '@services/storageCutover.js';
 
 /**
  * §13 Step 6's cutover, as a leader callback.
@@ -57,9 +54,6 @@ import { runStorageCutover } from '@services/storageCutover.js';
  * A non-completing outcome leaves the marker unwritten, so the cutover
  * simply retries on the next load — §13 Step 6 sub-step 5.
  */
-async function runCutoverAsLeader(): Promise<void> {
-  await runStorageCutover();
-}
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -172,20 +166,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   //     `stopLeaderElection()`, but it early-returns when the engine was
   //     never started — so the explicit call after it is what covers the
   //     cutover-only configuration. Both are idempotent.
-  useEffect(() => {
-    if (loading) return;
-    const cutoverEnabled = isStorageCutoverEnabled();
-    const syncEnabled = isSyncEngineEnabled();
-    if (!cutoverEnabled && !syncEnabled) return;
-
-    if (session) {
-      if (cutoverEnabled) startLeaderElection({ onBecameLeader: runCutoverAsLeader });
-      if (syncEnabled) startSyncEngine(buildSyncEngineDependencies());
-    } else {
-      stopSyncEngine();
-      stopLeaderElection();
-    }
-  }, [session, loading]);
+  // Phase 32B: Sync and global storage Cutover are deliberately unreachable.
+  // LocalOwnershipGate fails closed when either rollout flag is true.
 
   const signIn = useCallback(async (email: string, password: string): Promise<AuthResult> => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });

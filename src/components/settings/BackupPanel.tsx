@@ -11,15 +11,18 @@
  * services/storage.js). This component is a thin UI wrapper only.
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { Card } from '@components/ui/Card.js';
 import { Button } from '@components/ui/Button.js';
-import { downloadBackup, restoreBackupFromJSON } from '@services/backupService.js';
+import { createBackupService } from '@services/backupService.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 
 // ─── Component ───────────────────────────────────────────────
 
 export function BackupPanel() {
+  const { storage, database } = useUserStorage();
+  const backup = useMemo(() => createBackupService(storage, database), [storage, database]);
   const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -29,7 +32,7 @@ export function BackupPanel() {
   // already reported, rather than leaving an unhandled rejection.
   async function handleBackup() {
     try {
-      await downloadBackup();
+      await backup.downloadBackup();
       setMessage({ text: '✅ Backup downloaded successfully.', isError: false });
     } catch (err) {
       setMessage({ text: `❌ ${err instanceof Error ? err.message : String(err)}`, isError: true });
@@ -47,7 +50,7 @@ export function BackupPanel() {
     reader.onload = async (ev) => {
       const text = ev.target?.result as string;
       try {
-        const result = await restoreBackupFromJSON(text);
+        const result = await backup.restoreBackupFromJSON(text);
         if (result.success) {
           setMessage({ text: `✅ Restored ${result.restoredKeys?.length ?? 0} section(s). Reload the app to see restored data.`, isError: false });
         } else {

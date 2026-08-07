@@ -22,11 +22,9 @@
  * audit note, backupService.ts) — so `refresh`/`remove` are unchanged.
  */
 
-import { useState, useCallback } from 'react';
-import {
-  createRestorePoint, listRestorePoints, restoreFromPoint, deleteRestorePoint,
-  type RestoreResult,
-} from '@services/backupService.js';
+import { useState, useCallback, useMemo } from 'react';
+import { createBackupService, type RestoreResult } from '@services/backupService.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import type { RestorePoint } from '@calculations/recoveryBin.js';
 
 // ─── Hook ────────────────────────────────────────────────────
@@ -44,25 +42,27 @@ export interface UseRestorePointsReturn {
 }
 
 export function useRestorePoints(): UseRestorePointsReturn {
-  const [restorePoints, setRestorePoints] = useState<RestorePoint[]>(() => listRestorePoints());
+  const { storage, database } = useUserStorage();
+  const backup = useMemo(() => createBackupService(storage, database), [storage, database]);
+  const [restorePoints, setRestorePoints] = useState<RestorePoint[]>(() => backup.listRestorePoints());
 
   const refresh = useCallback(() => {
-    setRestorePoints(listRestorePoints());
-  }, []);
+    setRestorePoints(backup.listRestorePoints());
+  }, [backup]);
 
   const create = useCallback(async (label: string) => {
-    await createRestorePoint(label);
+    await backup.createRestorePoint(label);
     refresh();
-  }, [refresh]);
+  }, [backup, refresh]);
 
   const restore = useCallback((id: string): Promise<RestoreResult> => {
-    return restoreFromPoint(id);
-  }, []);
+    return backup.restoreFromPoint(id);
+  }, [backup]);
 
   const remove = useCallback((id: string) => {
-    deleteRestorePoint(id);
+    backup.deleteRestorePoint(id);
     refresh();
-  }, [refresh]);
+  }, [backup, refresh]);
 
   return { restorePoints, create, restore, remove, refresh };
 }

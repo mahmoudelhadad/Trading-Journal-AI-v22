@@ -31,7 +31,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { loadSettings, saveSettings } from '@services/localDatabase.js';
+import { useUserStorage } from '@contexts/UserStorageContext.js';
 import { createSyncMetadata, refreshForLocalWrite } from '@sync/record.js';
 import type { SingletonRecord } from '@sync/record.js';
 import { notifyLocalMutation } from '@sync/syncEngine.js';
@@ -88,6 +88,7 @@ export interface UseSettingsReturn {
  *   updateSettings({ currency: '€' });
  */
 export function useSettings(): UseSettingsReturn {
+  const { database } = useUserStorage();
   // PHASE 6f — ASYNC HYDRATION. Reads now go through the resolver
   // (services/localDatabase.ts), whose API is asynchronous because
   // IndexedDB is (§3.4). The initial state is therefore the
@@ -128,7 +129,7 @@ export function useSettings(): UseSettingsReturn {
   // every error and cannot reject (services/storage.js).
   useEffect(() => {
     let cancelled = false;
-    loadSettings()
+    database.loadSettings()
       .then((saved) => {
         if (cancelled) return;
         if (saved) {
@@ -144,7 +145,7 @@ export function useSettings(): UseSettingsReturn {
         if (!cancelled) setHydrated(true);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [database]);
 
   // Persist whenever the record changes — but NEVER before hydration
   // finishes, which would write the placeholder above over real stored
@@ -161,8 +162,8 @@ export function useSettings(): UseSettingsReturn {
   useEffect(() => {
     if (!hydrated || loadFailed) return;
     // Phase 6g-1 (BD-1): see useTrades.ts for the full rationale.
-    saveSettings(record).catch((err) => reportLocalPersistenceFailure('settings', err));
-  }, [record, hydrated, loadFailed]);
+    database.saveSettings(record).catch((err) => reportLocalPersistenceFailure('settings', err));
+  }, [database, record, hydrated, loadFailed]);
 
   const settings = record.data;
 

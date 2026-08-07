@@ -86,8 +86,25 @@ const validBacktest = (id = 'bt-1') => ({
   additive: { preserved: true },
 });
 
+const validTrade = (overrides: Record<string, unknown> = {}) => ({
+  _tid: 1,
+  accountId: 'a',
+  date: '2026-08-07',
+  symbol: 'ES',
+  direction: 'Long',
+  entryPrice: '100',
+  stopLoss: '90',
+  target: '120',
+  exitPrice: '110',
+  positionSize: '1',
+  commission: '0',
+  entryTime: '09:30',
+  exitTime: '10:00',
+  ...overrides,
+});
+
 const validData = (): Record<string, unknown> => ({
-  trades: [{ _tid: 1, symbol: 'ES' }],
+  trades: [validTrade()],
   accounts: [{ id: 'a', name: 'Main', capital: 10000, color: '#fff' }],
   lists: { data: { symbols: ['ES'] } },
   propRules: { rules: [{ id: 'r' }] },
@@ -184,13 +201,13 @@ describe('authenticated scoped backup routing', () => {
   it('backs up only the captured current scope without serializing namespace metadata', async () => {
     const ownerA = '12345678-1234-4123-8123-1234567890ab';
     const ownerB = '87654321-4321-4321-8321-ba0987654321';
-    const a = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 1, symbol: 'A' }] });
-    const b = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 2, symbol: 'B' }] });
+    const a = createScopedBackupHarness({ ...validData(), trades: [validTrade({ _tid: 1 })] });
+    const b = createScopedBackupHarness({ ...validData(), trades: [validTrade({ _tid: 2 })] });
 
     const aBackup = await a.service.buildBackup();
     const bBackup = await b.service.buildBackup();
-    expect(aBackup.data.trades).toEqual([{ _tid: 1, symbol: 'A' }]);
-    expect(bBackup.data.trades).toEqual([{ _tid: 2, symbol: 'B' }]);
+    expect(aBackup.data.trades).toEqual([validTrade({ _tid: 1 })]);
+    expect(bBackup.data.trades).toEqual([validTrade({ _tid: 2 })]);
     const serialized = JSON.stringify(aBackup);
     expect(serialized).not.toContain('fxj:user:v1:');
     expect(serialized).not.toContain(ownerA);
@@ -198,13 +215,13 @@ describe('authenticated scoped backup routing', () => {
   });
 
   it('allows a portable backup from A to restore explicitly into B only', async () => {
-    const a = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 11, symbol: 'A' }] });
-    const b = createScopedBackupHarness({ ...validData(), trades: [{ _tid: 22, symbol: 'B' }] });
+    const a = createScopedBackupHarness({ ...validData(), trades: [validTrade({ _tid: 11 })] });
+    const b = createScopedBackupHarness({ ...validData(), trades: [validTrade({ _tid: 22 })] });
     const portable = await a.service.buildBackup();
 
     expect((await b.service.restoreBackup(portable)).success).toBe(true);
-    expect(b.values.trades).toMatchObject([{ _tid: 11, symbol: 'A', syncStatus: 'dirty' }]);
-    expect(a.values.trades).toEqual([{ _tid: 11, symbol: 'A' }]);
+    expect(b.values.trades).toMatchObject([{ _tid: 11, symbol: 'ES', syncStatus: 'dirty' }]);
+    expect(a.values.trades).toEqual([validTrade({ _tid: 11 })]);
   });
 
   it('keeps Restore Points inside the captured user scope', async () => {
@@ -273,11 +290,55 @@ describe('restore validation and compatibility', () => {
     expect(result.success).toBe(false);
     expect(harness.saves).toEqual([]);
   });
+
+  it.each([
+    [validTrade({ _tid: 0 }), 'trade identity'],
+    [validTrade({ entryPrice: 'NaN' }), 'finite number greater than zero'],
+    [validTrade({ date: '02/03/2026' }), 'YYYY-MM-DD'],
+    [validTrade({ date: '2026-02-30' }), 'YYYY-MM-DD'],
+  ])('rejects malformed active trade domain before writes', async (trade, reason) => {
+    const result = await restoreBackup(backup({ trades: [trade] }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(reason);
+    expect(harness.saves).toEqual([]);
+  });
+
+  it('rejects an active orphan against supplied accounts before writes', async () => {
+    const result = await restoreBackup(backup({
+      trades: [validTrade({ accountId: 'missing' })],
+      accounts: validData().accounts,
+    }));
+    expect(result.error).toContain('account does not reference an active account');
+    expect(harness.saves).toEqual([]);
+  });
+
+  it('uses current persisted accounts when the backup omits accounts', async () => {
+    harness.values.accounts = [{ id: 'current', name: 'Current', capital: 5000, color: '#fff' }];
+    const result = await restoreBackup(backup({ trades: [validTrade({ accountId: 'current' })] }));
+    expect(result.success).toBe(true);
+    expect(harness.saves).toEqual(['trades']);
+  });
+
+  it('preserves a tombstoned historical trade without requiring domain repair', async () => {
+    const tombstone = { _tid: 4, accountId: 'missing', date: 'ambiguous', symbol: 'UNKNOWN', deletedAt: '2026-08-07T00:00:00Z' };
+    const result = await restoreBackup(backup({ trades: [tombstone] }));
+    expect(result.success).toBe(true);
+    expect(harness.values.trades).toMatchObject([{ _tid: 4, accountId: 'missing', deletedAt: '2026-08-07T00:00:00Z' }]);
+  });
+
+  it('rejects malformed supplied accounts before any trade write', async () => {
+    const result = await restoreBackup(backup({
+      trades: [validTrade()],
+      accounts: [{ id: 'a', name: 'Main', capital: Number.NaN, color: '#fff' }],
+    }));
+    expect(result.success).toBe(false);
+    expect(harness.saves).toEqual([]);
+  });
 });
 
 describe('semantic persistence verification', () => {
   it('verifies resolver revival once and persists its semantic state', async () => {
-    const result = await restoreBackup(backup({ trades: [{ _tid: 7, additive: 'kept' }] }));
+    const result = await restoreBackup(backup({ trades: [validTrade({ _tid: 7, additive: 'kept' })] }));
     expect(result).toEqual({ success: true, restoredKeys: ['trades'] });
     const saved = (harness.values.trades as Record<string, unknown>[])[0];
     expect(saved).toMatchObject({ _tid: 7, additive: 'kept', syncStatus: 'dirty' });

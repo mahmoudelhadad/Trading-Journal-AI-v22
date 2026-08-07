@@ -49,7 +49,7 @@ export function EntrySetupWinRateChart({ data, height = 160 }: EntrySetupWinRate
             <Cell key={i} fill={d.totalR >= 0 ? C.green : C.red} />
           ))}
         </Bar>
-        <Bar dataKey="wr" name="Win%" fill={`${C.blue}88`} radius={[4, 4, 0, 0]} />
+        <Bar dataKey="wr" name="Win % (W/L only)" fill={`${C.blue}88`} radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

@@ -5,7 +5,7 @@
  *
  * Migrated VERBATIM from the original TradeForm(props) function.
  * Every field, every section, every grid layout, and the save/cancel
- * workflow are preserved exactly. Only the underlying primitives were
+ * workflow is preserved except for the Phase 32C validation boundary. The underlying primitives were
  * swapped for the Phase 3 UI atoms (Select, Input, FormField,
  * SectionHeader, Modal) — visual output is identical.
  *
@@ -16,7 +16,7 @@
  *      switched — matches original sm() function exactly.
  *   3. All fields update local state via a generic setter — matches
  *      original s(k) curried setter exactly.
- *   4. "💾 Save Trade" calls onSave(t) with the current form state.
+ *   4. "💾 Save Trade" validates current-domain invariants before onSave(t).
  *   5. "Cancel" or clicking the backdrop calls onClose().
  *
  * Backward compatibility: FULLY PRESERVED
@@ -32,6 +32,7 @@ import React, { useState, useCallback } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { FX_SYMBOLS, FUT_SYMBOLS } from '@constants/symbols.js';
 import { createEmptyTrade } from '@apptypes/trade.js';
+import { toManualSaveMessage, validateTradeContent } from '@services/tradeValidation.js';
 import { Modal } from '@components/ui/Modal.js';
 import { Select } from '@components/ui/Select.js';
 import { Input } from '@components/ui/Input.js';
@@ -80,6 +81,17 @@ export function TradeForm({
   const [t, setT] = useState<RawTradeContent>(
     () => (trade ?? (createEmptyTrade(defaultAccId) as RawTradeContent)),
   );
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const handleSave = useCallback(() => {
+    const message = toManualSaveMessage(validateTradeContent(t, accounts));
+    if (message) {
+      setSaveError(message);
+      return;
+    }
+    setSaveError(null);
+    onSave(t);
+  }, [accounts, onSave, t]);
 
   // Generic field setter — matches original s(k) curried function
   const setField = useCallback(
@@ -336,8 +348,11 @@ export function TradeForm({
               borderTop:    `1px solid ${C.border}`,
             }}
           >
+            {saveError && (
+              <div style={{ color: C.red, fontSize: 11, alignSelf: 'center' }}>{saveError}</div>
+            )}
             <button
-              onClick={() => onSave(t)}
+              onClick={handleSave}
               style={{
                 background:   mColor,
                 color:        '#fff',

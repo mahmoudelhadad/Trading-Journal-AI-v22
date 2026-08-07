@@ -44,9 +44,10 @@ import { Modal } from '@components/ui/Modal.js';
 import { SectionHeader } from '@components/ui/SectionHeader.js';
 import { Divider } from '@components/ui/Divider.js';
 import {
-  parseFileContent, processRows, isProcessError, convertRow, detectDuplicate,
+  parseFileContent, processRows, isProcessError, convertRow, detectDuplicate, resolveImportAccount,
   type ColumnMap, type ParsedRow,
 } from '@services/importService.js';
+import { validateTradeContent } from '@services/tradeValidation.js';
 import { exportTradesAsCSV } from '@services/exportService.js';
 import type { RawTrade, RawTradeContent } from '@hooks/useTrades.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
@@ -144,21 +145,36 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
   // the preview badges and the actual import filter)
   const rowsWithDupFlag = rows.map((row) => {
     const candidate = convertRow(row, colMap, accounts);
-    return { row, candidate, isDuplicate: detectDuplicate(candidate, rawTrades).isDuplicate };
+    const accountResolution = resolveImportAccount(candidate.broker || candidate.account || '', accounts);
+    const errors = validateTradeContent(candidate, accounts).map((error) => {
+      if (error === 'select an active account.') return accountResolution.error ?? 'Account does not exactly match an active account.';
+      if (error === 'enter a valid YYYY-MM-DD date.') return 'Date is missing or ambiguous; use YYYY-MM-DD.';
+      if (error === 'select a supported symbol.') return 'Symbol is missing or unsupported.';
+      if (error === 'direction must be Long or Short when trade prices are entered.') return 'Direction must be Long or Short when trade prices are present.';
+      return error;
+    });
+    return { row, candidate, errors, isDuplicate: detectDuplicate(candidate, rawTrades).isDuplicate };
   });
   const duplicateCount = rowsWithDupFlag.filter((r) => r.isDuplicate).length;
+  const rejectedCount = rowsWithDupFlag.filter((r) => r.errors.length > 0).length;
+  const acceptedRows = rowsWithDupFlag.filter((r) => r.errors.length === 0);
 
   function doImport() {
     if (!rows.length) return;
-    const toImport = rowsWithDupFlag
+    const toImport = acceptedRows
       .filter((r) => !(skipDuplicates && r.isDuplicate))
-      .map((r) => r.candidate)
-      .filter((t) => t.date || t.symbol); // matches original: keep rows with at least a date or symbol
+      .map((r) => r.candidate);
+
+    if (!acceptedRows.length) {
+      setFeedback('No valid trades to import. Review the rejected rows.');
+      setStatus('error');
+      return;
+    }
 
     onImport(toImport);
     setStatus('done');
     const skippedMsg = skipDuplicates && duplicateCount > 0 ? ` (${duplicateCount} likely duplicate${duplicateCount !== 1 ? 's' : ''} skipped)` : '';
-    setFeedback(`✅ Imported ${toImport.length} trades successfully!${skippedMsg}`);
+    setFeedback(`Imported ${toImport.length} trades. Rejected ${rejectedCount} invalid rows.${skippedMsg}`);
     setPreview(null);
     setRows([]);
     setColMap({});
@@ -223,6 +239,10 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
                 </div>
               )}
 
+              <div style={{ color: rejectedCount > 0 ? C.red : C.green, fontSize: 10, marginBottom: 8 }}>
+                {`${acceptedRows.length} rows ready to import. ${rejectedCount} rows rejected.`}
+              </div>
+
               {preview && preview.length > 0 && (
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ color: C.dim, fontSize: 10, marginBottom: 4 }}>Preview (first 3 rows after mapping):</div>
@@ -238,15 +258,18 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
                       <tbody>
                         {preview.map((row, i) => {
                           const t = convertRow(row, colMap, accounts);
-                          const isDup = rowsWithDupFlag[i]?.isDuplicate;
+                          const rowState = rowsWithDupFlag[i];
+                          const isDup = rowState?.isDuplicate;
                           const cells = [t.symbol || '—', t.date || '—', t.direction || '—', t.entryPrice || '—', t.stopLoss || '—', t.exitPrice || '—', t.session || '—'];
                           return (
                             <tr key={i} style={{ background: isDup ? `${C.gold}15` : (i % 2 === 0 ? C.row : C.rowAlt) }}>
                               {cells.map((v, j) => (
                                 <td key={j} style={{ color: C.text, padding: '4px 8px', borderBottom: '1px solid #151E2E', whiteSpace: 'nowrap' }}>{v}</td>
                               ))}
-                              <td style={{ padding: '4px 8px', borderBottom: '1px solid #151E2E' }}>
-                                {isDup && <span style={{ color: C.gold, fontSize: 9 }}>⚠️ dup</span>}
+                              <td title={rowState?.errors.join(' ')} style={{ padding: '4px 8px', borderBottom: '1px solid #151E2E' }}>
+                                {rowState?.errors.length
+                                  ? <span style={{ color: C.red, fontSize: 9 }}>rejected</span>
+                                  : isDup && <span style={{ color: C.gold, fontSize: 9 }}>⚠️ dup</span>}
                               </td>
                             </tr>
                           );
@@ -258,7 +281,7 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
               )}
 
               <button onClick={doImport} style={{ background: C.green, color: '#fff', border: 'none', borderRadius: 8, padding: '9px', fontSize: 13, fontWeight: 700, cursor: 'pointer', width: '100%' }}>
-                {`✅ Import ${skipDuplicates ? rows.length - duplicateCount : rows.length} Trades Now`}
+                {`✅ Import ${skipDuplicates ? acceptedRows.length - acceptedRows.filter((r) => r.isDuplicate).length : acceptedRows.length} Trades Now`}
               </button>
             </div>
           )}

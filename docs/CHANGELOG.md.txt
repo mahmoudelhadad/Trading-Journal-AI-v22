@@ -1,3 +1,158 @@
+# Phase 32C — Data Integrity and Deterministic Correctness
+
+Status:
+COMPLETE
+
+Summary:
+Active deterministic calculations no longer invent account, direction,
+instrument, numeric, or date truth. New manual, imported, and restored
+records are validated before persistence. Existing inconsistent historical
+data stays raw and unmodified; only the affected derived values become
+unavailable through the existing Phase 28 null contract.
+
+What shipped:
+- Centralized trade-content validation in a shared `tradeValidation` service
+  consumed by the manual form, the import path, and restore. Account, date,
+  symbol, direction, numeric, and time rules live in one place rather than
+  being restated per surface.
+- Import account resolution is now safe and explicit:
+  - When account/broker text is absent and exactly one active account exists,
+    that account is assigned.
+  - When account text is present, matching is case-insensitive and exact
+    against active account names; zero matches, multiple matches, and
+    duplicate exact names are rejected.
+  - Substring matching and first-account/`acc_1` guessing are removed.
+  - Zero active accounts is a rejection, not a fallback.
+  - Tombstoned accounts are not resolution candidates.
+- Date handling is deterministic. Canonical `YYYY-MM-DD` and unambiguous
+  slash dates are accepted; ambiguous slash dates (both components ≤ 12) and
+  locale-dependent strings are left unconverted so validation rejects them.
+  The browser `new Date(string)` fallback that let locale decide an
+  ambiguous import's meaning is removed.
+- Unsupported symbols are rejected. `findPipEntry`/`isSupportedSymbol`
+  replace the generic `{ f: 1, pv: 1, t: 'forex' }` fallback on the hardened
+  calculation paths, so an unknown instrument yields no invented result.
+- TradeForm validates current-domain invariants before `onSave`, showing
+  `Trade not saved: <reason>` and persisting nothing on failure.
+- The import wizard separates accepted from rejected rows, shows a
+  ready/rejected counter and a per-row rejection reason, reports
+  `Imported N trades. Rejected M invalid rows.`, and refuses to import when
+  no row is valid.
+- Historical orphan trades — active trades referencing no active account —
+  are preserved exactly. They are not reassigned, deleted, quarantined, or
+  marked in storage. Only account-capital-derived values become unavailable:
+  `_capital` and `_rPct` are null and no running-capital bucket is created,
+  while account-independent R, points, P/L, net P/L, and risk remain
+  available when their own inputs are valid. Such a trade renders
+  `⚠ Unresolved account` with an explanatory tooltip.
+- The historical synthetic $10,000 account-capital fallback is removed with
+  no replacement number.
+- Restore performs a preflight before any write: structural validation, then
+  RawTrade domain validation, then effective-account referential-integrity
+  validation using the backup's supplied accounts when present and the
+  currently persisted accounts when omitted. An active orphan trade is
+  rejected before the first save; tombstoned historical trades remain
+  preservable. The portable v1/v2 backup format and version are unchanged.
+- Insights hook-order safety: both hooks now run unconditionally and the
+  empty-state return was moved below them, removing the two
+  `react-hooks/rules-of-hooks` suppressions. Formulas, thresholds, messages,
+  and populated behavior are unchanged.
+- AD-017 label corrections on the surfaces that still stated a bare
+  denominator: Strategy performance-table headers and the multi-filter
+  comparison header now read `Win % (W/L only)`, the before/after-9:30 cards
+  read `W/L win:`, the Entry Setup section reads
+  `R & Win Rate (W/L only) by Entry Setup`, the Entry Setup chart series is
+  `Win % (W/L only)`, and Backtest comparison reads `Win Rate (W/L only)`.
+  Terminology only — no formula, threshold, or value changed.
+  `AI-Powered Insights` was deliberately not renamed in this phase.
+
+Explicitly not done:
+- No Futures work, IndexedDB work, Sync/Cutover work, generalized import
+  architecture, historical rewrite, account auto-reassignment, persisted
+  integrity markers, new analytics, or AI.
+- No storage key/namespace, backup format/version, schema, dependency,
+  configuration, or environment change.
+
+Runtime verification:
+- Performed in an isolated browser profile against a disposable
+  authenticated test user with synthetic data only. The primary account and
+  real journal data were never used, and no Futures data was imported.
+- Passed R1 sole-account import, R3 multi-account missing-account rejection,
+  R4 exact-versus-substring resolution, R5 ambiguous-date rejection, R6
+  unsupported-symbol rejection, R7 manual-save validation, R8 historical
+  orphan presentation and calculations, R9 invalid-restore rejection with no
+  mutation, R10 valid v2 restore, R11 Insights empty→populated→empty hook
+  safety, and R12 label verification.
+- R4 confirmed exact resolution rather than first-account fallback: a row
+  naming the second account resolved to that account, while substring-only
+  text was rejected.
+- R8 confirmed the $10,000 removal directly — the orphan row's Risk% renders
+  as unavailable where the old fallback would have produced 1.0%.
+- R2 zero-active-account import rejection was NOT exercised at runtime. The
+  product does not offer a Delete control when only one account exists, and
+  that safety control was not bypassed; R2 remains automated/source-verified
+  only.
+- The multi-filter comparison label site is source-identical to the four
+  verified performance-table headers but was not rendered during the bounded
+  runtime test; calendar-invalid date entry is prevented by the native date
+  control, so that validator remains automated-test evidence.
+- No runtime blocker was found.
+
+Verification:
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- Focused tests: 115 passing across the 4 phase test files.
+- Tests: 308/308 passing across 19 files.
+- `npm.cmd run verify`: green.
+- Production build: green, 997 modules transformed.
+- `git diff --check`: clean.
+- Exact implementation manifest before documentation: 12 production files
+  and 4 test files.
+- No dependency, configuration, environment, schema, or persistence change.
+- No Futures data or functionality was added.
+
+Known limitations:
+- Zero-active-account import rejection retains automated/source-only
+  evidence, as described above.
+- Historical inconsistent data is characterized, not repaired; no phase
+  reconciles orphan trades back to an account.
+- Validation is deliberately scoped to the current domain rules and is not
+  the generalized import framework deferred to a later phase.
+
+Files changed:
+
+Production (12):
+- src/calculations/tradeCalc.ts
+- src/components/backtest/BacktestComparison.tsx
+- src/components/charts/EntrySetupWinRateChart.tsx
+- src/components/import/ImportWizard.tsx
+- src/components/trade/TradeForm.tsx
+- src/components/trade/TradeRow.tsx
+- src/constants/pipValues.js
+- src/pages/Insights.tsx
+- src/pages/Strategy.tsx
+- src/services/backupService.ts
+- src/services/importService.ts
+- src/services/tradeValidation.ts
+
+Tests (4):
+- src/calculations/tradeCalc.test.ts
+- src/services/backupService.test.ts
+- src/services/importService.test.ts
+- src/services/tradeValidation.test.ts
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Architecture:
+- No new architecture decision. Phase 32C widens the existing Phase 28
+  finite-or-null derived-value contract to missing account, direction, and
+  instrument truth, and brings the remaining label surfaces into compliance
+  with AD-017. ARCHITECTURE_DECISIONS.md.txt is unchanged.
+
+---
+
 # Phase 32B — Authenticated Local User Isolation
 
 Status:

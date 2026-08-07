@@ -119,7 +119,7 @@ function PerfTable({ title, color, rows }: PerfTableProps) {
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
-            {['Name', 'Trades', 'Win%', 'Total R', 'Avg R'].map((hd) => (
+            {['Name', 'Trades', 'Win % (W/L only)', 'Total R', 'Avg R'].map((hd) => (
               <TableHeader key={hd}>{hd}</TableHeader>
             ))}
           </tr>
@@ -286,7 +286,7 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
                     <span style={{ color: C.text, fontSize: 10 }}>{(d.trades || (0 + ' trades')) as unknown as string}</span>
                     <span style={{ color: d.totalR === null ? C.dim : d.totalR >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 11 }}>{d.totalR === null ? '—' : `${d.totalR >= 0 ? '+' : ''}${d.totalR.toFixed(2)}R total`}</span>
                     <span style={{ color: d.avgR === null ? C.dim : d.avgR >= 0 ? C.green : C.red, fontSize: 10 }}>{d.avgR === null ? 'avg: —' : `avg: ${d.avgR >= 0 ? '+' : ''}${d.avgR.toFixed(2)}R`}</span>
-                    {d.wr !== null && <span style={{ color: d.wr > 50 ? C.green : C.red, fontSize: 10 }}>{`win: ${d.wr.toFixed(1)}%`}</span>}
+                    {d.wr !== null && <span style={{ color: d.wr > 50 ? C.green : C.red, fontSize: 10 }}>{`W/L win: ${d.wr.toFixed(1)}%`}</span>}
                   </div>
                 </div>
               );
@@ -303,7 +303,7 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
       </div>
 
       <Card>
-        <div style={{ ...sectionTitle, color: C.teal }}>R & Win Rate by Entry Setup</div>
+        <div style={{ ...sectionTitle, color: C.teal }}>R & Win Rate (W/L only) by Entry Setup</div>
         {byEntry.length === 0 || byEntry.some((r) => r.wr === null || r.totalR === null) ? noData : (
           <EntrySetupWinRateChart data={byEntry.map((r) => ({ name: r.key, wr: (r.wr as number) * 100, totalR: r.totalR as number }))} />
         )}
@@ -391,7 +391,7 @@ export function StrategyPage({ trades, lists }: StrategyPageProps) {
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}>
                 <thead>
-                  <tr>{['Filter', 'Trades', 'Win%', 'Total R', 'Avg R', 'P/L'].map((hd) => <TableHeader key={hd}>{hd}</TableHeader>)}</tr>
+                  <tr>{['Filter', 'Trades', 'Win % (W/L only)', 'Total R', 'Avg R', 'P/L'].map((hd) => <TableHeader key={hd}>{hd}</TableHeader>)}</tr>
                 </thead>
                 <tbody>
                   {[

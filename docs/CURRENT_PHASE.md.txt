@@ -4,7 +4,7 @@
 
 ## Phase
 
-Phase 32B — Authenticated Local User Isolation
+Phase 32C — Data Integrity and Deterministic Correctness
 
 Status:
 
@@ -14,199 +14,196 @@ COMPLETE
 
 ## Objective
 
-Prevent authenticated users sharing one browser profile from reading or
-mutating another authenticated user's browser-local journal data, while
-preserving portable Backup/Restore and handling pre-existing global local data
-through an explicit, fail-closed ownership contract.
+Ensure active deterministic calculations never invent account, direction,
+instrument, numeric, or date truth; reject new invalid data before it is
+persisted; and leave existing inconsistent historical data raw and unmodified,
+with only the affected derived calculations becoming unavailable through the
+existing null contract.
 
 ---
 
 ## Delivered Scope
 
-- Added an exact-user-ID LocalStorage namespace and captured per-session
-  storage facade/database.
-- Added the authenticated ownership/storage provider boundary recorded by
-  AD-020.
-- Routed the frozen Phase 32B business persistence surface through the scoped
-  database.
-- Added explicit legacy detection, claim, decline, reservation, verification,
-  retry ownership, and malformed-data quarantine.
-- Added read-only global IndexedDB preflight and fail-closed startup behavior.
-- Prevented authenticated startup from silently entering the old global
-  Sync/Cutover path.
-- Kept portable Backup/Restore user-ID agnostic while limiting backup and
-  restore writes to the current authenticated scope.
+- Added a shared trade-content validation service consumed by the manual
+  form, the import path, and restore.
+- Replaced import account guessing with exact, case-insensitive active-account
+  resolution plus sole-account inference, and made zero, multiple, unmatched,
+  duplicate, and tombstoned cases explicit rejections.
+- Made import date handling deterministic and removed the locale-dependent
+  `new Date(string)` fallback.
+- Removed the generic instrument fallback from the hardened calculation paths
+  so unsupported symbols yield no invented result.
+- Added TradeForm validation before persistence.
+- Separated accepted from rejected rows in the import wizard, with per-row
+  reasons and a truthful import summary.
+- Preserved historical orphan trades exactly while making only
+  account-capital-derived values unavailable, and surfaced them in the trade
+  row.
+- Removed the historical synthetic $10,000 account-capital fallback.
+- Added restore preflight structural, domain, and referential-integrity
+  validation before any write.
+- Repaired Insights hook order and removed the two rules-of-hooks
+  suppressions.
+- Applied the remaining AD-017 W/L-only label corrections.
 
 ---
 
 ## Exact Implementation Manifest
 
-Production (20):
-- src/components/auth/LocalOwnershipGate.tsx
-- src/components/settings/BackupPanel.tsx
-- src/contexts/AuthContext.tsx
-- src/contexts/UserStorageContext.tsx
-- src/hooks/useAccounts.ts
-- src/hooks/useAdvancedFilters.ts
-- src/hooks/useBacktests.ts
-- src/hooks/useLists.ts
-- src/hooks/useRecoveryBin.ts
-- src/hooks/useRestorePoints.ts
-- src/hooks/useSettings.ts
-- src/hooks/useTradeReview.ts
-- src/hooks/useTrades.ts
-- src/main.jsx
+Production (12):
+- src/calculations/tradeCalc.ts
+- src/components/backtest/BacktestComparison.tsx
+- src/components/charts/EntrySetupWinRateChart.tsx
+- src/components/import/ImportWizard.tsx
+- src/components/trade/TradeForm.tsx
+- src/components/trade/TradeRow.tsx
+- src/constants/pipValues.js
+- src/pages/Insights.tsx
+- src/pages/Strategy.tsx
 - src/services/backupService.ts
-- src/services/legacyOwnership.ts
-- src/services/localDatabase.ts
-- src/services/storage.js
-- src/services/storageNamespace.ts
-- src/sync/stamp.ts
+- src/services/importService.ts
+- src/services/tradeValidation.ts
 
-Tests (5):
+Tests (4):
+- src/calculations/tradeCalc.test.ts
 - src/services/backupService.test.ts
-- src/services/legacyOwnership.test.ts
-- src/services/localDatabase.test.ts
-- src/services/storageNamespace.test.ts
-- src/sync/stamp.test.ts
+- src/services/importService.test.ts
+- src/services/tradeValidation.test.ts
 
-Documentation (3):
-- docs/ARCHITECTURE_DECISIONS.md.txt
+Documentation (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Final close manifest: exactly 28 changed paths — 20 production, 5 tests, and
-3 documentation files.
+Final close manifest: exactly 18 changed paths — 12 production, 4 tests, and
+2 documentation files. ARCHITECTURE_DECISIONS.md.txt is unchanged.
 
 ---
 
-## Storage Namespace Contract
+## Validation Contract
 
-The logical inventory is frozen at 14 keys. Each authenticated logical key is
-physically stored as:
+New manual, imported, and restored active records must satisfy:
 
-`fxj:user:v1:<encodeURIComponent(exactUserId)>:<logicalKey>`
+- `accountId` present and resolving to an active account.
+- `date` canonical `YYYY-MM-DD` and calendar-valid.
+- `symbol` present and supported by the calculation table.
+- `direction` exactly `Long` or `Short`; blank is permitted only for
+  incomplete records carrying no direction-dependent calculation inputs.
+- Optional price fields and position size, when present, finite and greater
+  than zero.
+- Commission, when present, finite; zero and negative are permitted.
+- Times, when present, canonical `HH:mm`.
 
-The exact authenticated UUID is validated and preserved; its case and bytes
-are not normalized. Storage routing is captured by the authenticated session
-and context, not selected from mutable global current-user state. The keyed
-session identity is the exact authenticated `user.id`.
-
----
-
-## Legacy Ownership Contract
-
-Physical raw presence under any recognized legacy key is authoritative.
-Values such as `[]`, `{}`, `null`, and default-looking data remain claim
-candidates. Malformed recognized JSON is quarantined rather than normalized or
-hydrated.
-
-The five authority states are:
-
-- `legacy_absent`
-- `legacy_detected_unclaimed`
-- `claim_in_progress`
-- `claim_failed_retryable`
-- `claim_verified`
-
-Claim and decline are explicit user choices. A claim reserves an owner before
-copying. Only that reserved owner may retry or overwrite partial destination
-residue. Partial residue is not authority, and verified ownership is not
-established until `claim_verified` is committed and read back last. The
-preserved global source is not deleted.
+`NaN`, `Infinity`, malformed numeric strings, invalid calendar dates, and
+ambiguous slash dates are rejected. Browser locale must not decide an
+ambiguous import's meaning.
 
 ---
 
-## Locking and Verification Contract
+## Account Resolution Contract
 
-Legacy transitions are serialized by the Web Lock:
+When account or broker text is present:
 
-`trading-journal-ai:legacy-claim:v1`
+- Matching is case-insensitive and exact against active account names.
+- Exactly one match is accepted; zero and multiple are rejected.
 
-No LocalStorage lease or lock polyfill exists. Claim freezes a canonical
-SHA-256 digest, copies the eligible snapshot, reads destination values back,
-re-digests the preserved source, verifies the completed copy and registry, and
-only then establishes `claim_verified` authority.
+When no account text is present:
 
----
+- Exactly one active account is assigned.
+- Zero and multiple active accounts are rejected.
 
-## Sync Cursor Rule
-
-The global legacy Sync cursor participates in physical detection, the frozen
-snapshot, and the source digest. It remains preserved globally and is
-intentionally not transferred into the authenticated namespace. A newly
-scoped Sync cursor starts absent.
+Tombstoned accounts are never candidates. There is no substring matching, no
+first-account guessing, and no `acc_1` truth fallback.
 
 ---
 
-## IndexedDB Preflight
+## Historical Orphan Contract
 
-The existing global `trading-journal-ai` database marker is inspected
-read-only. Preflight must not create an absent database. Marker-present,
-unreadable, or unsafe enumeration/read conditions fail closed. Runtime Gate A
-was A1: the database was absent in the tested real browser profile. This phase
-does not establish per-user IndexedDB.
+An active historical trade referencing no active account is preserved exactly.
+It is not reassigned, deleted, quarantined, or marked in storage.
 
----
+Derived behavior:
 
-## Authenticated React and Persistence Routing
+- `_capital` is null.
+- `_rPct` is null.
+- No running-capital bucket is created for the orphan.
+- Account-independent calculations remain available when their own inputs are
+  valid.
 
-The implemented ownership/session boundary is:
-
-`AuthProvider → AuthGate → LocalOwnershipGate → keyed LocalOwnershipSession → UserStorageProvider → App/notice`
-
-The captured scoped facade/database serves accounts, trades, lists, settings,
-advanced filters, Trade Review, Recovery Bin, Restore Points, Backtests,
-Backup/Restore, and the Phase 32B local database/stamping paths. Dormant global
-compatibility accessors are not normal authenticated write authority.
-
-Authenticated startup does not start the legacy global Sync/Cutover path.
-Enabled Sync or Cutover fails closed at LocalOwnershipGate.
-SyncConflictReview is not mounted on the authenticated scoped path.
+The trade row displays `⚠ Unresolved account` with the tooltip
+"This trade references an account that is no longer available. Account-capital
+calculations are unavailable."
 
 ---
 
-## Backup and Restore
+## Calculation Contract
 
-- Backup reads the current authenticated scope only.
-- The existing portable v1/v2 payload remains logical and user-ID agnostic;
-  physical namespace keys and owner UUID requirements are not exported.
-- Restore writes only the current authenticated scope.
-- Restore Points remain user-scoped and excluded from portable backup.
-- Sync cursors remain excluded.
-- Explicit A→B restore portability was verified: A's backup replaced B's
-  disposable journal data without mutating A, and B's Restore Points remained
-  B-scoped.
+The synthetic $10,000 account-capital fallback is removed with no replacement
+number. Formulas are unchanged; a calculation returns null when required truth
+is unavailable. Direction-dependent calculations require exactly `Long` or
+`Short`; instrument-dependent calculations require a supported symbol; numeric
+operands must satisfy the finite and positive rules where applicable. Risk
+remains direction-independent.
+
+---
+
+## Restore Contract
+
+The portable v1/v2 backup format and version are unchanged. Before any save,
+restore performs structural validation, RawTrade domain validation,
+determination of the effective active accounts, and relationship validation.
+Supplied backup accounts are used when present; the currently persisted
+accounts are loaded when accounts are omitted. An active orphan supplied trade
+is rejected before the first write. Tombstoned historical trades remain
+preservable. No transaction or rollback redesign was made.
 
 ---
 
 ## Runtime Evidence
 
+Performed in an isolated browser profile against a disposable authenticated
+test user with synthetic data only.
+
 Passed:
 
-- User A/User B confidentiality isolation.
-- A→B and return-to-A account, trade, and Backtest isolation.
-- Restore Point isolation.
-- Recovery A→B isolation and User A Recovery retention after the B session.
-- Current-user-only backup and explicit A→B portable restore.
-- Physical legacy presence detection.
-- Explicit decline and declined-source preservation.
-- Confirmed claim and claim-source preservation.
-- Web Locks supported claim path.
-- Global legacy Sync cursor preservation and scoped cursor absence.
-- Malformed legacy quarantine without hydration or owner assignment.
+- R1 sole-account import with no account column; both rows accepted and
+  assigned the sole active account.
+- R3 multi-account missing-account rejection with no first-account fallback
+  and no persistence.
+- R4 exact-versus-substring resolution, including a row naming the second
+  account resolving to that account rather than the first.
+- R5 ambiguous-date rejection with canonical and unambiguous slash dates
+  accepted.
+- R6 unsupported-symbol rejection before persistence.
+- R7 manual-save validation across blank symbol, blank account, zero entry
+  price, and blank date, with nothing persisted.
+- R8 historical orphan presentation, exact warning text and tooltip,
+  unavailable capital-derived values, retained account-independent
+  calculations, and an unchanged raw record.
+- R9 invalid-restore rejection identifying the trade relationship failure,
+  with trades and accounts byte-identical to the pre-restore snapshot.
+- R10 valid v2 restore succeeding with no format or version change.
+- R11 Insights empty → populated → empty on the same mounted component with
+  no hook-order error and no error boundary.
+- R12 label verification on the Strategy performance tables, the
+  before/after-9:30 cards, the Entry Setup section title, the Entry Setup
+  chart series, and the Backtest comparison panel.
 
 Not overstated:
 
-- A separate B→A Recovery entry was optional and was not exercised.
-- Direct A→B session replacement was not naturally exercised.
-- Failure-injection/residue retry remains automated-test evidence.
-- Web Locks unavailable remains automated/source verified.
-- Sync/Cutover override fail-closed remains automated/source verified.
-- Marker-present and IDB read-failure paths remain automated-test evidence.
-- Only disposable Users A and B were used. Primary browser storage was not
-  modified; legacy destructive checks used disposable Guest/Incognito
-  contexts.
+- R2 zero-active-account import rejection was NOT exercised at runtime. The
+  product does not render a Delete control when only one account exists, and
+  that safety control was not bypassed. R2 remains automated/source-verified
+  only.
+- The multi-filter comparison label site is source-identical to the four
+  verified performance-table headers but was not rendered during the bounded
+  runtime test.
+- Calendar-invalid date entry is prevented by the native date control, so
+  that validator retains automated-test evidence.
+- The primary account and real journal data were not used. Only a disposable
+  authenticated test user and synthetic data were used.
+- No Futures data was imported.
+
+No runtime blocker was found.
 
 ---
 
@@ -214,74 +211,91 @@ Not overstated:
 
 - TypeScript: passed, 0 errors.
 - ESLint: passed, 0 errors and exactly 7 existing warnings.
-- Full tests: 266/266 passing across 17 files.
+- Focused tests: 115 passing across the 4 phase test files.
+- Full tests: 308/308 passing across 19 files.
 - `npm.cmd run verify`: passed.
-- Production build: passed, 996 modules transformed.
+- Production build: passed, 997 modules transformed.
 - `git diff --check`: passed.
-- Implementation/test manifest before documentation: exactly 20 production
-  files and 5 test files.
-- Dependency, configuration, environment, schema, and calculation changes:
-  none.
+- Implementation/test manifest before documentation: exactly 12 production
+  files and 4 test files.
+- Dependency, configuration, environment, schema, persistence, and backup
+  format changes: none.
 - Futures data/functionality added: none.
 
 ---
 
 ## Known Limitations
 
-- An explicit wrong-user reservation can strand legacy ownership pending
-  future approved handling.
-- The global legacy source remains preserved rather than deleted.
-- Broader authentication-transition cancellation/generation is deferred.
-- Per-user IndexedDB is deferred.
-- Unsupported or unsafe global IndexedDB enumeration fails closed.
-- Direct session replacement and the failure paths listed above retain their
-  accurately bounded automated/source-only evidence.
+- Zero-active-account import rejection retains automated/source-only
+  evidence.
+- Historical inconsistent data is characterized, not repaired; no
+  reconciliation of orphan trades back to an account is provided.
+- Validation is scoped to the current domain rules and is not the generalized
+  import framework deferred to a later phase.
+- The multi-filter comparison label and the calendar-invalid date validator
+  retain source/automated evidence as described above.
 
 ---
 
 ## Explicit Exclusions
 
-Phase 32B does not establish:
+Phase 32C does not establish:
 
-- per-user IndexedDB;
-- full Sync reactivation;
-- full Cutover reactivation;
-- general auth-transition cancellation/generation;
-- historical data repair beyond the frozen legacy-ownership flow; or
-- Futures functionality.
-
-No dependency, configuration, environment, schema, or calculation change was
-made.
+- Futures functionality;
+- IndexedDB work;
+- Sync or Cutover work;
+- a generalized import architecture;
+- historical rewrite or account auto-reassignment;
+- persisted integrity markers or historical quarantine/deletion;
+- new analytics or AI;
+- Trade Review changes; or
+- any storage key/namespace or backup format/version change.
 
 ---
 
 ## Exit Criteria
 
-- [x] Authenticated LocalStorage is isolated by exact user ID.
-- [x] Storage routing is captured per authenticated session.
-- [x] Legacy data requires explicit claim or decline.
-- [x] Claim authority is serialized, digest-verified, and committed last.
-- [x] Malformed legacy data and unsafe IndexedDB conditions fail closed.
-- [x] Legacy cursor is preserved but never transferred into scoped authority.
-- [x] Frozen business persistence paths use the scoped facade/database.
-- [x] Backup/Restore remains portable and current-user scoped.
-- [x] Required bounded runtime verification passed.
+- [x] Trade-domain validation is centralized and shared.
+- [x] Import account resolution is exact, with sole-account inference and no
+      guessing.
+- [x] Ambiguous dates, unsupported symbols, and invalid numerics are rejected
+      before persistence.
+- [x] Manual saves are validated before persistence.
+- [x] Restore validates structure, domain, and referential integrity before
+      any write.
+- [x] Historical orphans are preserved raw with only capital-derived values
+      unavailable.
+- [x] The synthetic $10,000 account-capital fallback is removed.
+- [x] Insights hooks are unconditional.
+- [x] AD-017 W/L-only labels are applied to the approved surfaces.
+- [x] Required bounded runtime verification passed, with R2 accurately
+      recorded as automated/source-verified only.
 - [x] Typecheck, lint, tests, verify, build, diff, and manifest checks passed.
-- [x] Documentation and AD-020 were completed without widening scope.
+- [x] Documentation was completed without widening scope.
 
-All Phase 32B exit criteria are satisfied.
+All Phase 32C exit criteria are satisfied.
 
 ---
 
 ## Architecture Decision
 
-AD-020 — Authenticated Local Ownership and Per-User Storage Isolation records
-the durable ownership, identity, routing, legacy migration, cursor, IDB
-preflight, and portability invariants established by this phase.
+No new architecture decision was recorded. Phase 32C widens the existing
+Phase 28 finite-or-null derived-value contract to cover missing account,
+direction, and instrument truth, and brings the remaining label surfaces into
+compliance with AD-017. It introduces no new cross-cutting architectural
+contract, no persistence-class change, and no storage or format change, so
+ARCHITECTURE_DECISIONS.md.txt is unchanged.
+
+---
+
+## Repository State
+
+The implementation and documentation diff remains unstaged. No commit, tag,
+push, pull request, merge, or rebase has occurred. The repository awaits
+separate Git closure authorization.
 
 ---
 
 ## Next Phase
 
-No next phase is selected. Phase 32C, Phase 32D, Phase 32E, and Phase 33 are
-not started.
+No next phase is selected. Phase 32D, Phase 32E, and Phase 33 are not started.

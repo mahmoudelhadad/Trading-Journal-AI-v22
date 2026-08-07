@@ -34,6 +34,7 @@ import { createEmptyTrade } from '@apptypes/trade.js';
 import { isFutures } from '@constants/pipValues.js';
 import type { RawTrade, RawTradeContent } from '@apptypes/trade.js';
 import type { Account } from '@apptypes/account.js';
+import { activeAccounts } from './tradeValidation.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -147,10 +148,9 @@ export function cleanNum(v: unknown): string {
 }
 
 /**
- * Parse a date string into 'YYYY-MM-DD' format.
- * FORMULA: Tries M/D/YYYY (or D/M/YYYY if the first number > 12),
- *          then D-M-YYYY, then YYYY-MM-DD passthrough, then falls back
- *          to new Date(s) parsing.
+ * Parse an unambiguous date string into 'YYYY-MM-DD' format.
+ * Ambiguous and unsupported strings remain unchanged so validation
+ * rejects them instead of relying on locale/browser interpretation.
  * SOURCE:  Migrated verbatim.
  * ASSUMPTIONS: When the first slash-separated number is <= 12, it is
  *          assumed to be the MONTH (M/D/YYYY, the common US broker
@@ -166,22 +166,13 @@ export function parseDate(v: unknown): string {
   if (m1) {
     let mo = +m1[1], dy = +m1[2];
     const yr = +m1[3];
-    if (mo > 12) { const t = mo; mo = dy; dy = t; }
+    if (mo <= 12 && dy <= 12) return s;
+    if (mo > 12 && dy <= 12) { const t = mo; mo = dy; dy = t; }
+    if (mo > 12 || dy > 31) return s;
     return `${yr}-${mo < 10 ? '0' + mo : mo}-${dy < 10 ? '0' + dy : dy}`;
   }
 
-  const m2 = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (m2) return `${m2[3]}-${+m2[2] < 10 ? '0' : ''}${m2[2]}-${+m2[1] < 10 ? '0' : ''}${m2[1]}`;
-
   if (s.match(/^\d{4}-\d{2}-\d{2}$/)) return s;
-
-  try {
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) {
-      const yr = d.getFullYear(), mo = d.getMonth() + 1, dy = d.getDate();
-      return `${yr}-${mo < 10 ? '0' + mo : mo}-${dy < 10 ? '0' + dy : dy}`;
-    }
-  } catch { /* fall through */ }
 
   return s;
 }
@@ -244,8 +235,8 @@ export function parseFileContent(text: string): string[][] {
  * FORMULA:  For each mapped field, clean the raw value and apply
  *           field-specific parsing (date/time/numeric). Account is
  *           resolved by matching the row's broker (preferred) or
- *           account field against existing account names (exact match
- *           first, then substring match). Market is auto-detected via
+ *           account field against active account names exactly, or by
+ *           sole-account inference. Market is auto-detected via
  *           isFutures(symbol).
  * SOURCE:   Migrated verbatim from the original app's convertRow(),
  *           except emptyT()->createEmptyTrade() and isFut()->
@@ -254,8 +245,29 @@ export function parseFileContent(text: string): string[][] {
  * EDGE CASES: A row with no value for a mapped field is left as the
  *           empty-trade default for that field (not overwritten).
  */
+export interface AccountResolution {
+  accountId: string | null;
+  error?: string;
+}
+
+export function resolveImportAccount(matchValue: string, accounts: Account[]): AccountResolution {
+  const candidates = activeAccounts(accounts);
+  const normalized = cleanVal(matchValue).toLowerCase();
+  if (!normalized) {
+    if (candidates.length === 1) return { accountId: candidates[0].id };
+    return candidates.length > 1
+      ? { accountId: null, error: 'Account is missing and more than one active account exists.' }
+      : { accountId: null, error: 'Account does not exactly match an active account.' };
+  }
+  const matches = candidates.filter((account) => account.name.toLowerCase() === normalized);
+  if (matches.length === 1) return { accountId: matches[0].id };
+  if (matches.length > 1) return { accountId: null, error: 'Account name matches more than one active account.' };
+  return { accountId: null, error: 'Account does not exactly match an active account.' };
+}
+
 export function convertRow(row: ParsedRow, colMap: ColumnMap, accounts: Account[]): RawTradeContent {
-  const t = createEmptyTrade((accounts[0] || { id: 'acc_1' }).id) as RawTradeContent;
+  const t = createEmptyTrade('') as RawTradeContent;
+  t.date = '';
   t._tid = Date.now() + Math.random();
 
   Object.keys(colMap).forEach((field) => {
@@ -269,18 +281,8 @@ export function convertRow(row: ParsedRow, colMap: ColumnMap, accounts: Account[
     (t as unknown as Record<string, string>)[field] = val;
   });
 
-  const matchVal = t.broker || t.account || '';
-  let matchedAcc: Account | undefined;
-  if (matchVal) {
-    matchedAcc = accounts.find((a) => a.name.toLowerCase() === matchVal.toLowerCase());
-    if (!matchedAcc) {
-      matchedAcc = accounts.find((a) => {
-        const an = a.name.toLowerCase(), mv = matchVal.toLowerCase();
-        return an.indexOf(mv) >= 0 || mv.indexOf(an) >= 0;
-      });
-    }
-  }
-  if (matchedAcc) t.accountId = matchedAcc.id;
+  const resolution = resolveImportAccount(t.broker || t.account || '', accounts);
+  if (resolution.accountId) t.accountId = resolution.accountId;
 
   t.market = isFutures(t.symbol) ? 'futures' : 'forex';
 

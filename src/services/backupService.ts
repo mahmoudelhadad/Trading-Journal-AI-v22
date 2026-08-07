@@ -84,6 +84,9 @@ import { stampIncomingRecord } from '@sync/record.js';
 import type { MaybePromise } from '@sync/localStores.js';
 import type { createStorageService } from './storage.js';
 import type { ScopedLocalDatabase } from './localDatabase.js';
+import { validateTradeContent } from './tradeValidation.js';
+import type { Account } from '@apptypes/account.js';
+import type { RawTradeContent } from '@apptypes/trade.js';
 
 // ─── Backup format ───────────────────────────────────────────
 
@@ -385,6 +388,30 @@ export async function restoreBackup(raw: unknown, runtime?: BackupRuntime): Prom
     if (!Object.prototype.hasOwnProperty.call(backup.data, section.key)) continue;
     const error = section.validate(backup.data[section.key]);
     if (error) return { success: false, error: `Invalid backup section '${section.key}': ${error}` };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(backup.data, 'trades')) {
+    const trades = backup.data.trades as Record<string, unknown>[];
+    let effectiveAccounts: Account[];
+    try {
+      effectiveAccounts = Array.isArray(backup.data.accounts)
+        ? backup.data.accounts as Account[]
+        : await (runtime ? runtime.database.loadAccounts() : loadAccounts()) as Account[];
+      if (!Array.isArray(effectiveAccounts)) throw new Error('accounts unavailable');
+    } catch {
+      return { success: false, error: "Invalid backup section 'trades': could not determine active accounts." };
+    }
+    for (let index = 0; index < trades.length; index++) {
+      const trade = trades[index];
+      if (trade.deletedAt != null) continue;
+      const errors = validateTradeContent(trade as Partial<RawTradeContent>, effectiveAccounts, { requireIdentity: true });
+      if (errors.length) {
+        const reason = errors[0] === 'select an active account.'
+          ? 'account does not reference an active account.'
+          : errors[0];
+        return { success: false, error: `Invalid backup section 'trades': trade ${index + 1}: ${reason}` };
+      }
+    }
   }
 
   const restoredKeys: string[] = [];

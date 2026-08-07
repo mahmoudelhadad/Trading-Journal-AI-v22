@@ -72,6 +72,12 @@ describe('calcR', () => {
     expect(calcR({ entryPrice: '0', stopLoss: '1e-308', exitPrice: '1e308', direction: 'Long' })).toBeNull();
   });
 
+  it('does not interpret a missing or invalid direction as Short', () => {
+    expect(calcR({ entryPrice: '100', stopLoss: '90', exitPrice: '120', direction: '' })).toBeNull();
+    expect(calcPL({ entryPrice: '100', exitPrice: '120', positionSize: '1', symbol: 'US100', direction: 'Sell' })).toBeNull();
+    expect(calcPoints({ entryPrice: '100', exitPrice: '120', symbol: 'US100', direction: undefined })).toBeNull();
+  });
+
   it('returns null for an invalid target and preserves finite negative planned R', () => {
     expect(calcPlannedR({ entryPrice: '100', stopLoss: '90', target: 'bad', direction: 'Long' })).toBeNull();
     expect(calcPlannedR({ entryPrice: '100', stopLoss: '90', target: '80', direction: 'Long' })).toBe(-2);
@@ -91,6 +97,11 @@ describe('calcPL', () => {
 
   it('returns null when symbol is missing', () => {
     expect(calcPL({ entryPrice: '100', exitPrice: '120', positionSize: '1', symbol: '', direction: 'Long' })).toBeNull();
+  });
+
+  it('returns null for an unsupported symbol instead of using generic Forex truth', () => {
+    expect(calcPL({ entryPrice: '100', exitPrice: '120', positionSize: '1', symbol: 'UNKNOWN', direction: 'Long' })).toBeNull();
+    expect(calcRisk({ entryPrice: '100', stopLoss: '90', positionSize: '1', symbol: 'UNKNOWN' })).toBeNull();
   });
 
   it('returns null for invalid entry, exit, size, and finite multiplication overflow', () => {
@@ -201,6 +212,23 @@ describe('enrichTrades', () => {
     expect(invalid._netPL).toBeNull();
   });
 
+  it('preserves an orphan raw trade while withholding only account-capital truth', () => {
+    const raw = Object.freeze({
+      symbol: 'US100', accountId: 'missing', positionSize: '1', direction: 'Long',
+      entryPrice: '100', stopLoss: '90', exitPrice: '120', commission: '0',
+    });
+    const [orphan] = enrichTrades([raw], accounts);
+    expect(raw).toEqual({
+      symbol: 'US100', accountId: 'missing', positionSize: '1', direction: 'Long',
+      entryPrice: '100', stopLoss: '90', exitPrice: '120', commission: '0',
+    });
+    expect(orphan._capital).toBeNull();
+    expect(orphan._rPct).toBeNull();
+    expect(orphan._r).toBe(2);
+    expect(orphan._pl).toBe(20);
+    expect(orphan._rv).toBe(10);
+  });
+
   it('does not let unavailable net P/L or capital overflow create non-finite running state', () => {
     const base = { symbol: 'US100', accountId: 'acc_1', positionSize: '1', direction: 'Long', entryPrice: '100', stopLoss: '90', exitPrice: '120', commission: '0' };
     const [invalid, valid] = enrichTrades([{ ...base, exitPrice: 'BE' }, base], accounts);
@@ -209,7 +237,7 @@ describe('enrichTrades', () => {
 
     const hugeAccounts: Account[] = [{ id: 'acc_1', name: 'Huge', capital: 1e308 } as Account];
     const [overflowing, after] = enrichTrades([
-      { ...base, entryPrice: '0', exitPrice: '1e308' }, base,
+      { ...base, entryPrice: '1', exitPrice: '1e308' }, base,
     ], hugeAccounts);
     expect(overflowing._netPL).toBe(1e308);
     expect(after._capital).toBeNull();

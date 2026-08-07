@@ -87,6 +87,12 @@ export const PIP_TABLE = {
 export const getPipEntry = (symbol) =>
   PIP_TABLE[symbol] ?? { f: 1, pv: 1, t: 'forex' };
 
+/** Return the configured entry without inventing a fallback. */
+export const findPipEntry = (symbol) => PIP_TABLE[symbol] ?? null;
+
+/** True only when the current calculation table explicitly supports the symbol. */
+export const isSupportedSymbol = (symbol) => findPipEntry(symbol) !== null;
+
 /**
  * Returns true if the symbol is a futures contract.
  * Matches original: isFut(sym) = getP(sym).t === 'futures'

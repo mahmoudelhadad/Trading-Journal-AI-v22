@@ -64,7 +64,8 @@ export function TradeRow({
 
   const day  = formatDayShort(t.date);
   const mc   = t.market === 'futures' ? C.orange : C.blue;
-  const accName = accounts.find((a) => a.id === t.accountId)?.name ?? '—';
+  const account = accounts.find((a) => a.id === t.accountId);
+  const accName = account?.name ?? '⚠ Unresolved account';
 
   return (
     <tr style={{ background: bg }}>
@@ -101,8 +102,12 @@ export function TradeRow({
       <TableCell>{t.session || '—'}</TableCell>
 
       {/* Account */}
-      <TableCell style={{ fontSize: 10, color: C.dim, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {accName}
+      <TableCell
+        style={{ fontSize: 10, color: account ? C.dim : C.gold, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}
+      >
+        <span title={account ? undefined : 'This trade references an account that is no longer available. Account-capital calculations are unavailable.'}>
+          {accName}
+        </span>
       </TableCell>
 
       {/* Dir */}

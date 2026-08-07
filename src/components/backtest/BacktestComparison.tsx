@@ -57,7 +57,7 @@ export function BacktestComparison({ resultA, resultB, legacyA, legacyB, data, o
           <div style={{ color: C.blue, fontSize: 12, fontWeight: 700 }}>{resultA.name}</div>
           {legacyA && <div style={{ color: C.dim, fontSize: 10 }}>Legacy series — reconstructed from current journal trades.</div>}
           <KPI label="Net P&L"      value={fr.usd(resultA.summary.netPL)} color={C.blue} />
-          <KPI label="Win Rate"     value={fr.pct(resultA.summary.wr)} color={C.blue} sub={`${resultA.summary.green}W / ${resultA.summary.red}L`} />
+          <KPI label="Win Rate (W/L only)" value={fr.pct(resultA.summary.wr)} color={C.blue} sub={`${resultA.summary.green}W / ${resultA.summary.red}L`} />
           <KPI label="Profit Factor" value={resultA.core.profitFactor !== null ? resultA.core.profitFactor.toFixed(2) : '—'} color={C.blue} />
           <KPI label="Max Drawdown" value={`-$${resultA.drawdown.maxDrawdownDollar.toFixed(0)}`} color={C.blue} sub={`-${resultA.drawdown.maxDrawdownPercent.toFixed(1)}%`} />
           <KPI label="Trades"       value={resultA.tradeCount} color={C.blue} sub={`Start: $${resultA.startingCapital.toLocaleString()}`} />
@@ -68,7 +68,7 @@ export function BacktestComparison({ resultA, resultB, legacyA, legacyB, data, o
           <div style={{ color: C.gold, fontSize: 12, fontWeight: 700 }}>{resultB.name}</div>
           {legacyB && <div style={{ color: C.dim, fontSize: 10 }}>Legacy series — reconstructed from current journal trades.</div>}
           <KPI label="Net P&L"      value={fr.usd(resultB.summary.netPL)} color={C.gold} />
-          <KPI label="Win Rate"     value={fr.pct(resultB.summary.wr)} color={C.gold} sub={`${resultB.summary.green}W / ${resultB.summary.red}L`} />
+          <KPI label="Win Rate (W/L only)" value={fr.pct(resultB.summary.wr)} color={C.gold} sub={`${resultB.summary.green}W / ${resultB.summary.red}L`} />
           <KPI label="Profit Factor" value={resultB.core.profitFactor !== null ? resultB.core.profitFactor.toFixed(2) : '—'} color={C.gold} />
           <KPI label="Max Drawdown" value={`-$${resultB.drawdown.maxDrawdownDollar.toFixed(0)}`} color={C.gold} sub={`-${resultB.drawdown.maxDrawdownPercent.toFixed(1)}%`} />
           <KPI label="Trades"       value={resultB.tradeCount} color={C.gold} sub={`Start: $${resultB.startingCapital.toLocaleString()}`} />

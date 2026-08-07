@@ -6,17 +6,18 @@
  * Every function in this file is copied VERBATIM from the original
  * single-file app. The ONLY changes are:
  *   - TypeScript type annotations added
- *   - `getP()` replaced with `getPipEntry()` from constants
- *     (getPipEntry is identical: PT[sym] ?? { f:1, pv:1, t:'forex' })
+ *   - `getP()` replaced with `findPipEntry()` from constants
+ *     (Phase 32C: no generic { f:1, pv:1, t:'forex' } fallback — an
+ *     unsupported symbol yields null instead of invented instrument truth)
  *   - `isFut()` replaced with `isFutures()` from constants (identical)
  *   - `pointLabel()` replaced with `getPointLabel()` from constants (identical)
  *
  * Backward compatibility: FULLY PRESERVED
  * No calculation logic has been changed.
- * Results are mathematically identical to the original app.
+ * Phase 32C preserves formulas but returns null when required truth is unavailable.
  */
 
-import { getPipEntry, isFutures, getPointLabel } from '@constants/pipValues.js';
+import { findPipEntry, isFutures, getPointLabel } from '@constants/pipValues.js';
 import type { Account } from '@apptypes/account.js';
 import type { RawTradeContent } from '@apptypes/trade.js';
 
@@ -105,6 +106,15 @@ export function finiteOrNull(value: number): number | null {
   return isFiniteNumber(value) ? value : null;
 }
 
+function positiveFinite(value: unknown): number | null {
+  const parsed = toFiniteNumber(value);
+  return parsed !== null && parsed > 0 ? parsed : null;
+}
+
+function isDirection(value: unknown): value is 'Long' | 'Short' {
+  return value === 'Long' || value === 'Short';
+}
+
 /**
  * Sum available finite values. Null/undefined/non-finite operands are unavailable
  * contributions; overflow of the finite running sum makes the aggregate unavailable.
@@ -127,10 +137,10 @@ export function sumFinite(values: readonly (number | null | undefined)[]): numbe
  * Original: function calcR(t)
  */
 export function calcR(t: TradeLike): number | null {
-  const ep = toFiniteNumber(t.entryPrice);
-  const sl = toFiniteNumber(t.stopLoss);
-  const ex = toFiniteNumber(t.exitPrice);
-  if (ep === null || sl === null || ex === null) return null;
+  const ep = positiveFinite(t.entryPrice);
+  const sl = positiveFinite(t.stopLoss);
+  const ex = positiveFinite(t.exitPrice);
+  if (ep === null || sl === null || ex === null || !isDirection(t.direction)) return null;
   const d = Math.abs(ep - sl);
   if (!isFiniteNumber(d) || d === 0) return null;
   return finiteOrNull(t.direction === 'Long' ? (ex - ep) / d : (ep - ex) / d);
@@ -141,10 +151,10 @@ export function calcR(t: TradeLike): number | null {
  * Original: function calcPlannedR(t)
  */
 export function calcPlannedR(t: TradeLike): number | null {
-  const ep = toFiniteNumber(t.entryPrice);
-  const sl = toFiniteNumber(t.stopLoss);
-  const tg = toFiniteNumber(t.target);
-  if (ep === null || sl === null || tg === null) return null;
+  const ep = positiveFinite(t.entryPrice);
+  const sl = positiveFinite(t.stopLoss);
+  const tg = positiveFinite(t.target);
+  if (ep === null || sl === null || tg === null || !isDirection(t.direction)) return null;
   const d = Math.abs(ep - sl);
   if (!isFiniteNumber(d) || d === 0) return null;
   return finiteOrNull(t.direction === 'Long' ? (tg - ep) / d : (ep - tg) / d);
@@ -153,14 +163,14 @@ export function calcPlannedR(t: TradeLike): number | null {
 /**
  * Calculate gross P/L in dollars.
  * Original: function calcPL(t)
- * getP() → getPipEntry() — identical behavior
+ * getP() → findPipEntry() — unsupported symbols return null
  */
 export function calcPL(t: TradeLike): number | null {
-  const ep = toFiniteNumber(t.entryPrice);
-  const ex = toFiniteNumber(t.exitPrice);
-  const size = toFiniteNumber(t.positionSize);
-  if (ep === null || ex === null || size === null || !t.symbol) return null;
-  const p = getPipEntry(t.symbol);
+  const ep = positiveFinite(t.entryPrice);
+  const ex = positiveFinite(t.exitPrice);
+  const size = positiveFinite(t.positionSize);
+  const p = findPipEntry(t.symbol);
+  if (ep === null || ex === null || size === null || !p || !isDirection(t.direction)) return null;
   const diff = t.direction === 'Long'
     ? ex - ep
     : ep - ex;
@@ -172,11 +182,11 @@ export function calcPL(t: TradeLike): number | null {
  * Original: function calcRisk(t)
  */
 export function calcRisk(t: TradeLike): number | null {
-  const ep = toFiniteNumber(t.entryPrice);
-  const sl = toFiniteNumber(t.stopLoss);
-  const size = toFiniteNumber(t.positionSize);
-  if (ep === null || sl === null || size === null || !t.symbol) return null;
-  const p = getPipEntry(t.symbol);
+  const ep = positiveFinite(t.entryPrice);
+  const sl = positiveFinite(t.stopLoss);
+  const size = positiveFinite(t.positionSize);
+  const p = findPipEntry(t.symbol);
+  if (ep === null || sl === null || size === null || !p) return null;
   return finiteOrNull(size * Math.abs(ep - sl) * p.f * p.pv);
 }
 
@@ -185,10 +195,10 @@ export function calcRisk(t: TradeLike): number | null {
  * Original: function calcPoints(t)
  */
 export function calcPoints(t: TradeLike): number | null {
-  const ep = toFiniteNumber(t.entryPrice);
-  const ex = toFiniteNumber(t.exitPrice);
-  if (ep === null || ex === null || !t.symbol) return null;
-  const p = getPipEntry(t.symbol);
+  const ep = positiveFinite(t.entryPrice);
+  const ex = positiveFinite(t.exitPrice);
+  const p = findPipEntry(t.symbol);
+  if (ep === null || ex === null || !p || !isDirection(t.direction)) return null;
   const diff = t.direction === 'Long'
     ? ex - ep
     : ep - ex;
@@ -257,12 +267,9 @@ export function enrichTrades(
   accounts.forEach((a) => { accRun[a.id] = finiteOrNull(a.capital); });
 
   return trades.map((t, i) => {
-    // Resolve account capital — matches original exactly
-    const accId = (t.accountId as string) || accounts[0]?.id || 'acc_1';
-    if (!(accId in accRun)) {
-      const acc = accounts.find((a) => a.id === accId);
-      accRun[accId] = acc ? finiteOrNull(acc.capital) : 10000;
-    }
+    // Resolve only real account capital; never invent it for historical orphans.
+    const accId = typeof t.accountId === 'string' ? t.accountId : '';
+    const accountResolved = accounts.some((account) => account.id === accId);
 
     const r       = calcR(t);
     const pl      = calcPL(t);
@@ -270,7 +277,7 @@ export function enrichTrades(
     const commissionText = typeof t.commission === 'string' ? t.commission.trim() : '';
     const comm    = commissionText === '' ? 0 : toFiniteNumber(t.commission);
     const netPL   = pl !== null && comm !== null ? finiteOrNull(pl - comm) : null;
-    const capital = accRun[accId];
+    const capital = accountResolved ? accRun[accId] : null;
 
     // Advance running capital — matches original
     if (netPL !== null && capital !== null) {

@@ -103,23 +103,7 @@ function InsightCard({ type, title, body }: Insight) {
 // ─── Component ───────────────────────────────────────────────
 
 export function InsightsPage({ trades }: InsightsPageProps) {
-  if (!trades.length) {
-    return <div style={{ textAlign: 'center', padding: 60, color: C.dim, fontSize: 13 }}>Add trades first to see insights.</div>;
-  }
-
-  // NOTE: this hook call sits after an early `return` above (for the
-  // empty-trades case) — a pre-existing conditional-hook-call pattern
-  // from Phase 12, not introduced by this phase. Flagged in
-  // MIGRATION_NOTES.md rather than silently changed, per "do not fix
-  // unless explicitly requested." Kept OUTSIDE the useMemo below since
-  // hooks cannot be called conditionally or from within a memo callback.
-  //
-  // Gap-analysis G-2 (lint harness): react-hooks/rules-of-hooks now
-  // flags this line — expected, not new information. Suppressed
-  // rather than fixed, per the same "do not fix unless explicitly
-  // requested" decision recorded above; see MIGRATION_NOTES.md's
-  // Phase 17 entry and its confirmed-only-instance React Audit.
-  // eslint-disable-next-line react-hooks/rules-of-hooks
+  // Hooks stay unconditional; the empty-state return follows them.
   const { core, streaks, daily } = useAdvancedAnalytics(trades, 0);
 
   // Phase 17: everything below is plain JS (no hooks), so it is safe
@@ -129,11 +113,6 @@ export function InsightsPage({ trades }: InsightsPageProps) {
   // its string interpolation, on every render) now only re-runs when
   // `trades` or the hook's memoized outputs actually change. See
   // MIGRATION_NOTES.md's Phase 17 entry.
-  //
-  // Same suppression rationale as the useAdvancedAnalytics call above —
-  // this useMemo is flagged as "conditional" purely because it follows
-  // the same early return, not a distinct issue.
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const { n, wr, totalR, avgR, netPL, maxWin, maxLoss, insights } = useMemo(() => {
     const n = trades.length;
 
@@ -259,6 +238,10 @@ export function InsightsPage({ trades }: InsightsPageProps) {
 
     return { n, wr, totalR, avgR, netPL, maxWin, maxLoss, insights };
   }, [trades, core, streaks, daily]);
+
+  if (!trades.length) {
+    return <div style={{ textAlign: 'center', padding: 60, color: C.dim, fontSize: 13 }}>Add trades first to see insights.</div>;
+  }
 
   return (
     <div>

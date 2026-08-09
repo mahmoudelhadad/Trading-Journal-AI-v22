@@ -44,7 +44,7 @@ import { Modal } from '@components/ui/Modal.js';
 import { SectionHeader } from '@components/ui/SectionHeader.js';
 import { Divider } from '@components/ui/Divider.js';
 import {
-  parseFileContent, processRows, isProcessError, convertRow, detectDuplicate, resolveImportAccount,
+  parseFileContent, parseWorkbookRows, processRows, isProcessError, convertRow, detectDuplicate, resolveImportAccount,
   type ColumnMap, type ParsedRow,
 } from '@services/importService.js';
 import { validateTradeContent } from '@services/tradeValidation.js';
@@ -52,8 +52,6 @@ import { exportTradesAsCSV } from '@services/exportService.js';
 import type { RawTrade, RawTradeContent } from '@hooks/useTrades.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
-
-declare const XLSX: any; // loaded globally, matches original app's assumption
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -117,22 +115,18 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
       };
       r.readAsText(file);
     } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-      if (typeof XLSX === 'undefined') {
-        setFeedback('Excel library not loaded. Use CSV.');
-        setStatus('error');
-        return;
-      }
+      // v1.1: the Excel parser is loaded on demand by parseWorkbookRows()
+      // (services/importService.ts). A failed chunk fetch rejects like any
+      // other workbook failure, so it surfaces through this same channel
+      // instead of the old always-true "library not loaded" dead end.
       const r2 = new FileReader();
       r2.onload = (e) => {
-        try {
-          const wb = XLSX.read(e.target?.result, { type: 'array', cellDates: false, raw: false });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
-          handleProcessed(raw);
-        } catch (err) {
-          setFeedback(`Excel error: ${(err as Error).message}`);
-          setStatus('error');
-        }
+        parseWorkbookRows(e.target?.result as ArrayBuffer)
+          .then(handleProcessed)
+          .catch((err) => {
+            setFeedback(`Excel error: ${(err as Error).message}`);
+            setStatus('error');
+          });
       };
       r2.readAsArrayBuffer(file);
     } else {

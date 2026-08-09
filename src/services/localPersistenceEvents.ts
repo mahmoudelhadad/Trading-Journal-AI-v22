@@ -59,10 +59,21 @@ function setCurrent(notice: LocalPersistenceNotice | null): void {
  * itself throw.
  */
 export function reportLocalPersistenceFailure(source: string, err: unknown): void {
+  // An explicit `.kind` (IndexedDbCallError) stays authoritative — this is
+  // the only classifier for every IndexedDB-originated failure.
+  //
+  // v1.1: LocalStorage failures carry no `.kind`. A browser quota failure is
+  // a DOMException whose identity lives on `.name`, so it previously fell
+  // through to 'unknown' and the §3.4 notice showed its generic text instead
+  // of the tailored "free up device storage" wording it already implements
+  // for `quota_exceeded`. Reading `.name` ONLY when no `.kind` exists adds
+  // that classification without touching any existing one.
   const errorKind: IndexedDbErrorKind =
     err && typeof err === 'object' && 'kind' in err
       ? ((err as { kind: unknown }).kind as IndexedDbErrorKind)
-      : 'unknown';
+      : err && typeof err === 'object' && (err as { name?: unknown }).name === 'QuotaExceededError'
+        ? 'quota_exceeded'
+        : 'unknown';
   const message = err instanceof Error ? err.message : String(err);
   setCurrent({ kind: 'save_failed', source, errorKind, message });
 }

@@ -97,6 +97,33 @@ describe('scoped storage write-failure surfacing', () => {
     });
   });
 
+  /**
+   * v1.1: a real browser quota failure is a DOMException carrying `.name`,
+   * not the `.kind` the reporter classified on. It therefore landed in
+   * 'unknown' and the §3.4 notice showed generic text instead of the
+   * tailored storage-full wording it already implements for
+   * `quota_exceeded`. These pin the new classification AND prove the
+   * pre-existing ones are untouched.
+   */
+  it('classifies a DOMException-shaped quota failure as quota_exceeded', () => {
+    const quota = Object.assign(new Error('The quota has been exceeded.'), { name: 'QuotaExceededError' });
+    const { scope } = createScope(quota);
+    createStorageService(scope).saveTrades([{ _tid: 1 }]);
+    expect(getLocalPersistenceNotice()).toMatchObject({ kind: 'save_failed', errorKind: 'quota_exceeded' });
+  });
+
+  it('keeps an explicit .kind authoritative and leaves other errors unknown', () => {
+    const tagged = Object.assign(new Error('blocked by another tab'), { kind: 'blocked', name: 'QuotaExceededError' });
+    createStorageService(createScope(tagged).scope).saveTrades([{ _tid: 1 }]);
+    // `.kind` wins even though `.name` would also match — IndexedDB
+    // classification must not be reinterpreted by the new name check.
+    expect(getLocalPersistenceNotice()).toMatchObject({ errorKind: 'blocked' });
+
+    dismissLocalPersistenceNotice();
+    createStorageService(createScope(new Error('something else')).scope).saveTrades([{ _tid: 1 }]);
+    expect(getLocalPersistenceNotice()).toMatchObject({ errorKind: 'unknown' });
+  });
+
   it('reports once per failed operation across the other scoped writers', () => {
     const { scope } = createScope(new Error('quota'));
     const storage = createStorageService(scope);

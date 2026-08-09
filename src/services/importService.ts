@@ -198,6 +198,35 @@ export function parseTime(v: unknown): string {
  * EDGE CASES: A trailing row with no terminating newline is still
  *          captured. Fully empty rows (all-empty cells) are dropped.
  */
+/**
+ * Parse an Excel workbook (.xlsx/.xls) into the SAME `string[][]` shape
+ * `parseFileContent()` produces for CSV, so both feed `processRows()`
+ * identically.
+ *
+ * v1.1 (H-XLSX): before this, components/import/ImportWizard.tsx declared
+ * `declare const XLSX: any` and tested a bare GLOBAL that never existed in
+ * the migrated app — the original single-file app loaded XLSX from a CDN
+ * <script> tag, which index.html does not have. The ambient declaration kept
+ * `tsc` green, so the defect was invisible to typecheck, and every Excel
+ * upload fell into the "Excel library not loaded. Use CSV." branch. Vite
+ * reported the same fact as `Generated an empty chunk: "xlsx"`.
+ *
+ * The `xlsx` package was already a declared dependency and already had a
+ * manualChunks entry, so the repair needs no new dependency: it is loaded
+ * DYNAMICALLY here, keeping it out of the initial bundle and fetching it
+ * only when a user actually imports a workbook.
+ *
+ * The read/sheet_to_json call shape is retained exactly as it was.
+ */
+export async function parseWorkbookRows(data: ArrayBuffer): Promise<string[][]> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(data, { type: 'array', cellDates: false, raw: false });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) throw new Error('The workbook contains no sheets.');
+  const ws = wb.Sheets[sheetName];
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }) as string[][];
+}
+
 export function parseFileContent(text: string): string[][] {
   const result: string[][] = [];
   let row: string[] = [];

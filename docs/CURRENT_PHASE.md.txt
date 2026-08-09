@@ -4,256 +4,253 @@
 
 ## Phase
 
-Production v1.0 — Release Hardening
+v1.1 — Honest Import & Release Operability
 
 Status:
 
 IMPLEMENTATION + RUNTIME COMPLETE
-AWAITING GIT / DEPLOYMENT / LIVE ACCEPTANCE CLOSURE
+DOCUMENTATION CLOSE COMPLETE
+NOT YET RELEASED — Git closure and version bump remain separately authorized
 
-**Release Hardening is complete. Production v1.0 is NOT released.** Those are
-two different things and are deliberately kept separate below: the repository
-work and its synthetic runtime evidence are finished, but no deployment has
-occurred and the live acceptance gate has not been run.
+**Production v1.0 remains the currently released and tagged production
+baseline** (`e3affc77418952a6375a3054ac96ca1ae5c55cfb`, tag `v1.0.0`, live at
+`https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/`) until v1.1 release
+closure is completed.
 
 ---
 
 ## Objective
 
-Close the two release-blocking defects found by the v1.0 discovery pass — a
-silent browser-local persistence failure path (H-1) and the absence of any
-working, reproducible production deployment (H-2) — without pulling post-v1
-features into scope.
+Repair the advertised-but-non-functional Excel import, correct browser quota
+classification so the existing tailored storage-full notice can be selected,
+and make the running build identifiable from the application — without
+architecture, dependency, schema, or format change.
 
 ---
 
-## Delivered Scope
+## Delivered Scope — three deliverables
 
-H-1 — Persistence failure surfacing:
-- The scoped storage facade reports write/remove failures through the
-  existing local persistence failure mechanism instead of discarding them.
-- The facade remains non-throwing, so no caller contract changed.
-- The existing blocking `LocalPersistenceNotice` is now reachable. It could
-  not fire before, because the scoped database wraps these writes in `async`
-  methods that always resolved.
-- Recovery Bin, Backtests, saved filters, and Trade Review — which had no
-  failure channel at all — are covered by the same single chokepoint.
+1. **Honest Excel/XLSX import.** The migrated wizard relied on a global
+   `XLSX` that never existed (an ambient `declare` kept typecheck green), so
+   every workbook upload failed with "Excel library not loaded" while the UI
+   advertised Excel support. The parser is now loaded dynamically, only when
+   an Excel import is invoked, using the already-declared `xlsx` dependency.
+   `.xlsx`/`.xls` feed the same normalized `string[][]` pipeline as CSV.
 
-H-2 — Deployment hardening:
-- Vite `base` corrected to `/Trading-Journal-AI-v22/`.
-- Stale hardcoded favicon path rebased to a Vite base-relative form.
-- GitHub Actions Pages workflow added: builds the Vite app, uploads `dist/`,
-  deploys via the official Pages actions with minimum permissions.
-- No raw main/root publication, no `gh-pages` package, no committed `dist/`,
-  no new dependency.
-- Build-time Supabase values are supplied by GitHub repository secrets.
+2. **Correct quota classification.** A browser `QuotaExceededError` is a
+   `DOMException` identified by `.name`; the reporter classified only on
+   `.kind`, so quota exhaustion showed the generic notice. `.name` is now
+   consulted only when no `.kind` exists, leaving every existing IndexedDB
+   classification authoritative and the non-throwing facade unchanged.
+
+3. **Release/build visibility.** General Settings shows
+   `v<version> · build <short commit>`, sourced from `package.json` and from
+   `GITHUB_SHA` / local git / `dev`.
 
 ---
 
 ## Exact Implementation Manifest
 
-Implementation/config (4):
-- .github/workflows/deploy.yml
-- index.html
-- src/services/storage.js
+Implementation/config (6):
+- src/components/import/ImportWizard.tsx
+- src/components/settings/GeneralSettings.tsx
+- src/services/importService.ts
+- src/services/localPersistenceEvents.ts
+- src/vite-env.d.ts
 - vite.config.js
 
-Tests (1):
+Tests (2):
+- src/services/importService.test.ts
 - src/services/storage.test.ts
 
 Documentation (2):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
 
-Final close manifest: exactly 7 changed paths — 4 implementation/config,
-1 test, and 2 documentation files. ARCHITECTURE_DECISIONS.md.txt is
+Final close manifest: exactly 10 changed paths — 6 implementation/config,
+2 tests, and 2 documentation files. ARCHITECTURE_DECISIONS.md.txt is
 unchanged.
 
 ---
 
-## H-1 Contract
+## Import Contract
 
-A failed scoped browser-local write or remove:
+- Excel parsing is dynamic and on demand; it is never loaded during normal
+  application startup.
+- `.xlsx` and `.xls` produce the same `string[][]` shape as CSV and feed the
+  unchanged `processRows()` pipeline.
+- CSV behavior is untouched.
+- Excel failures, including a failed lazy-chunk fetch, surface through the
+  existing `Excel error: ...` channel.
+- No import envelope, DTO, adapter, source identity, or schema was
+  introduced.
 
-- is reported once, through `reportLocalPersistenceFailure`;
-- raises the existing blocking §3.4 notice;
-- does NOT throw, so the application remains operational;
-- does NOT produce false success in the UI without a visible notice.
-
-Unchanged by this work: caller contracts, storage keys, the user namespace,
-schema, backup format/version, and persistence architecture.
-
----
-
-## H-2 Deployment Contract
-
-Production URL:
-
-`https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/`
-
-Development repository remains `mahmoudelhadad/Trading-Journal-AI-v22`; it was
-not renamed or moved.
-
-Before this phase the repository had GitHub Pages disabled and no production
-URL. The previous `/Trading-Journal-AI/` base was stale inherited
-configuration — that name now belongs to the renamed `Trading-Journal-AI-v1`
-repository and the URL 404s.
-
-Deployment is by GitHub Actions only. Publishing the branch root is invalid
-here: it would serve the unbuilt source tree, whose `index.html` references
-the dev-only `/src/main.jsx`.
+Measured parser nuance (bounds what this guarantees):
+- SheetJS does not throw on all malformed input — unrecognized bytes are
+  tolerated and read as a single-cell text sheet.
+- A structurally broken workbook (e.g. a truncated ZIP) does throw and is
+  surfaced gracefully.
+- Unrecognized junk is stopped downstream instead: `processRows()` requires a
+  header row of more than three non-empty cells and rejects it with "Could
+  not detect headers."
 
 ---
 
-## External Setup — USER-ATTESTED
+## Persistence Contract
 
-The following were performed manually by the product owner and are recorded
-as user-attested, NOT independently machine-verified:
-
-- GitHub Pages source set to GitHub Actions.
-- Repository secret `VITE_SUPABASE_URL` exists.
-- Repository secret `VITE_SUPABASE_ANON_KEY` exists.
-- Supabase redirect URL
-  `https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/` added; existing
-  Site URL unchanged.
-- Secret values were never exposed.
-
-Why not machine-verified: these are private configuration surfaces. No
-authenticated GitHub access was available in the working environment, and
-anonymous requests cannot read repository settings, secret names, or Supabase
-project configuration. The first successful workflow run plus one live
-sign-in will prove all four at once.
+Unchanged from Release Hardening except classification:
+- An explicit `.kind` remains authoritative.
+- `.name === 'QuotaExceededError'` is consulted only when no `.kind` exists.
+- The facade remains non-throwing; caller contracts are unchanged.
+- `LocalPersistenceNotice` was not modified.
 
 ---
 
-## Runtime Evidence
+## Build Identification Contract
 
-Disposable authenticated user, isolated browser profile, synthetic data only.
-
-H-1:
-- Targeted `QuotaExceededError` injected for exactly one key via temporary
-  browser-API patching in the disposable profile; no repository code altered,
-  no bulk storage filling.
-- Exactly one failure report — no duplicate.
-- Blocking notice appeared: "Couldn't save your changes — A local save failed
-  and could not be completed (localstorage:fxj_v4_trades): ...".
-- The failed write did not persist; stored data stayed byte-identical.
-- After removing the injection and reloading, durable state was intact and
-  the failed mutation absent.
-- The app remained operational — non-throwing contract confirmed.
-- A second disposable user namespace remained byte-identical.
-
-Regression smoke:
-- Create/edit/save; delete → Recovery Bin → restore; filters; Dashboard, Raw,
-  Equity, Calendar, Strategy, Insights, Backtest; Restore Point creation via
-  the shared `buildBackup()` path; valid synthetic v2 restore; hard reload
-  with a clean console.
-
-Not overstated:
-- Backup FILE DOWNLOAD was not exercised. The Restore Point path covers the
-  same `buildBackup()` code without a download.
-- No primary account, no real journal data, no real backup, no Futures data.
-- No live deployment evidence exists yet.
+- `package.json` is the single semantic-version source.
+- Build identifier: `GITHUB_SHA` in CI, then local `git rev-parse --short
+  HEAD`, then `dev`.
+- No runtime GitHub API access and no secret exposure; `GITHUB_SHA` is public
+  build metadata.
 
 ---
 
 ## Automated Verification
 
-- Focused storage tests: 4/4.
-- Full tests: 312/312 passing across 20 files.
-- TypeScript: passed, 0 errors.
-- ESLint: passed, 0 errors and exactly 7 existing warnings.
+- TypeScript: 0 errors.
+- ESLint: 0 errors and exactly 7 existing warnings.
+- Focused tests: 19 passed.
+- Full tests: 318 passing across 20 files.
 - `npm.cmd run verify`: passed.
-- Production build: passed, 997 modules transformed.
+- Production build: passed, 999 modules transformed.
 - `git diff --check`: passed.
-- Implementation/test manifest before documentation: exactly 5 paths.
-- Dependency, configuration, environment, schema, key/namespace, and backup
-  format changes: none beyond the authorized `vite.config.js` base value.
+- Dependency, lockfile, test-framework, and test-configuration changes: none.
+
+XLSX build evidence:
+- The previous empty xlsx chunk and its build warning are gone.
+- A real lazy artifact of approximately 429 KB is produced.
+- The built HTML does not reference or preload it.
+- Main bundle impact was approximately 1.3 KB.
+- Content-hashed filenames will change on future builds; recorded hashes are
+  evidence, not a contract.
 
 ---
 
-## P2 Carry-Forward — recorded, NOT fixed
+## Runtime Evidence
 
-1. A genuine browser `QuotaExceededError` is a `DOMException` carrying
-   `.name`, while the reporting helper classifies from `.kind`. Real quota
-   exhaustion therefore maps to `errorKind: 'unknown'` and shows the generic
-   blocking message instead of tailored storage-full wording. Not a v1
-   blocker: the failure is visible, blocking, and no longer silent.
-2. `%BASE_URL%favicon.svg` doubles the base path under the dev server only
-   and still resolves; the production build output is correct.
+Disposable authenticated user, isolated profile, synthetic data only.
 
-Neither is a v1 blocker. Both are candidates for v1.1+.
+- Zero xlsx requests during normal startup, and none from merely opening the
+  import dialog.
+- Settings displayed `v1.0.0 · build e3affc7`.
+- A real synthetic `.xlsx` imported successfully; the chunk was fetched only
+  at that moment.
+- Correct counts: "2 rows ready to import. 0 rows rejected." then
+  "Imported 2 trades. Rejected 0 invalid rows."
+- Imported trades persisted across reload.
+- CSV regression passed.
+- A structurally broken workbook failed gracefully with "Excel error:
+  Unsupported ZIP file"; the app stayed usable and data was unchanged.
+- Quota injection produced the tailored storage-full blocking notice rather
+  than the generic message.
+- Stored data and a second disposable namespace were byte-identical after the
+  failed write.
+- The primary account was not used. No real journal data or backup was used.
+  No Futures data was used.
 
 ---
 
-## Remaining Release Gate — v1.0 NOT released
+## Versioning
 
-`deploy.yml` triggers on push to `main`, so the FIRST deployment happens
-automatically on the future approved closure push. There is no separate
-manual deploy step.
+- Current package semantic version: **1.0.0** (deliberately not bumped).
+- Intended release version after successful Git/release closure: **1.1.0**.
+- The `package.json` bump, the `v1.1.0` tag, the push, and the resulting
+  deployment are all separately authorized steps and have NOT been performed.
 
-Outstanding live post-push acceptance gate:
+---
 
-- [ ] workflow run succeeds
-- [ ] Pages URL becomes live
-- [ ] cold load works
-- [ ] hard refresh works
-- [ ] assets resolve under `/Trading-Journal-AI-v22/`
-- [ ] favicon loads
-- [ ] one disposable authenticated sign-in succeeds
-- [ ] no auth redirect failure
+## Explicit Non-Scope
 
-Only after that evidence should the v1.0.0 release be considered fully
-closed.
+v1.1 does not include:
+
+- Futures broker/trade-file import;
+- versioned import envelope;
+- historical bars;
+- IndexedDB expansion;
+- Sync or Cutover;
+- cloud persistence;
+- Backtesting V2;
+- Advanced Analytics expansion;
+- AI/Agents;
+- MCP;
+- favicon cleanup.
 
 ---
 
 ## Exit Criteria
 
-- [x] Failed scoped local writes are reported, not silently swallowed.
-- [x] The blocking persistence notice is reachable.
-- [x] The storage facade remains non-throwing.
-- [x] Production base path matches the intended Pages URL.
-- [x] A reproducible GitHub Actions deployment exists for the Vite build.
-- [x] No secret value is committed.
-- [x] Synthetic runtime verification and regression smoke passed.
+- [x] Excel import is functional and loaded on demand.
+- [x] CSV behavior unchanged.
+- [x] Excel failures surface through the existing error channel.
+- [x] Empty xlsx chunk eliminated; real lazy artifact produced.
+- [x] Quota failures classify as `quota_exceeded`; `.kind` stays
+      authoritative.
+- [x] Non-throwing persistence facade preserved.
+- [x] Version and build identifier visible in the application.
 - [x] Typecheck, lint, tests, verify, build, diff, and manifest checks passed.
-- [x] Documentation completed without widening scope.
-- [ ] Live post-push deployment acceptance — OUTSTANDING.
+- [x] Synthetic runtime acceptance passed on a disposable user.
+- [x] Documentation close completed without widening scope.
+- [ ] Git closure, version bump to 1.1.0, tag, push, and deployment —
+      OUTSTANDING.
 
-Release Hardening exit criteria are satisfied. The v1.0 release exit
-criterion remains open.
+v1.1 implementation and documentation exit criteria are satisfied. The
+release exit criterion remains open.
 
 ---
 
 ## Architecture Decision
 
-No new architecture decision was recorded. H-1 restores the intended §3.4
-local persistence failure contract rather than creating a new one, and H-2 is
-deployment/configuration. Neither establishes a durable cross-cutting
-architectural contract, so ARCHITECTURE_DECISIONS.md.txt is unchanged.
+No new architecture decision was recorded, determined from the repository:
+none of the twenty existing ADRs governs import formats, Excel parsing, lazy
+chunk loading, or build identity, and v1.1 creates no such durable authority.
+The XLSX work restores an advertised path using an already-declared
+dependency; lazy loading is a bounded implementation choice; quota
+classification repairs an existing persistence-failure contract; and build
+visibility is release operability. ARCHITECTURE_DECISIONS.md.txt is
+unchanged.
 
 ---
 
 ## Migration Impact
 
-None. No schema, storage key, namespace, backup format/version, or persisted
-data-shape change. No historical data was rewritten.
+None. No schema, storage key, namespace, backup format/version, persisted
+data shape, or import format change. No historical data was rewritten.
 
 ---
 
 ## Repository State
 
 The implementation and documentation diff remains unstaged. No commit, tag,
-push, pull request, merge, or rebase has occurred, and no deployment has run.
-The repository awaits separate Git/deployment closure authorization.
+push, pull request, merge, or rebase has occurred, and no deployment has been
+triggered. `v1.1.0` does not exist locally or remotely.
 
 ---
 
-## Next Phase
+## Next Planned Discovery — after v1.1 release
 
-No next phase is selected. Phase 32D, Phase 32E, and Phase 33 are not
-started. Post-v1 items — versioned journal import contract, Futures work,
-per-user IndexedDB, Sync/Cutover, Backtesting V2, expanded analytics, Trade
-Review activation, Prop Firm Tracker, Position Calculator, and any AI/MCP
-layer — remain deferred.
+**Futures/broker trade-file import.** NOT STARTED, and not designed here.
+
+Important context for that discovery: manual Futures support already exists
+to a meaningful degree — `FUT_SYMBOLS`, per-contract point values in the pip
+table, a market toggle in the trade form, "Points" labelling, market
+auto-detection on import, and Futures symbols passing validation — and
+historical versions of this journal were used with Futures trades. The next
+Futures work is therefore expected to focus on import source identity,
+contract identity, and duplicate strategy rather than rebuilding Futures
+support from zero.
+
+Other post-v1 items — versioned import envelope, historical bars, per-user
+IndexedDB for large datasets, Sync/Cutover, Backtesting V2, Advanced
+Analytics expansion, Trade Review surfacing, and any AI/MCP layer — remain
+deferred.

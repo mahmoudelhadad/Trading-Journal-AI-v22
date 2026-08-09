@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Account } from '@apptypes/account.js';
-import { convertRow, parseDate, resolveImportAccount } from './importService.js';
+import {
+  convertRow, parseDate, resolveImportAccount, parseWorkbookRows, processRows, isProcessError,
+} from './importService.js';
 
 const account = (id: string, name: string, deletedAt: string | null = null) => ({
   id, name, capital: 10_000, color: '#fff', deletedAt,
@@ -55,5 +57,72 @@ describe('deterministic import date parsing', () => {
   it('does not interpret ambiguous or locale-dependent dates', () => {
     expect(parseDate('02/03/2026')).toBe('02/03/2026');
     expect(parseDate('March 2, 2026')).toBe('March 2, 2026');
+  });
+});
+
+/**
+ * v1.1 (H-XLSX) regression cover.
+ *
+ * Excel import was silently unavailable in production: ImportWizard tested a
+ * bare global `XLSX` that never existed, so every workbook hit the "Excel
+ * library not loaded" branch while `tsc` stayed green behind an ambient
+ * `declare`. These tests exercise the real dynamic-import path, so the
+ * feature cannot regress to unavailable without failing here.
+ *
+ * The workbook is BUILT with the same library, so no fixture file and no new
+ * dependency or test framework is required, and this runs in the existing
+ * node environment.
+ */
+describe('excel workbook import', () => {
+  const buildWorkbook = async (rows: string[][]): Promise<ArrayBuffer> => {
+    const XLSX = await import('xlsx');
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Trades');
+    return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+  };
+
+  const sheetRows = [
+    ['Date', 'Symbol', 'Direction', 'Entry Price', 'Stop Loss', 'Exit Price', 'Lots'],
+    ['2026-03-02', 'EUR/USD', 'Long', '1.0800', '1.0750', '1.0900', '1'],
+    ['2026-03-03', 'GBP/USD', 'Short', '1.2700', '1.2750', '1.2600', '2'],
+  ];
+
+  it('round-trips a workbook into the same string[][] shape CSV produces', async () => {
+    const rows = await parseWorkbookRows(await buildWorkbook(sheetRows));
+    expect(rows[0]).toEqual(sheetRows[0]);
+    expect(rows[1][1]).toBe('EUR/USD');
+    expect(rows[2][1]).toBe('GBP/USD');
+  });
+
+  it('feeds processRows() exactly like the CSV path', async () => {
+    const rows = await parseWorkbookRows(await buildWorkbook(sheetRows));
+    const processed = processRows(rows);
+    expect(isProcessError(processed)).toBe(false);
+    if (isProcessError(processed)) return;
+    expect(processed.rows).toHaveLength(2);
+    expect(processed.colMap.symbol).toBe('Symbol');
+    expect(processed.colMap.date).toBe('Date');
+  });
+
+  it('rejects a structurally broken workbook so the Excel error UI fires', async () => {
+    // A truncated ZIP container is recognized as a workbook and fails to
+    // parse — this is the path ImportWizard's catch reports as
+    // "Excel error: ...".
+    const truncatedZip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0, 0, 0]).buffer;
+    await expect(parseWorkbookRows(truncatedZip)).rejects.toThrow();
+  });
+
+  it('cannot turn unrecognized bytes into an importable sheet', async () => {
+    // Measured behavior: xlsx does NOT throw on unrecognized bytes — it
+    // falls back to reading them as a single-cell text sheet. The guarantee
+    // that matters is therefore downstream: such rows can never become an
+    // import, because processRows() requires a header row of >3 non-empty
+    // cells and rejects them.
+    const notAWorkbook = new TextEncoder().encode('this is definitely not a workbook').buffer;
+    const rows = await parseWorkbookRows(notAWorkbook);
+    const processed = processRows(rows);
+    expect(isProcessError(processed)).toBe(true);
+    if (isProcessError(processed)) expect(processed.error).toBe('Could not detect headers.');
   });
 });

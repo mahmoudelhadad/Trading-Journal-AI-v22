@@ -1,3 +1,175 @@
+# v1.1 — Honest Import & Release Operability
+
+Status:
+IMPLEMENTATION + RUNTIME COMPLETE — NOT YET RELEASED
+
+Summary:
+Three bounded repairs. Excel import — advertised since the migration but
+silently non-functional in production — now actually works, loaded on demand.
+A browser quota failure now selects the tailored storage-full notice that
+already existed. Settings exposes the running version and build so a
+production report can be tied to an exact release. No architecture,
+dependency, schema, or format change.
+
+## Excel / XLSX import repair
+
+The defect:
+- `components/import/ImportWizard.tsx` declared `declare const XLSX: any` and
+  tested a bare GLOBAL that never existed in the migrated application. The
+  original single-file app loaded XLSX from a CDN `<script>` tag; the
+  migrated `index.html` has none.
+- Because that ambient declaration satisfied TypeScript, `tsc` stayed at 0
+  errors and the defect was invisible to typecheck. Every `.xlsx`/`.xls`
+  upload fell into the "Excel library not loaded. Use CSV." branch, while
+  the file input advertised `.csv,.xlsx,.xls` and the UI offered to
+  "Upload any CSV/Excel file".
+- Vite had been reporting the same fact on every build as
+  `Generated an empty chunk: "xlsx"`.
+
+What shipped:
+- The nonexistent-global assumption is removed.
+- `services/importService.ts` gains `parseWorkbookRows(data): Promise<string[][]>`,
+  which loads the parser DYNAMICALLY (`await import('xlsx')`) only when an
+  Excel import is actually invoked. `xlsx` was already a declared dependency
+  and already had a manualChunks entry, so no dependency was added.
+- The existing `read()` / `utils.sheet_to_json()` call shape is retained.
+- `.xlsx` and `.xls` both continue through the same normalized `string[][]`
+  pipeline that CSV uses, so `processRows()` and everything downstream are
+  unchanged.
+- CSV behavior is completely unchanged — it is a separate branch and
+  `parseFileContent()` was not touched.
+- Excel failures, including a failed chunk fetch, continue to surface through
+  the existing `Excel error: ...` UI channel.
+- No import envelope, DTO, adapter, or schema was introduced.
+
+## XLSX build behavior
+
+- The previous EMPTY xlsx chunk is gone, and with it the
+  `Generated an empty chunk: "xlsx"` build warning.
+- A real lazy xlsx artifact is produced, measured at approximately 429 KB.
+- Normal application startup does NOT fetch it: the built `index.html` does
+  not reference or preload the chunk, and runtime confirmed zero xlsx
+  requests on load.
+- Main application bundle impact was small — approximately 1.3 KB.
+- Artifact filenames are content-hashed and will change on any future build;
+  the hashes recorded during this phase are evidence, not a contract.
+
+## Persistence failure classification
+
+- A browser `QuotaExceededError` is a `DOMException` whose identity lives on
+  `.name`. The reporter classified only on `.kind` (the IndexedDb call-error
+  shape), so real quota exhaustion fell through to `unknown` and the §3.4
+  notice showed its generic text instead of the tailored storage-full
+  guidance it already implemented.
+- `.name` is now consulted ONLY when no explicit `.kind` is present, so an
+  explicit `.kind` remains authoritative and every existing IndexedDB
+  classification is unchanged.
+- The non-throwing persistence facade contract established by Release
+  Hardening is unchanged.
+- `LocalPersistenceNotice` was NOT modified — `quota_exceeded` was already a
+  valid error kind and the tailored wording already existed.
+
+## Release / build visibility
+
+- General Settings now shows a low-noise `v<version> · build <short commit>`
+  line.
+- `package.json` remains the single semantic-version source; no second
+  constant is maintained.
+- Build identifier resolution: `GITHUB_SHA` in production CI, then a local
+  `git rev-parse --short HEAD` in development where available, then `dev`.
+- No runtime GitHub API call, and no secret is read or embedded —
+  `GITHUB_SHA` is public build metadata.
+
+## Verification
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors, exactly 7 existing warnings.
+- Focused tests: 19 passed.
+- Full tests: 318 passing across 20 files.
+- `npm.cmd run verify`: green.
+- Production build: green, 999 modules transformed.
+- `git diff --check`: clean.
+- Implementation/test manifest before documentation: exactly 8 paths.
+- No dependency, lockfile, test-framework, or test-configuration change.
+
+## Runtime evidence
+
+Disposable authenticated test user, isolated browser profile, synthetic data
+only.
+
+- Normal startup requested zero xlsx resources; opening the import dialog
+  alone did not fetch it either.
+- Settings displayed `v1.0.0 · build e3affc7`, matching the package version
+  and the checked-out commit.
+- A real synthetic `.xlsx` workbook imported successfully; the chunk was
+  fetched only at that moment.
+- Rows parsed and mapped correctly, with accepted/rejected counts of
+  "2 rows ready to import. 0 rows rejected." and
+  "Imported 2 trades. Rejected 0 invalid rows."
+- Imported trades persisted across a reload.
+- CSV import regression passed.
+- A structurally broken workbook failed gracefully with
+  "Excel error: Unsupported ZIP file"; the application stayed usable and no
+  data changed.
+- Quota injection produced the tailored blocking notice: "Your device's
+  storage is full, so recent changes could not be saved. Free up storage
+  space on this device..." — the quota-specific wording, not the generic
+  fallback.
+- Stored data and a second disposable user namespace were byte-identical
+  after the failed write.
+- The primary account was not used, and no Futures data was used.
+
+## Measured SheetJS nuance
+
+Recorded honestly, because it bounds what the Excel path guarantees:
+
+- SheetJS does NOT throw on all malformed input. Arbitrary or unrecognized
+  bytes are tolerated and read as a single-cell text sheet.
+- A STRUCTURALLY broken workbook (for example a truncated ZIP container) does
+  throw, and that is surfaced gracefully through the Excel error channel.
+- The safety boundary for unrecognized junk is therefore downstream, not in
+  the parser: such rows cannot become an import because `processRows()`
+  requires a header row of more than three non-empty cells and rejects them
+  with "Could not detect headers."
+- It would be inaccurate to claim that all corrupt Excel files throw.
+
+## Release state
+
+v1.1 is NOT released. The package semantic version remains `1.0.0`; the
+intended version after successful release closure is `1.1.0`. The version
+bump, Git closure, tagging, and deployment remain separately authorized
+steps. Production v1.0 (`e3affc7`, tag `v1.0.0`) remains the released
+baseline until then.
+
+Files changed:
+
+Implementation/config (6):
+- src/components/import/ImportWizard.tsx
+- src/components/settings/GeneralSettings.tsx
+- src/services/importService.ts
+- src/services/localPersistenceEvents.ts
+- src/vite-env.d.ts
+- vite.config.js
+
+Tests (2):
+- src/services/importService.test.ts
+- src/services/storage.test.ts
+
+Documentation (2):
+- docs/CHANGELOG.md.txt
+- docs/CURRENT_PHASE.md.txt
+
+Architecture:
+- No new architecture decision. The XLSX repair restores an advertised import
+  path using an already-declared dependency; lazy loading is a bounded
+  implementation choice; quota classification repairs an existing
+  persistence-failure contract; and build visibility is release operability.
+  No persistence architecture, schema, storage namespace, backup format,
+  import envelope, or cross-cutting authority changed.
+  ARCHITECTURE_DECISIONS.md.txt is unchanged.
+
+---
+
 # Production v1.0 — Release Hardening
 
 Status:

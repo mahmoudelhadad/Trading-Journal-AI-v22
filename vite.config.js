@@ -78,6 +78,31 @@ import path from 'path';
 
 const srcDir = path.resolve(__dirname, './src');
 
+// ── v1.1 release/build identification ────────────────────────────
+// package.json is the SINGLE source of the semantic version — no second
+// constant to keep in sync. Vite loads this config as CommonJS (this file
+// already relies on `__dirname`), so `require` is available here.
+//
+// Commit resolution, in order:
+//   1. GITHUB_SHA — set automatically by GitHub Actions. Public build
+//      metadata, not a secret, and requires no runtime GitHub API call.
+//   2. local `git rev-parse --short HEAD` — development convenience only,
+//      wrapped so a missing/!git environment can never fail the build.
+//   3. 'dev'.
+const pkg = require('./package.json');
+
+function resolveCommit() {
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
+  try {
+    return require('child_process')
+      .execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return 'dev';
+  }
+}
+
 const aliasNames = [
   'components', 'pages', 'hooks', 'services',
   'calculations', 'constants', 'contexts', 'apptypes', 'sync',
@@ -106,6 +131,12 @@ aliasEntries.push({ find: '@', replacement: srcDir });
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+
+  // Compile-time constants — see resolveCommit() above.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_COMMIT__: JSON.stringify(resolveCommit()),
+  },
 
   // Base path for GitHub Pages deployment.
   //

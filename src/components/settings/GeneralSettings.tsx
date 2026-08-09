@@ -56,6 +56,12 @@ export function GeneralSettings({ settings, onUpdate, onReset }: GeneralSettings
       </div>
 
       <Button variant="secondary" size="sm" onClick={onReset}>Reset to Defaults</Button>
+
+      {/* v1.1 — release/build identification. Lets a production report be
+          tied to the exact running release without any runtime GitHub call. */}
+      <div style={{ color: C.dim, fontSize: 9, marginTop: 12 }}>
+        {`v${__APP_VERSION__} · build ${__APP_COMMIT__.slice(0, 7)}`}
+      </div>
     </Card>
   );
 }

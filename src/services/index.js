@@ -11,3 +11,4 @@ export * from './storage.js';
 export * from './importService.js';
 export * from './exportService.js';
 export * from './backupService.js';
+export * from './ninjaTraderAdapter.js';

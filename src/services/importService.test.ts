@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Account } from '@apptypes/account.js';
 import {
-  convertRow, parseDate, resolveImportAccount, parseWorkbookRows, processRows, isProcessError,
+  convertRow, parseDate, parseTime, resolveImportAccount, parseWorkbookRows, processRows, isProcessError,
 } from './importService.js';
 
 const account = (id: string, name: string, deletedAt: string | null = null) => ({
@@ -57,6 +57,40 @@ describe('deterministic import date parsing', () => {
   it('does not interpret ambiguous or locale-dependent dates', () => {
     expect(parseDate('02/03/2026')).toBe('02/03/2026');
     expect(parseDate('March 2, 2026')).toBe('March 2, 2026');
+  });
+});
+
+describe('parseTime', () => {
+  it.each([
+    ['12:15:00 AM', '00:15'],
+    ['12:30:00 PM', '12:30'],
+    ['1:05:00 PM', '13:05'],
+    ['3:45:10 PM', '15:45'],
+    ['11:59:00 PM', '23:59'],
+    ['9:33:53 AM', '09:33'],
+  ])('converts %s to %s', (input, expected) => {
+    expect(parseTime(input)).toBe(expected);
+  });
+
+  it.each([
+    ['13:33', '13:33'],
+    ['9:33', '09:33'],
+    ['9:33:53', '09:33'],
+    ['00:00', '00:00'],
+  ])('preserves 24-hour behavior for %s', (input, expected) => {
+    expect(parseTime(input)).toBe(expected);
+  });
+
+  it.each(['13:00 PM', '0:30 PM'])('fails closed for invalid 12-hour input %s', (input) => {
+    expect(parseTime(input)).toBe(input);
+  });
+
+  it('does not parse a combined date and time', () => {
+    expect(parseTime('7/24/2026 9:33:53 AM')).toBe('7/24/2026 9:33:53 AM');
+  });
+
+  it.each(['', '   '])('returns an empty string for empty or blank input', (input) => {
+    expect(parseTime(input)).toBe('');
   });
 });
 

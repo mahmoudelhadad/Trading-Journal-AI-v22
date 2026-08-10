@@ -1,3 +1,133 @@
+# v1.2 — NinjaTrader Futures Import & Minimal Leg Foundation
+
+Status:
+IMPLEMENTATION + RUNTIME COMPLETE — NOT YET RELEASED
+
+Summary:
+Real NinjaTrader futures activity can now be imported as logical trades. A
+source-specific adapter reads a paired Executions/Trades CSV export,
+reconstructs flat-to-flat position episodes, preserves the individual
+executions as legs, and reconciles the complete transaction cost. Manual entry,
+generic CSV/XLSX import, Forex/CFD behaviour, analytics, and backup/restore are
+unchanged. Two confirmed correctness defects next to that path — AM/PM import
+parsing and Arabic CSV export encoding — are repaired in the same release. No
+dependency, configuration, storage-key, or backup-format change.
+
+## NinjaTrader Futures import
+
+- New source selector in Import/Export. **Generic CSV/Excel remains the
+  default** and behaves exactly as before.
+- NinjaTrader mode is **CSV only** in v1.2 and requires **both** files:
+  - `Executions CSV` — supplies episode structure and the individual legs.
+  - `Trades CSV` — supplies the complete cost columns, which the Executions
+    export does not expose.
+- Supported broker-import roots: `NQ`, `ES`, `MNQ`, `MES`. Manual Futures entry
+  is unchanged and still supports every symbol in `FUT_SYMBOLS`.
+- Every source account found in the files must be **explicitly mapped** to an
+  active journal account. No account is silently preselected, and an unmapped
+  source account aborts the import.
+- Source timestamps are imported exactly as written and are assumed to be
+  New York-local wall-clock time. The UI states this and requires explicit
+  acknowledgement before import is enabled. No UTC or DST conversion is
+  performed.
+- Import is all-or-nothing. Any reconciliation mismatch, incomplete episode,
+  reversal through zero, overnight episode, unsupported root, unmapped account,
+  or partial re-import overlap aborts before anything is persisted.
+
+## Logical trade semantics
+
+One Journal Trade is one flat-to-flat position episode for the same source
+account and instrument. While the position remains non-zero, all of the
+following stay inside that single logical trade:
+
+- partial fills of one order,
+- intentional scale-ins placed as separate orders,
+- partial exits and scale-outs.
+
+A NinjaTrader `Trades` row is therefore not equivalent to a journal trade: one
+logical trade can appear there as several rows. Import reconstructs the episode
+from the executions instead.
+
+## Leg foundation
+
+Imported trades can preserve the underlying executions as legs, each recording
+entry/exit, quantity, price, date, time to the second, and the source execution
+identity. Aggregate fields remain the compatibility surface for every existing
+calculation, so analytics are unaffected.
+
+Historical and manually entered trades have no legs, remain completely valid,
+and were not migrated or rewritten.
+
+**Manual Scale In / Scale Out UI is not part of v1.2.** The data foundation
+lands here; the editing UI is deferred to a later release.
+
+## Contract identity
+
+The original source contract is preserved (for example `MNQ SEP26`) while
+calculations continue to use the root symbol (`MNQ`), which is what the
+point-value table is keyed on. Storing the dated contract in the calculation
+symbol would have misclassified the instrument and applied the wrong point
+value.
+
+## Fees
+
+NinjaTrader trading cost is recorded in the existing single Commission field as
+the complete set of direct costs the source provides:
+
+`Commission + Clearing Fee + Exchange Fee + IP Fee + NFA Fee`
+
+Historical, manually entered Commission values are unchanged and were not
+corrected or recalculated.
+
+## Correctness fixes
+
+- **AM/PM import parsing.** `parseTime` previously matched only `H:MM` and
+  discarded the meridiem, so `1:05:00 PM` silently became `01:05` and still
+  passed validation. Twelve-hour input is now converted correctly
+  (`12 AM → 00`, `12 PM → 12`, `1–11 PM → +12`), out-of-range values with a
+  meridiem fail closed, and existing 24-hour and no-meridiem behaviour is
+  byte-for-byte unchanged.
+- **Arabic CSV export.** The CSV export was valid UTF-8 but carried no byte
+  order mark, so Excel guessed a legacy encoding and displayed Arabic Notes as
+  mojibake. `buildExportCSV` now emits a UTF-8 BOM. The export still
+  re-imports into the journal with column mapping unaffected, and no historical
+  file was rewritten.
+- **Idempotent NinjaTrader re-import.** Re-importing the same file pair adds
+  zero duplicate trades. Already-imported episodes are recognised by composite
+  source provenance, so genuinely repeated trades at the same price are not
+  dropped.
+- **Truthful import counts.** The success message reported the number of
+  episodes *discovered* as the number *imported*, so a fully-skipped re-import
+  claimed work that never happened. Discovered, imported, and skipped are now
+  reported separately, and the leg count refers only to newly imported trades.
+
+## Verification
+
+- TypeScript 0 errors; ESLint 0 errors and 7 pre-existing warnings.
+- 377 tests passing across 22 files, up from 318 across 20. No existing test
+  was weakened or removed.
+- Read-only against the real NinjaTrader exports: 19 executions reconstructed
+  to 9 logical episodes, with total net P/L matching NinjaTrader's own figure
+  to the cent (`-3439.06`), and an identical re-import producing 0 new trades
+  and 9 skipped.
+- Browser runtime on a disposable account with synthetic data: partial fill
+  `Sell 2 → Sell 4 → Buy 6` imported as one Qty-6 trade; reload persistence,
+  edit/save metadata preservation, idempotency, fail-closed aborts, and
+  backup/restore all passed.
+- Arabic export verified byte-level for the BOM and re-import, and manually
+  confirmed to display correctly in Microsoft Excel.
+- No P0 or P1 findings.
+
+## Known limitations
+
+- A weighted-average entry or exit price may be a long decimal such as
+  `29634.5833333333`. This is the true stored aggregate; the original fill
+  prices are retained in the legs, and money display is rounded normally.
+- Dotted meridiem forms such as `P.M.` remain outside the AM/PM scope.
+  NinjaTrader emits bare `AM`/`PM`, which is supported.
+
+---
+
 # v1.1 — Honest Import & Release Operability
 
 Status:

@@ -38,7 +38,7 @@
  * existing read-only display, no redesign of the modal's layout.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { Modal } from '@components/ui/Modal.js';
 import { SectionHeader } from '@components/ui/SectionHeader.js';
@@ -47,8 +47,12 @@ import {
   parseFileContent, parseWorkbookRows, processRows, isProcessError, convertRow, detectDuplicate, resolveImportAccount,
   type ColumnMap, type ParsedRow,
 } from '@services/importService.js';
-import { validateTradeContent } from '@services/tradeValidation.js';
+import { activeAccounts, validateTradeContent } from '@services/tradeValidation.js';
 import { exportTradesAsCSV } from '@services/exportService.js';
+import {
+  executionProvenanceKey, importNinjaTrader, inspectNinjaTraderFiles,
+  type NinjaTraderInspection,
+} from '@services/ninjaTraderAdapter.js';
 import type { RawTrade, RawTradeContent } from '@hooks/useTrades.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
@@ -67,16 +71,25 @@ export interface ImportWizardProps {
 }
 
 type Status = 'idle' | 'loading' | 'ready' | 'error' | 'done';
+type ImportSource = 'generic' | 'ninjatrader';
 
 // ─── Component ───────────────────────────────────────────────
 
 export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }: ImportWizardProps) {
+  const [importSource, setImportSource] = useState<ImportSource>('generic');
   const [status, setStatus] = useState<Status>('idle');
   const [feedback, setFeedback] = useState('');
   const [preview, setPreview] = useState<ParsedRow[] | null>(null);
   const [colMap, setColMap] = useState<ColumnMap>({});
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
+  const [executionsCsv, setExecutionsCsv] = useState('');
+  const [tradesCsv, setTradesCsv] = useState('');
+  const [ninjaInspection, setNinjaInspection] = useState<NinjaTraderInspection | null>(null);
+  const [accountMap, setAccountMap] = useState<Record<string, string>>({});
+  const [timezoneAcknowledged, setTimezoneAcknowledged] = useState(false);
+  const executionsCsvRef = useRef('');
+  const tradesCsvRef = useRef('');
 
   function handleProcessed(parsedRows: string[][]) {
     const result = processRows(parsedRows);
@@ -135,9 +148,91 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
     }
   }
 
+  function inspectNinjaTrader(executionsText: string, tradesText: string) {
+    const result = inspectNinjaTraderFiles(executionsText, tradesText);
+    if (!result.ok) {
+      setNinjaInspection(null);
+      setAccountMap({});
+      setFeedback(result.error);
+      setStatus('error');
+      return;
+    }
+    setNinjaInspection(result.inspection);
+    setAccountMap(Object.fromEntries(result.inspection.sourceAccounts.map((sourceAccount) => [sourceAccount, ''])));
+    setFeedback(`Discovered ${result.inspection.sourceAccounts.length} source account${result.inspection.sourceAccounts.length === 1 ? '' : 's'} and ${result.inspection.instruments.length} instrument${result.inspection.instruments.length === 1 ? '' : 's'}.`);
+    setStatus('ready');
+  }
+
+  function handleNinjaTraderFile(kind: 'executions' | 'trades', ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    setStatus('loading');
+    setFeedback(`Reading ${kind === 'executions' ? 'Executions' : 'Trades'} CSV...`);
+    setNinjaInspection(null);
+    setAccountMap({});
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (kind === 'executions') {
+        executionsCsvRef.current = text;
+        setExecutionsCsv(text);
+      } else {
+        tradesCsvRef.current = text;
+        setTradesCsv(text);
+      }
+      const nextExecutions = executionsCsvRef.current;
+      const nextTrades = tradesCsvRef.current;
+      if (nextExecutions && nextTrades) inspectNinjaTrader(nextExecutions, nextTrades);
+      else {
+        setFeedback(`${kind === 'executions' ? 'Executions' : 'Trades'} CSV loaded. Select the other NinjaTrader file.`);
+        setStatus('idle');
+      }
+    };
+    reader.onerror = () => {
+      setFeedback(`Could not read the ${kind === 'executions' ? 'Executions' : 'Trades'} CSV.`);
+      setStatus('error');
+    };
+    reader.readAsText(file);
+  }
+
+  function doNinjaTraderImport() {
+    if (!ninjaInspection || !timezoneAcknowledged
+      || ninjaInspection.sourceAccounts.some((sourceAccount) => !accountMap[sourceAccount])) return;
+
+    const existingProvenance = new Set<string>();
+    for (const trade of rawTrades) {
+      if (!Array.isArray(trade.legs) || !trade.sourcePlatform || !trade.sourceAccountId || !trade.sourceInstrument) continue;
+      for (const leg of trade.legs) {
+        existingProvenance.add(executionProvenanceKey(
+          trade.sourcePlatform, trade.sourceAccountId, trade.sourceInstrument, leg.sourceExecutionId,
+        ));
+      }
+    }
+
+    const result = importNinjaTrader({ executionsCsv, tradesCsv, accountMap, existingProvenance, accounts });
+    if (!result.ok) {
+      setFeedback(result.error);
+      setStatus('error');
+      return;
+    }
+
+    // `episodeCount` is how many flat-to-flat episodes the source FILES contained;
+    // `result.trades` is how many were actually imported after the idempotency
+    // filter removed already-imported ones. Reporting the former as "Imported"
+    // claimed work that never happened on a fully-skipped re-import, so the three
+    // quantities are now stated separately and `totalLegCount` — which is already
+    // summed over `result.trades` only — is explicitly labelled as new legs.
+    const importedCount = result.trades.length;
+    const totalLegCount = result.trades.reduce((total, trade) => total + (trade.legs?.length ?? 0), 0);
+    const plural = (n: number) => (n === 1 ? '' : 's');
+    onImport(result.trades);
+    setFeedback(`Processed ${result.episodeCount} episode${plural(result.episodeCount)}: imported ${importedCount} (${totalLegCount} new leg${plural(totalLegCount)}), skipped ${result.skippedAlreadyImported} already imported.`);
+    setStatus('done');
+  }
+
   // Pre-compute duplicate flags for the current row set (used by both
   // the preview badges and the actual import filter)
-  const rowsWithDupFlag = rows.map((row) => {
+  const rowsWithDupFlag = importSource === 'generic' ? rows.map((row) => {
     const candidate = convertRow(row, colMap, accounts);
     const accountResolution = resolveImportAccount(candidate.broker || candidate.account || '', accounts);
     const errors = validateTradeContent(candidate, accounts).map((error) => {
@@ -148,7 +243,7 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
       return error;
     });
     return { row, candidate, errors, isDuplicate: detectDuplicate(candidate, rawTrades).isDuplicate };
-  });
+  }) : [];
   const duplicateCount = rowsWithDupFlag.filter((r) => r.isDuplicate).length;
   const rejectedCount = rowsWithDupFlag.filter((r) => r.errors.length > 0).length;
   const acceptedRows = rowsWithDupFlag.filter((r) => r.errors.length === 0);
@@ -179,6 +274,9 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
   }
 
   const accOpts = [{ id: 'all', name: 'All Accounts' }, ...accounts];
+  const currentAccounts = activeAccounts(accounts);
+  const ninjaImportDisabled = !ninjaInspection || !timezoneAcknowledged
+    || ninjaInspection.sourceAccounts.some((sourceAccount) => !accountMap[sourceAccount]);
 
   return (
     <Modal onClose={onClose}>
@@ -189,6 +287,20 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
         </div>
 
         <div style={{ padding: 16 }}>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ color: C.dim, fontSize: 10, display: 'block', marginBottom: 4 }}>Import source</label>
+            <select value={importSource} onChange={(event) => {
+              setImportSource(event.target.value as ImportSource);
+              setStatus('idle');
+              setFeedback('');
+            }} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: '7px 10px', fontSize: 11, width: '100%' }}>
+              <option value="generic">Generic CSV/Excel</option>
+              <option value="ninjatrader">NinjaTrader</option>
+            </select>
+          </div>
+
+          {importSource === 'generic' && (
+            <>
           <SectionHeader color={C.blue} label="Import Trades — CSV or Excel (any format)" />
           <div style={{ background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, padding: 12, marginBottom: 10 }}>
             <div style={{ color: C.dim, fontSize: 10, marginBottom: 8 }}>
@@ -196,6 +308,24 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
             </div>
             <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ color: C.text, fontSize: 11, width: '100%' }} />
           </div>
+            </>
+          )}
+
+          {importSource === 'ninjatrader' && (
+            <>
+              <SectionHeader color={C.blue} label="Import Trades — NinjaTrader" />
+              <div style={{ background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, padding: 12, marginBottom: 10 }}>
+                <label style={{ color: C.text, fontSize: 11, display: 'block', marginBottom: 10 }}>
+                  <span style={{ display: 'block', marginBottom: 4, fontWeight: 600 }}>Executions CSV</span>
+                  <input type="file" accept=".csv" onChange={(event) => handleNinjaTraderFile('executions', event)} style={{ color: C.text, fontSize: 11, width: '100%' }} />
+                </label>
+                <label style={{ color: C.text, fontSize: 11, display: 'block' }}>
+                  <span style={{ display: 'block', marginBottom: 4, fontWeight: 600 }}>Trades CSV</span>
+                  <input type="file" accept=".csv" onChange={(event) => handleNinjaTraderFile('trades', event)} style={{ color: C.text, fontSize: 11, width: '100%' }} />
+                </label>
+              </div>
+            </>
+          )}
 
           {feedback && (
             <div style={{
@@ -208,7 +338,7 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
             </div>
           )}
 
-          {status === 'ready' && rows.length > 0 && (
+          {importSource === 'generic' && status === 'ready' && rows.length > 0 && (
             <div>
               <div style={{ color: C.dim, fontSize: 10, marginBottom: 6, fontWeight: 600 }}>Auto-detected column mapping:</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px', background: C.bg, borderRadius: 7, padding: 10, border: `1px solid ${C.border}`, maxHeight: 180, overflowY: 'auto', marginBottom: 10 }}>
@@ -280,7 +410,40 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
             </div>
           )}
 
-          {status === 'done' && (
+          {importSource === 'ninjatrader' && ninjaInspection && status !== 'done' && (
+            <div>
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: 10, marginBottom: 10 }}>
+                <div style={{ color: C.dim, fontSize: 10, marginBottom: 4, fontWeight: 600 }}>Discovered source accounts:</div>
+                <div style={{ color: C.text, fontSize: 11, marginBottom: 8 }}>{ninjaInspection.sourceAccounts.join(', ') || 'None'}</div>
+                <div style={{ color: C.dim, fontSize: 10, marginBottom: 4, fontWeight: 600 }}>Discovered instruments:</div>
+                <div style={{ color: C.text, fontSize: 11 }}>{ninjaInspection.instruments.join(', ') || 'None'}</div>
+              </div>
+
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: 10, marginBottom: 10 }}>
+                <div style={{ color: C.dim, fontSize: 10, marginBottom: 8, fontWeight: 600 }}>Account mapping:</div>
+                {ninjaInspection.sourceAccounts.map((sourceAccount) => (
+                  <label key={sourceAccount} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'center', marginBottom: 6, color: C.text, fontSize: 11 }}>
+                    <span>{sourceAccount}</span>
+                    <select value={accountMap[sourceAccount] ?? ''} onChange={(event) => setAccountMap((current) => ({ ...current, [sourceAccount]: event.target.value }))} style={{ background: C.card, border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, padding: '6px 8px', fontSize: 11 }}>
+                      <option value="">Select an active account</option>
+                      {currentAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', color: C.text, fontSize: 11, background: `${C.gold}15`, border: `1px solid ${C.gold}44`, borderRadius: 7, padding: '8px 12px', marginBottom: 10, cursor: 'pointer' }}>
+                <input type="checkbox" checked={timezoneAcknowledged} onChange={(event) => setTimezoneAcknowledged(event.target.checked)} />
+                NinjaTrader timestamps are imported exactly as written and are assumed to already be New York local time, with no timezone or DST conversion.
+              </label>
+
+              <button disabled={ninjaImportDisabled} onClick={doNinjaTraderImport} style={{ background: C.green, color: '#fff', border: 'none', borderRadius: 8, padding: '9px', fontSize: 13, fontWeight: 700, cursor: ninjaImportDisabled ? 'not-allowed' : 'pointer', opacity: ninjaImportDisabled ? 0.5 : 1, width: '100%' }}>
+                Import NinjaTrader Trades
+              </button>
+            </div>
+          )}
+
+          {importSource === 'generic' && status === 'done' && (
             <button onClick={() => { setStatus('idle'); setFeedback(''); }} style={{ background: C.blue, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 20px', fontSize: 12, fontWeight: 700, marginBottom: 10, width: '100%' }}>
               Import Another File
             </button>

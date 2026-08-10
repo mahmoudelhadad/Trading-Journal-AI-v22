@@ -393,3 +393,54 @@ describe('semantic persistence verification', () => {
     expect(harness.values.backtestResults).toEqual([legacy, validBacktest('new')]);
   });
 });
+
+describe('v1.2 trade backup compatibility', () => {
+  const legs = [
+    { kind: 'entry', quantity: '1', price: '100', date: '2026-08-07', time: '09:30:00', sourceExecutionId: '101' },
+    { kind: 'exit', quantity: '1', price: '110', date: '2026-08-07', time: '10:00:00', sourceExecutionId: '102' },
+  ];
+
+  it('round-trips v1.2 provenance and legs through a version 2 backup', async () => {
+    const legged = validTrade({
+      legs,
+      sourceInstrument: 'ES 09-26',
+      sourcePlatform: 'ninjatrader',
+      sourceAccountId: 'Sim101',
+    });
+    harness.values.trades = [legged];
+    const built = await buildBackup();
+    expect(built.version).toBe(2);
+
+    expect((await restoreBackup(built)).success).toBe(true);
+    const [restored] = harness.values.trades as Record<string, unknown>[];
+    expect(restored.legs).toEqual(legs);
+    expect(restored).toMatchObject({
+      sourceInstrument: 'ES 09-26', sourcePlatform: 'ninjatrader', sourceAccountId: 'Sim101',
+    });
+  });
+
+  it('still restores a v1.1-shaped backup with none of the new fields', async () => {
+    const legacyTrade = validTrade();
+    const result = await restoreBackup(backup({ trades: [legacyTrade], accounts: validData().accounts }, 1));
+    expect(result.success).toBe(true);
+    expect(harness.values.trades).toMatchObject([legacyTrade]);
+    expect((harness.values.trades as Record<string, unknown>[])[0]).not.toHaveProperty('legs');
+  });
+
+  it('restores legless and legged trades together', async () => {
+    const legless = validTrade({ _tid: 1 });
+    const legged = validTrade({
+      _tid: 2,
+      legs,
+      sourceInstrument: 'ES 09-26',
+      sourcePlatform: 'ninjatrader',
+      sourceAccountId: 'Sim101',
+    });
+    const result = await restoreBackup(backup({ trades: [legless, legged], accounts: validData().accounts }));
+    expect(result.success).toBe(true);
+    const restored = harness.values.trades as Record<string, unknown>[];
+    expect(restored).toHaveLength(2);
+    expect(restored[0]).not.toHaveProperty('legs');
+    expect(restored[1].legs).toEqual(legs);
+  });
+});

@@ -244,3 +244,76 @@ describe('enrichTrades', () => {
     expect(after._rPct).toBeNull();
   });
 });
+
+describe('v1.2 calculation regressions', () => {
+  const accounts: Account[] = [{ id: 'acc_1', name: 'Main', capital: 10000 } as Account];
+
+  it.each([
+    [
+      'forex',
+      { market: 'forex', symbol: 'EUR/USD', accountId: 'acc_1', date: '2026-08-08', direction: 'Long', entryPrice: '1', stopLoss: '0.5', target: '2', exitPrice: '1.5', positionSize: '2', commission: '10', entryTime: '09:00', exitTime: '10:00' },
+      { pl: 100000, risk: 100000, points: 5000, r: 1, netPL: 99990, rPct: 10, plannedR: 2, outcome: 'Green', duration: 60, label: 'Pips' },
+    ],
+    [
+      'index CFD',
+      { market: 'forex', symbol: 'US100', accountId: 'acc_1', date: '2026-08-08', direction: 'Long', entryPrice: '100', stopLoss: '99', target: '104', exitPrice: '102', positionSize: '2', commission: '1', entryTime: '09:00', exitTime: '10:00' },
+      { pl: 4, risk: 2, points: 2, r: 2, netPL: 3, rPct: 0.0002, plannedR: 4, outcome: 'Green', duration: 60, label: 'Pips' },
+    ],
+  ] as const)('pins RFC 22 %s calculations and enrichment', (_label, trade, expected) => {
+    expect(calcPL(trade)).toBe(expected.pl);
+    expect(calcRisk(trade)).toBe(expected.risk);
+    expect(calcPoints(trade)).toBe(expected.points);
+    const [enriched] = enrichTrades([trade], accounts);
+    expect(enriched).toMatchObject({
+      _i: 1,
+      _r: expected.r,
+      _pts: expected.points,
+      _pl: expected.pl,
+      _netPL: expected.netPL,
+      _rv: expected.risk,
+      _rPct: expected.rPct,
+      _plannedR: expected.plannedR,
+      _outcome: expected.outcome,
+      _capital: 10000,
+      _durMins: expected.duration,
+      _dur: '1h 0m',
+      _isFutures: false,
+      _ptLabel: expected.label,
+    });
+  });
+
+  it('pins every underscore field for a legless historical trade', () => {
+    const historical = {
+      _tid: 41, market: 'forex', symbol: 'US100', accountId: 'acc_1', date: '2026-08-08',
+      direction: 'Short', entryPrice: '100', stopLoss: '105', target: '90', exitPrice: '95',
+      positionSize: '2', commission: '1', entryTime: '09:15', exitTime: '10:45',
+    };
+    const [enriched] = enrichTrades([historical], accounts);
+    expect(enriched).toMatchObject({
+      _i: 1, _r: 1, _pts: 5, _pl: 10, _netPL: 9, _rv: 10, _rPct: 0.001,
+      _plannedR: 2, _outcome: 'Green', _capital: 10000, _durMins: 90,
+      _dur: '1h 30m', _isFutures: false, _ptLabel: 'Pips',
+    });
+    expect(enriched).not.toHaveProperty('legs');
+    expect(enriched).not.toHaveProperty('sourceInstrument');
+    expect(enriched).not.toHaveProperty('sourcePlatform');
+    expect(enriched).not.toHaveProperty('sourceAccountId');
+  });
+
+  it('enriches a trade with legs identically to the same trade without legs', () => {
+    const withoutLegs = {
+      symbol: 'US100', accountId: 'acc_1', date: '2026-08-08', direction: 'Long',
+      entryPrice: '100', stopLoss: '99', target: '104', exitPrice: '102', positionSize: '2',
+      commission: '1', entryTime: '09:00', exitTime: '10:00',
+    };
+    const legs = [
+      { kind: 'entry' as const, quantity: '2', price: '100', date: '2026-08-08', time: '09:00:00', sourceExecutionId: '1' },
+      { kind: 'exit' as const, quantity: '2', price: '102', date: '2026-08-08', time: '10:00:00', sourceExecutionId: '2' },
+    ];
+    const [plain] = enrichTrades([withoutLegs], accounts);
+    const [legged] = enrichTrades([{ ...withoutLegs, legs }], accounts);
+    const computedKeys = Object.keys(plain).filter((key) => key.startsWith('_'));
+    expect(Object.fromEntries(computedKeys.map((key) => [key, legged[key as keyof typeof legged]])))
+      .toEqual(Object.fromEntries(computedKeys.map((key) => [key, plain[key as keyof typeof plain]])));
+  });
+});

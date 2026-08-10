@@ -180,9 +180,16 @@ export function parseDate(v: unknown): string {
 export function parseTime(v: unknown): string {
   const s = cleanVal(v);
   if (!s) return '';
-  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?(?:\s*(AM|PM)\b)?/i);
   if (m) {
-    const h = +m[1], mi = +m[2];
+    let h = +m[1];
+    const mi = +m[2];
+    const meridiem = m[3]?.toUpperCase();
+    if (meridiem) {
+      if (h < 1 || h > 12) return s;
+      if (meridiem === 'AM') h = h === 12 ? 0 : h;
+      else h = h === 12 ? 12 : h + 12;
+    }
     return `${h < 10 ? '0' + h : h}:${mi < 10 ? '0' + mi : mi}`;
   }
   return s;

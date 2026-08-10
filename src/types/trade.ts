@@ -34,6 +34,15 @@
 
 import type { Stamped } from '@sync/record.js';
 
+export interface TradeLeg {
+  kind:              'entry' | 'exit';
+  quantity:          string;   // integer contracts as string
+  price:             string;
+  date:              string;   // 'YYYY-MM-DD'
+  time:              string;   // 'HH:mm:ss' — seconds PRESERVED here
+  sourceExecutionId: string;   // digits-only string, NEVER a number
+}
+
 /** A trade's business content — zero sync identity. See file header. */
 export interface RawTradeContent {
   _tid:           number;
@@ -77,6 +86,10 @@ export interface RawTradeContent {
   tm6:            string;
   error:          string;
   notes:          string;
+  legs?:             TradeLeg[];
+  sourceInstrument?: string;
+  sourcePlatform?:   string;
+  sourceAccountId?:  string;
 }
 
 /**

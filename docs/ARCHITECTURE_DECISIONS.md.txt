@@ -2255,3 +2255,256 @@ cutover architecture); AD-019 (portable Backup/Restore durability contract).
 - General authentication-transition cancellation/generation is designed.
 - Safe administrative recovery for wrong-user reservation is required.
 - Portable backup identity or authorization requirements change.
+
+---
+
+# AD-021
+
+## Title
+
+NinjaTrader Futures Import: Flat-to-Flat Journal Trade Identity and Additive
+Leg Foundation
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-10
+
+---
+
+## Context
+
+NinjaTrader's Trade Performance `Trades` export is not a list of logical
+journal trades. Measured against a real export, 19 executions correspond to 9
+logical flat-to-flat position episodes, and one of those episodes — a Qty-6
+Short — appears in the `Trades` grid as two separate rows because the entry
+filled in two parts:
+
+    Sell 2 @ 29634.25  ->  Sell 4 @ 29634.75  ->  Buy 6 @ 29668.00  ->  flat
+
+Both entry fills carry the same timestamp, so timestamps cannot order or
+identify them. The user confirmed the trading intent: a single limit order that
+partially filled, was left as price moved away, and completed on the return.
+
+Per-row cost in the `Trades` export is also unreliable for a split episode. For
+the rows above, the fee columns allocate `4.36 / 7.04` while the reported
+profit implies `3.80 / 7.60`; only the episode total, `11.40`, is consistent.
+
+The two exports are individually insufficient. The Executions export carries
+structure, per-execution identity, and account, but only a partial `Commission`
+figure — roughly 41% of true cost in every measured episode. The Trades export
+carries the complete cost columns but the wrong granularity. The Orders export
+carries order identity, but the Executions export leaves `Order ID` blank, so
+the two cannot be joined and order identity is unavailable at import time.
+
+Existing calculations are keyed on root symbols in the pip table. The source
+supplies dated contracts such as `MNQ SEP26`, which is absent from that table:
+validation rejects it, and market detection would silently classify it as
+Forex at point value 1 instead of futures at 2.
+
+---
+
+## Decision
+
+1. **Journal Trade identity is the flat-to-flat episode.** A trade opens when
+   the signed position for a given source account and source instrument leaves
+   zero and closes when it returns to zero. Partial fills, intentional
+   scale-ins, and partial exits all belong to that same trade while the
+   position is non-zero. Execution ID is provenance and ordering only, never
+   logical-trade identity.
+2. **The Executions CSV reconstructs episode structure and legs.** Executions
+   are partitioned by source account plus full source instrument and ordered by
+   execution ID using arbitrary-precision comparison, never JavaScript numbers.
+   NinjaTrader's `E/X` column is cross-checked against the computed side and
+   any disagreement aborts.
+3. **The Trades CSV reconciles complete cost.** Trades rows are consumed in
+   order by quantity conservation within the same partition. Timestamp equality
+   is never used as identity.
+4. **The Orders export is discovery evidence only** and is not a runtime import
+   input.
+5. **Pair reconciliation is fail-closed and all-or-nothing.** After consumption,
+   total quantity, direction, scaled-integer sums of entry and exit price times
+   quantity, and the Executions-versus-Trades commission subtotal in integer
+   cents must all agree exactly. No floating tolerance is used. Any mismatch,
+   or any unconsumed Trades row, aborts the entire import before persistence.
+6. **Legs are optional and additive.** `legs`, `sourceInstrument`,
+   `sourcePlatform`, and `sourceAccountId` are optional fields on the trade
+   shape. Historical and manual trades carry none of them, remain valid, and
+   are never migrated to populate empty values.
+7. **Aggregate fields remain the compatibility surface.** Every existing
+   calculation continues to read the aggregates only; legs are additive detail
+   that no v1.2 calculation consumes.
+8. **Root symbol and source contract identity are stored separately.** `symbol`
+   holds the supported root used by the pip table; `sourceInstrument` holds the
+   original dated contract verbatim.
+9. **Composite source provenance supports idempotency**, conceptually
+   `sourcePlatform + sourceAccountId + sourceInstrument + sourceExecutionId`.
+   An episode whose executions are all already present is skipped, all-new is
+   imported, and partial overlap aborts.
+
+---
+
+## Aggregate Semantics
+
+- `entryPrice` — quantity-weighted average of entry-side legs.
+- `exitPrice` — quantity-weighted average of exit-side legs.
+- `positionSize` — total entry-side quantity.
+- `commission` — the complete all-in episode cost, summed across every
+  reconciled Trades row as
+  `Commission + Clearing Fee + Exchange Fee + IP Fee + NFA Fee`.
+- P/L, R, points, and outcome remain derived through the existing calculation
+  path. NinjaTrader's `Profit` column is never read and never stored as
+  authoritative P/L; it already includes fees and would double-count.
+
+Weighted-average aggregation is P/L-preserving rather than approximate.
+Flat-to-flat guarantees that total entry quantity equals total exit quantity,
+and weighted average times that quantity is by definition the sum of price
+times quantity, so the aggregate reproduces the leg-wise gross exactly.
+
+`positionSize` is total entry-side quantity and is therefore **not necessarily
+peak simultaneous exposure** when an episode scales out and back in before
+going flat. Every consumer of the field multiplies it or displays it; none
+interprets it as peak exposure.
+
+---
+
+## Safety Boundaries
+
+Broker import fails closed, before anything is persisted, for:
+
+- reconciliation mismatch on quantity, direction, price sums, or commission;
+- an incomplete position episode, whether still open at the end of the range or
+  beginning with an exit that implies a pre-existing position;
+- reversal through zero within one execution;
+- an episode whose first entry date differs from its final exit date
+  (overnight);
+- an unsupported NinjaTrader root outside `NQ`, `ES`, `MNQ`, `MES`;
+- an unmapped source account;
+- partial execution-ID overlap against already-imported data.
+
+There is no partial success. Attaching complete costs to the wrong logical
+trade is the specific failure this contract exists to prevent.
+
+---
+
+## Time Semantics
+
+NinjaTrader source timestamps carry no timezone marker. They are treated as
+already New York-local wall-clock time. No UTC offset and no DST arithmetic are
+invented. The import UI states the assumption and requires explicit
+acknowledgement before import is enabled.
+
+Aggregate `entryTime` and `exitTime` are truncated — never rounded — to `HH:mm`
+so the existing canonical-time validation is satisfied without relaxation.
+Legs retain full `HH:mm:ss`.
+
+---
+
+## Reason
+
+Order ID was the intuitive grouping key and is unusable: the Executions export
+leaves it blank, so it cannot be joined to the Orders export. Timestamps
+collide within a real episode. Position-evolution from signed quantities is the
+only key the data actually supports, and it also matches the user's own
+definition of a trade, which is what the journal is for.
+
+Legs are required rather than cosmetic. The weighted-average entry for the
+measured split episode is `29634.5833...`, a price off the instrument's tick
+grid that was never traded and cannot be reversed into its constituent fills.
+Collapsing to that average at import would destroy the detail permanently and
+force a migration when scale editing is added.
+
+Keeping the aggregates authoritative is what makes the change safe: no
+calculation, analytic, chart, export, or backup path had to change.
+
+---
+
+## Tradeoff
+
+Requiring two files is more friction than one, and it is accepted because
+neither export alone can produce a correct trade: one lacks complete cost, the
+other lacks correct granularity. The alternative — importing Executions only
+and understating trading cost by roughly 59% — was rejected as silently wrong.
+
+Restricting broker import to four roots is narrower than the pip table
+supports. It is accepted because only MNQ and NQ appear in the evidence, and
+breadth without evidence is how silent misclassification enters.
+
+---
+
+## Alternatives Considered
+
+- **Import the `Trades` export directly.** Rejected: one logical trade can span
+  several rows, and per-row fee allocation is provably inconsistent for exactly
+  those rows.
+- **Group executions by Order ID.** Rejected: the field is blank in the
+  Executions export, so the join does not exist.
+- **Group by matching timestamps and prices.** Rejected: the real episode has
+  two entry fills sharing one timestamp, so the signal is coincidental and the
+  rule would be fragile.
+- **Store the dated contract in `symbol`.** Rejected: it is absent from the pip
+  table, so validation rejects it and market detection would classify it as
+  Forex at point value 1 rather than futures at 2.
+- **Collapse to weighted averages without legs.** Rejected: irreversible
+  information loss and a forced later migration.
+- **Add a second fee field to mirror NinjaTrader's labels.** Rejected: the
+  single existing Commission field, populated with the complete cost, satisfies
+  the product requirement without widening the schema.
+- **Bump the backup format version.** Rejected: additive optional fields
+  already survive the existing format, and bumping would stop v1.1 from reading
+  v1.2 backups for no gain.
+
+---
+
+## Consequences
+
+- The trade shape gains four optional fields. `syncMappers.ts` had to be
+  updated because its field map is declared `satisfies Record<keyof
+  RawTradeContent, string>` and fails typecheck otherwise; `legs` required
+  JSON-aware handling rather than the existing string sentinel, which would
+  have stringified the array.
+- Backup format stays at version 2. Legs round-trip, and a v1.1-shaped backup
+  still restores.
+- Validation of the new fields is lenient and runs only when a field is
+  present, because backup restore validates every active trade and aborts the
+  whole restore on the first error. Historical trades must produce zero errors.
+- Broker-imported trades carry no stop loss, because the source has none, so
+  they have no R and no outcome classification. This is the existing documented
+  behaviour for non-decisive trades (see AD-017); v1.2 increases how often it
+  occurs rather than changing it. Nothing is invented to fill the gap.
+- The NinjaTrader path deliberately bypasses `smartAutoMap`, `convertRow`, and
+  `detectDuplicate`, so the generic import path cannot regress through it.
+
+---
+
+## Spec References
+
+v1.2 Final RFC, targeted amendment, and implementation preflight; v1.2
+implementation, runtime-verification, and scoped P2 repair authorizations;
+AD-017 (win-rate and outcome denominators); AD-019 (portable Backup/Restore
+durability contract); AD-020 (authenticated local ownership and per-user
+storage isolation).
+
+---
+
+## Revisit Only If
+
+- Manual Scale In / Scale Out editing is approved, at which point the leg model
+  becomes read-write rather than import-only.
+- Overnight episodes or reversal through zero require support.
+- A second broker or platform source is approved, at which point the
+  source-specific adapter boundary should be re-examined before any
+  generalization.
+- NinjaTrader changes its export columns, adds `Order ID` to Executions, or
+  exposes the full fee set there, which would collapse the two-file contract to
+  one.
+- Additional NinjaTrader Futures roots are approved for broker import.
+- Aggregate `positionSize` semantics need to distinguish transacted quantity
+  from peak simultaneous exposure.

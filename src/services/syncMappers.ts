@@ -76,6 +76,11 @@ const normalizeTimeString = (v: unknown): string => {
 // ─── Trades ───────────────────────────────────────────────────────────
 
 const EXTRA = 'extra' as const;
+const EXTRA_JSON = 'extra_json' as const;
+
+const OPTIONAL_EXTRA_FIELDS: ReadonlySet<string> = new Set([
+  'sourceInstrument', 'sourcePlatform', 'sourceAccountId',
+]);
 
 /**
  * Every `RawTradeContent` field's destination: either a dedicated
@@ -120,6 +125,10 @@ const TRADE_FIELD_MAP = {
   notes:          'notes',
   beSL: EXTRA, afSL: EXTRA, sl1: EXTRA, sl2: EXTRA, sl3: EXTRA,
   tm1: EXTRA, tm2: EXTRA, tm3: EXTRA, tm4: EXTRA, tm5: EXTRA, tm6: EXTRA,
+  legs: EXTRA_JSON,
+  sourceInstrument: EXTRA,
+  sourcePlatform: EXTRA,
+  sourceAccountId: EXTRA,
 } as const satisfies Record<keyof RawTradeContent, string>;
 
 /** Fields needing string->numeric coercion (the rest, aside from the special cases below, pass through as plain text — valid for a `text` column even when empty). */
@@ -143,7 +152,14 @@ export function tradeContentToRow(content: Record<string, unknown>): Record<stri
   const extra: Record<string, unknown> = {};
 
   for (const [field, column] of Object.entries(TRADE_FIELD_MAP)) {
+    if (column === EXTRA_JSON) {
+      if (Object.prototype.hasOwnProperty.call(content, field)) {
+        extra[field] = JSON.stringify(content[field]);
+      }
+      continue;
+    }
     if (column === EXTRA) {
+      if (OPTIONAL_EXTRA_FIELDS.has(field) && !Object.prototype.hasOwnProperty.call(content, field)) continue;
       extra[field] = String(content[field] ?? '');
       continue;
     }
@@ -184,7 +200,18 @@ export function tradeRowToContent(row: Record<string, unknown>): Record<string, 
   const extra = (row.extra && typeof row.extra === 'object' ? row.extra : {}) as Record<string, unknown>;
 
   for (const [field, column] of Object.entries(TRADE_FIELD_MAP)) {
+    if (column === EXTRA_JSON) {
+      if (Object.prototype.hasOwnProperty.call(extra, field) && typeof extra[field] === 'string') {
+        try {
+          content[field] = JSON.parse(extra[field]);
+        } catch {
+          // Malformed JSON is omitted so it cannot corrupt the local content shape.
+        }
+      }
+      continue;
+    }
     if (column === EXTRA) {
+      if (OPTIONAL_EXTRA_FIELDS.has(field) && !Object.prototype.hasOwnProperty.call(extra, field)) continue;
       content[field] = nullToEmptyString(extra[field]);
       continue;
     }

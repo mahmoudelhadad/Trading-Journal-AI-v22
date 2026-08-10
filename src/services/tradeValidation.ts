@@ -82,6 +82,49 @@ export function validateTradeContent(
   if ((hasDirectionalInputs || directionPresent) && trade.direction !== 'Long' && trade.direction !== 'Short') {
     errors.push('direction must be Long or Short when trade prices are entered.');
   }
+
+  if (Object.prototype.hasOwnProperty.call(trade, 'legs')) {
+    if (!Array.isArray(trade.legs)) {
+      errors.push('legs must be an array.');
+    } else {
+      for (const leg of trade.legs) {
+        if (leg == null || typeof leg !== 'object') {
+          errors.push('each leg must be an object.');
+          continue;
+        }
+        if (leg.kind !== 'entry' && leg.kind !== 'exit') {
+          errors.push('leg kind must be entry or exit.');
+        }
+        if (typeof leg.quantity !== 'string' || !isFiniteNumeric(leg.quantity) || Number(leg.quantity) <= 0) {
+          errors.push('leg quantity must be a numeric string greater than zero.');
+        }
+        if (typeof leg.price !== 'string' || !isFiniteNumeric(leg.price) || Number(leg.price) <= 0) {
+          errors.push('leg price must be a numeric string greater than zero.');
+        }
+        if (!isCanonicalDate(leg.date)) {
+          errors.push('leg date must be a valid YYYY-MM-DD date.');
+        }
+        if (typeof leg.time !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(leg.time)) {
+          errors.push('leg time must use HH:mm:ss.');
+        }
+        if (typeof leg.sourceExecutionId !== 'string' || !/^\d+$/.test(leg.sourceExecutionId)) {
+          errors.push('leg source execution ID must be a non-empty digits-only string.');
+        }
+      }
+    }
+  }
+
+  const optionalSourceFields = [
+    ['sourceInstrument', 'Source instrument'],
+    ['sourcePlatform', 'Source platform'],
+    ['sourceAccountId', 'Source account ID'],
+  ] as const;
+  for (const [field, label] of optionalSourceFields) {
+    if (Object.prototype.hasOwnProperty.call(trade, field)
+      && (typeof trade[field] !== 'string' || trade[field].trim() === '')) {
+      errors.push(`${label} must be a non-blank string.`);
+    }
+  }
   return errors;
 }
 

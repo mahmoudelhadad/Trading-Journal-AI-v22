@@ -4,253 +4,322 @@
 
 ## Phase
 
-v1.1 — Honest Import & Release Operability
+v1.2 — NinjaTrader Futures Import & Minimal Leg Foundation
 
 Status:
 
-IMPLEMENTATION + RUNTIME COMPLETE
+IMPLEMENTATION + AUTOMATED VERIFICATION COMPLETE
+RUNTIME ACCEPTANCE PASSED
 DOCUMENTATION CLOSE COMPLETE
-NOT YET RELEASED — Git closure and version bump remain separately authorized
+NOT YET RELEASED — local Git closure, version bump, tag, push, and deployment
+remain separately authorized
 
-**Production v1.0 remains the currently released and tagged production
-baseline** (`e3affc77418952a6375a3054ac96ca1ae5c55cfb`, tag `v1.0.0`, live at
-`https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/`) until v1.1 release
+**Production v1.1 is the currently released baseline** (`v1.1.0`, commit
+`92d9fde9957bd7e838f1b3e064804594af3d1b13`, live at
+`https://mahmoudelhadad.github.io/Trading-Journal-AI-v22/`) until v1.2 release
 closure is completed.
+
+Correction to the previous record: the v1.1 phase document stated that
+`v1.1.0` did not exist locally or remotely and that the package version was
+still `1.0.0`. Both statements are now stale. The `v1.1.0` tag exists and
+resolves to `92d9fde9957bd7e838f1b3e064804594af3d1b13`, `origin/main` is at the
+same commit, and `package.json` reads `1.1.0`. That release closure was
+completed after the v1.1 phase document was written.
+
+- Base release: **v1.1.0**
+- Target release: **v1.2.0**
 
 ---
 
 ## Objective
 
-Repair the advertised-but-non-functional Excel import, correct browser quota
-classification so the existing tailored storage-full notice can be selected,
-and make the running build identifiable from the application — without
-architecture, dependency, schema, or format change.
+Import real NinjaTrader futures activity as logical flat-to-flat journal
+trades, preserving execution-leg detail so no source information is
+irreversibly lost, while leaving manual entry, generic CSV/XLSX import,
+Forex/CFD behaviour, analytics, and backup/restore unchanged. Two confirmed
+v1.1 correctness defects adjacent to that path are repaired in the same
+release.
 
 ---
 
-## Delivered Scope — three deliverables
+## Delivered Scope
 
-1. **Honest Excel/XLSX import.** The migrated wizard relied on a global
-   `XLSX` that never existed (an ambient `declare` kept typecheck green), so
-   every workbook upload failed with "Excel library not loaded" while the UI
-   advertised Excel support. The parser is now loaded dynamically, only when
-   an Excel import is invoked, using the already-declared `xlsx` dependency.
-   `.xlsx`/`.xls` feed the same normalized `string[][]` pipeline as CSV.
+1. **NinjaTrader futures import (CSV only).** A source-specific adapter
+   consumes a paired `Executions CSV` + `Trades CSV` export, reconstructs
+   flat-to-flat position episodes, preserves execution legs, reconciles
+   complete transaction costs, and emits the existing `RawTradeContent`
+   contract. Supported broker-import roots are `NQ`, `ES`, `MNQ`, `MES`.
 
-2. **Correct quota classification.** A browser `QuotaExceededError` is a
-   `DOMException` identified by `.name`; the reporter classified only on
-   `.kind`, so quota exhaustion showed the generic notice. `.name` is now
-   consulted only when no `.kind` exists, leaving every existing IndexedDB
-   classification authoritative and the non-throwing facade unchanged.
+2. **Minimal additive leg foundation.** Imported trades may carry an optional
+   `legs` array plus optional source-provenance fields. Historical and manual
+   trades carry none of them and are completely unaffected. No migration.
 
-3. **Release/build visibility.** General Settings shows
-   `v<version> · build <short commit>`, sourced from `package.json` and from
-   `GITHUB_SHA` / local git / `dev`.
+3. **AM/PM import correctness.** `parseTime` previously discarded the meridiem,
+   silently converting `1:05:00 PM` to `01:05` while passing validation. It now
+   handles 12-hour input and fails closed on out-of-range values.
+
+4. **Arabic CSV/Excel interoperability.** `buildExportCSV` now emits a UTF-8
+   BOM so Arabic Notes render correctly when the export is opened normally in
+   Microsoft Excel.
+
+5. **Truthful import result counts.** A scoped P2 repair: the NinjaTrader
+   success message reported episodes *discovered* as episodes *imported*, so a
+   fully-skipped re-import wrongly claimed work had been done.
 
 ---
 
 ## Exact Implementation Manifest
 
-Implementation/config (6):
-- src/components/import/ImportWizard.tsx
-- src/components/settings/GeneralSettings.tsx
+Production (8):
+- src/types/trade.ts
+- src/services/syncMappers.ts
+- src/services/ninjaTraderAdapter.ts (new)
 - src/services/importService.ts
-- src/services/localPersistenceEvents.ts
-- src/vite-env.d.ts
-- vite.config.js
+- src/services/exportService.ts
+- src/services/tradeValidation.ts
+- src/components/import/ImportWizard.tsx
+- src/services/index.js
 
-Tests (2):
+Tests (7):
+- src/services/ninjaTraderAdapter.test.ts (new)
+- src/services/exportService.test.ts (new)
 - src/services/importService.test.ts
-- src/services/storage.test.ts
+- src/services/backupService.test.ts
+- src/calculations/tradeCalc.test.ts
+- src/services/tradeValidation.test.ts
+- src/sync/stamp.test.ts
 
-Documentation (2):
-- docs/CHANGELOG.md.txt
+Documentation (3):
 - docs/CURRENT_PHASE.md.txt
+- docs/CHANGELOG.md.txt
+- docs/ARCHITECTURE_DECISIONS.md.txt
 
-Final close manifest: exactly 10 changed paths — 6 implementation/config,
-2 tests, and 2 documentation files. ARCHITECTURE_DECISIONS.md.txt is
-unchanged.
+Final close manifest: exactly 18 changed paths — 8 production, 7 tests, and
+3 documentation files. No dependency, lockfile, configuration, or build change.
 
 ---
 
 ## Import Contract
 
-- Excel parsing is dynamic and on demand; it is never loaded during normal
-  application startup.
-- `.xlsx` and `.xls` produce the same `string[][]` shape as CSV and feed the
-  unchanged `processRows()` pipeline.
-- CSV behavior is untouched.
-- Excel failures, including a failed lazy-chunk fetch, surface through the
-  existing `Excel error: ...` channel.
-- No import envelope, DTO, adapter, source identity, or schema was
-  introduced.
-
-Measured parser nuance (bounds what this guarantees):
-- SheetJS does not throw on all malformed input — unrecognized bytes are
-  tolerated and read as a single-cell text sheet.
-- A structurally broken workbook (e.g. a truncated ZIP) does throw and is
-  surfaced gracefully.
-- Unrecognized junk is stopped downstream instead: `processRows()` requires a
-  header row of more than three non-empty cells and rejects it with "Could
-  not detect headers."
+- NinjaTrader import is **CSV only** in v1.2. NinjaTrader XLSX is deliberately
+  deferred: the existing `raw:false` workbook path renders the source timestamp
+  as a two-digit-year value with seconds dropped, while CSV preserves the exact
+  source text.
+- Generic CSV and XLS/XLSX journal import are untouched and remain the default
+  import source.
+- Both NinjaTrader files are required. Executions supplies episode structure
+  and legs; Trades supplies the complete cost columns, which Executions does
+  not expose.
+- The adapter consumes CSV **text** and returns plain data; all browser file
+  I/O stays in `ImportWizard`.
+- Reconciliation is fail-closed and all-or-nothing. Nothing is persisted unless
+  every check passes.
 
 ---
 
-## Persistence Contract
+## Logical Trade Contract
 
-Unchanged from Release Hardening except classification:
-- An explicit `.kind` remains authoritative.
-- `.name === 'QuotaExceededError'` is consulted only when no `.kind` exists.
-- The facade remains non-throwing; caller contracts are unchanged.
-- `LocalPersistenceNotice` was not modified.
+One Journal Trade is one flat-to-flat position episode for the same source
+account and source instrument: the position leaves zero, and the trade closes
+when it returns to zero. Partial fills, intentional scale-ins, and partial
+exits all belong to the same logical trade while the position remains non-zero.
+
+Execution ID is provenance and ordering only. It is not logical-trade identity.
 
 ---
 
-## Build Identification Contract
+## Aggregate Contract
 
-- `package.json` is the single semantic-version source.
-- Build identifier: `GITHUB_SHA` in CI, then local `git rev-parse --short
-  HEAD`, then `dev`.
-- No runtime GitHub API access and no secret exposure; `GITHUB_SHA` is public
-  build metadata.
+- `entryPrice` — quantity-weighted average of entry legs.
+- `exitPrice` — quantity-weighted average of exit legs.
+- `positionSize` — total entry-side quantity.
+- `commission` — complete all-in episode cost.
+- P/L, R, points, and outcome remain derived. NinjaTrader's `Profit` column is
+  never read and never stored.
+
+`positionSize` is total entry-side quantity, which is **not necessarily peak
+simultaneous exposure** when an episode scales out and back in before going
+flat. No existing consumer interprets it as peak exposure.
+
+---
+
+## Time Contract
+
+NinjaTrader source timestamps carry no timezone marker and are treated as
+already New York-local wall-clock time. No UTC conversion and no DST arithmetic
+are performed or invented. The import UI states this assumption and requires
+explicit acknowledgement before import is enabled.
+
+Aggregate `entryTime`/`exitTime` are truncated to `HH:mm` to satisfy the
+existing validation contract; legs retain full `HH:mm:ss`.
 
 ---
 
 ## Automated Verification
 
 - TypeScript: 0 errors.
-- ESLint: 0 errors and exactly 7 existing warnings.
-- Focused tests: 19 passed.
-- Full tests: 318 passing across 20 files.
-- `npm.cmd run verify`: passed.
-- Production build: passed, 999 modules transformed.
+- ESLint: 0 errors and exactly 7 pre-existing warnings.
+- Full tests: **377 passing across 22 files** (baseline was 318 across 20).
+- `npm run verify`: passed.
 - `git diff --check`: passed.
 - Dependency, lockfile, test-framework, and test-configuration changes: none.
-
-XLSX build evidence:
-- The previous empty xlsx chunk and its build warning are gone.
-- A real lazy artifact of approximately 429 KB is produced.
-- The built HTML does not reference or preload it.
-- Main bundle impact was approximately 1.3 KB.
-- Content-hashed filenames will change on future builds; recorded hashes are
-  evidence, not a contract.
+- No existing test was weakened, renamed, or removed.
 
 ---
 
 ## Runtime Evidence
 
-Disposable authenticated user, isolated profile, synthetic data only.
+Read-only inspection of the real NinjaTrader exports (never imported into
+application storage):
 
-- Zero xlsx requests during normal startup, and none from merely opening the
-  import dialog.
-- Settings displayed `v1.0.0 · build e3affc7`.
-- A real synthetic `.xlsx` imported successfully; the chunk was fetched only
-  at that moment.
-- Correct counts: "2 rows ready to import. 0 rows rejected." then
-  "Imported 2 trades. Rejected 0 invalid rows."
-- Imported trades persisted across reload.
-- CSV regression passed.
-- A structurally broken workbook failed gracefully with "Excel error:
-  Unsupported ZIP file"; the app stayed usable and data was unchanged.
-- Quota injection produced the tailored storage-full blocking notice rather
-  than the generic message.
-- Stored data and a second disposable namespace were byte-identical after the
-  failed write.
-- The primary account was not used. No real journal data or backup was used.
-  No Futures data was used.
+- 19 executions reconstructed to 9 logical flat-to-flat episodes.
+- Total net P/L matched NinjaTrader's own reported figure to the cent:
+  `-3439.06`.
+- Identical re-import produced 0 new trades and 9 skipped episodes.
+- The point-value table was independently corroborated against real broker
+  arithmetic (MNQ $2/point, NQ $20/point).
+
+Disposable authenticated user, synthetic data only, through the real UI:
+
+- Generic CSV/Excel remains the default import source and is unchanged.
+- Partial fill `Sell 2 → Sell 4 → Buy 6` imported as **one** Qty-6 Short trade
+  with three legs and all-in commission `11.40`.
+- Import stays disabled until both files load, every source account is
+  explicitly mapped, and the timezone acknowledgement is checked. No journal
+  account is silently preselected.
+- Reload persistence passed; leg and source metadata intact.
+- Edit/save through the manual edit form preserved every leg and source field.
+- Idempotent re-import added zero trades.
+- Fail-closed behaviour confirmed: a quantity-mismatched pair produced a clear
+  error and imported nothing.
+- Backup download, clear, and restore through the Settings UI preserved legs
+  and source metadata at backup format version 2.
+- Money display is correctly rounded; no floating-point noise reaches the UI.
+
+Arabic CSV/Excel:
+
+- Exported file begins with a UTF-8 BOM (`EF BB BF`); Arabic text intact.
+- Re-import verified with and without the BOM; column mapping identical and
+  uncontaminated.
+- The user manually opened the exported CSV in Microsoft Excel and confirmed
+  the Arabic Notes display correctly.
+
+The primary account and real journal data were not used for any runtime write.
+
+---
+
+## Defect Findings
+
+- P0: none.
+- P1: none.
+- P2 (repaired and re-verified): the NinjaTrader success message reported
+  discovered episodes as imported episodes. First import, fully-skipped
+  re-import, and mixed new/skipped cases were each re-checked in the browser
+  after the repair and all three now report truthfully.
 
 ---
 
 ## Versioning
 
-- Current package semantic version: **1.0.0** (deliberately not bumped).
-- Intended release version after successful Git/release closure: **1.1.0**.
-- The `package.json` bump, the `v1.1.0` tag, the push, and the resulting
+- Current package semantic version: **1.1.0** (deliberately not bumped).
+- Intended release version after successful Git/release closure: **1.2.0**.
+- The `package.json` bump, the `v1.2.0` tag, the push, and the resulting
   deployment are all separately authorized steps and have NOT been performed.
 
 ---
 
 ## Explicit Non-Scope
 
-v1.1 does not include:
+v1.2 does not include:
 
-- Futures broker/trade-file import;
-- versioned import envelope;
+- Manual Scale In / Scale Out UI;
+- overnight broker-import episodes;
+- reversal-through-zero support;
+- a NinjaTrader XLSX adapter;
+- any broader multi-broker or generalized source framework;
+- other NinjaTrader Futures roots beyond `NQ`, `ES`, `MNQ`, `MES`;
+- the Orders export as a runtime input;
 - historical bars;
-- IndexedDB expansion;
-- Sync or Cutover;
-- cloud persistence;
+- IndexedDB expansion or journal-wide migration;
+- Sync or Cutover reactivation;
+- cloud persistence or multi-device;
 - Backtesting V2;
-- Advanced Analytics expansion;
-- AI/Agents;
-- MCP;
-- favicon cleanup.
+- AI/Agents or MCP;
+- historical Commission correction.
+
+Manual Futures entry is unchanged and continues to support every symbol in
+`FUT_SYMBOLS`; the four-root allowlist constrains broker import only.
 
 ---
 
 ## Exit Criteria
 
-- [x] Excel import is functional and loaded on demand.
-- [x] CSV behavior unchanged.
-- [x] Excel failures surface through the existing error channel.
-- [x] Empty xlsx chunk eliminated; real lazy artifact produced.
-- [x] Quota failures classify as `quota_exceeded`; `.kind` stays
-      authoritative.
-- [x] Non-throwing persistence facade preserved.
-- [x] Version and build identifier visible in the application.
-- [x] Typecheck, lint, tests, verify, build, diff, and manifest checks passed.
-- [x] Synthetic runtime acceptance passed on a disposable user.
+- [x] NinjaTrader CSV pair imports as logical flat-to-flat trades.
+- [x] Partial fills, scale-ins, and partial exits stay inside one trade.
+- [x] Execution legs preserved; historical trades without legs unaffected.
+- [x] Root symbol and source contract identity stored separately.
+- [x] Complete all-in Commission reconciled from the Trades export.
+- [x] Reconciliation fail-closed and all-or-nothing.
+- [x] Idempotent re-import.
+- [x] Explicit account mapping; no silent first-account assignment.
+- [x] AM/PM parsing corrected without changing 24-hour behaviour.
+- [x] Arabic CSV export Excel-compatible and still re-importable.
+- [x] Typecheck, lint, tests, verify, and diff checks passed (377/377).
+- [x] Runtime acceptance passed on a disposable user with synthetic data.
+- [x] Excel Arabic visual acceptance confirmed by the user.
+- [x] Scoped P2 import-message defect repaired and re-verified.
 - [x] Documentation close completed without widening scope.
-- [ ] Git closure, version bump to 1.1.0, tag, push, and deployment —
+- [ ] Local Git closure, version bump to 1.2.0, tag, push, and deployment —
       OUTSTANDING.
 
-v1.1 implementation and documentation exit criteria are satisfied. The
-release exit criterion remains open.
+v1.2 implementation, runtime, and documentation exit criteria are satisfied.
+The release exit criterion remains open.
 
 ---
 
 ## Architecture Decision
 
-No new architecture decision was recorded, determined from the repository:
-none of the twenty existing ADRs governs import formats, Excel parsing, lazy
-chunk loading, or build identity, and v1.1 creates no such durable authority.
-The XLSX work restores an advertised path using an already-declared
-dependency; lazy loading is a bounded implementation choice; quota
-classification repairs an existing persistence-failure contract; and build
-visibility is release operability. ARCHITECTURE_DECISIONS.md.txt is
-unchanged.
+**AD-021 — NinjaTrader Futures Import: Flat-to-Flat Journal Trade Identity and
+Additive Leg Foundation** was recorded. Unlike v1.1, this release does create
+durable architectural authority: it fixes what a Journal Trade *is* for
+imported broker data, establishes a two-file fail-closed source contract, and
+introduces the first additive optional fields on the trade shape.
 
 ---
 
 ## Migration Impact
 
-None. No schema, storage key, namespace, backup format/version, persisted
-data shape, or import format change. No historical data was rewritten.
+None. All new trade fields are optional and absent on every existing record.
+No storage key, namespace, or backup format version change — backup remains
+format version 2, and a v1.1-shaped backup still restores. No historical data
+was rewritten, including historical manual Commission values.
+
+---
+
+## Known Limitations
+
+- A weighted-average entry or exit price may be a long decimal, for example
+  `29634.5833333333`. This is the true stored aggregate; the original fill
+  prices remain in the legs.
+- Internal floating-point representation can carry negligible numerical noise;
+  user-facing money display is correctly rounded to two decimals.
+- Dotted meridiem forms such as `P.M.` are outside the frozen AM/PM scope.
+  NinjaTrader emits bare `AM`/`PM`, which is supported.
 
 ---
 
 ## Repository State
 
-The implementation and documentation diff remains unstaged. No commit, tag,
-push, pull request, merge, or rebase has occurred, and no deployment has been
-triggered. `v1.1.0` does not exist locally or remotely.
+The implementation and documentation diff remains unstaged. No commit, branch,
+tag, push, pull request, merge, or rebase has occurred, and no deployment has
+been triggered. `v1.2.0` does not exist locally or remotely. `HEAD` remains
+`92d9fde9957bd7e838f1b3e064804594af3d1b13`.
 
 ---
 
-## Next Planned Discovery — after v1.1 release
+## Next Planned Gate
 
-**Futures/broker trade-file import.** NOT STARTED, and not designed here.
-
-Important context for that discovery: manual Futures support already exists
-to a meaningful degree — `FUT_SYMBOLS`, per-contract point values in the pip
-table, a market toggle in the trade form, "Points" labelling, market
-auto-detection on import, and Futures symbols passing validation — and
-historical versions of this journal were used with Futures trades. The next
-Futures work is therefore expected to focus on import source identity,
-contract identity, and duplicate strategy rather than rebuilding Futures
-support from zero.
-
-Other post-v1 items — versioned import envelope, historical bars, per-user
-IndexedDB for large datasets, Sync/Cutover, Backtesting V2, Advanced
-Analytics expansion, Trade Review surfacing, and any AI/MCP layer — remain
-deferred.
+**Local Git closure for v1.2**, separately authorized: staging the frozen
+manifest, the `package.json` bump to `1.2.0`, the commit, and the annotated
+`v1.2.0` tag — followed by separate approval for push, deployment, and live
+acceptance.

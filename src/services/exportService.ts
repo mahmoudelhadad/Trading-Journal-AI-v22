@@ -54,7 +54,7 @@ export function buildExportCSV(trades: EnrichedTrade[]): string {
   const lines = [EXPORT_HEADERS.join(',')].concat(
     rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')),
   );
-  return lines.join('\n');
+  return '\ufeff' + lines.join('\n');
 }
 
 /**

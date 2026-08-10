@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Account } from '@apptypes/account.js';
+import { FUT_SYMBOLS } from '@constants/symbols.js';
 import { isCanonicalDate, isCanonicalTime, validateTradeContent } from './tradeValidation.js';
 
 const account = (id: string, name: string, deletedAt: string | null = null) => ({
@@ -57,5 +58,41 @@ describe('trade domain validation', () => {
       .toContain('direction must be Long or Short when trade prices are entered.');
     expect(validateTradeContent({ ...incomplete, direction: 'Buy' }, [account('a', 'Main')]))
       .toContain('direction must be Long or Short when trade prices are entered.');
+  });
+});
+
+describe('v1.2 validation regressions', () => {
+  it('keeps every manual futures symbol valid independently of the broker allowlist', () => {
+    for (const symbol of FUT_SYMBOLS) {
+      expect(validateTradeContent({ ...validTrade(), market: 'futures', symbol }, [account('a', 'Main')]), symbol)
+        .toEqual([]);
+    }
+  });
+
+  it('accepts absent optional provenance fields without errors', () => {
+    const trade = validTrade();
+    expect(trade).not.toHaveProperty('legs');
+    expect(trade).not.toHaveProperty('sourceInstrument');
+    expect(trade).not.toHaveProperty('sourcePlatform');
+    expect(trade).not.toHaveProperty('sourceAccountId');
+    expect(validateTradeContent(trade, [account('a', 'Main')])).toEqual([]);
+  });
+
+  it('rejects present malformed optional provenance fields', () => {
+    const validate = (overrides: Record<string, unknown>) => validateTradeContent(
+      { ...validTrade(), ...overrides } as Parameters<typeof validateTradeContent>[0],
+      [account('a', 'Main')],
+    );
+    const validLeg = {
+      kind: 'entry', quantity: '1', price: '100', date: '2026-08-07',
+      time: '09:30:00', sourceExecutionId: '123',
+    };
+
+    expect(validate({ legs: 'not-an-array' })).toContain('legs must be an array.');
+    expect(validate({ legs: [{ ...validLeg, kind: 'scale' }] })).toContain('leg kind must be entry or exit.');
+    expect(validate({ legs: [{ ...validLeg, time: '09:30' }] })).toContain('leg time must use HH:mm:ss.');
+    expect(validate({ legs: [{ ...validLeg, sourceExecutionId: '12A' }] }))
+      .toContain('leg source execution ID must be a non-empty digits-only string.');
+    expect(validate({ sourceInstrument: '   ' })).toContain('Source instrument must be a non-blank string.');
   });
 });

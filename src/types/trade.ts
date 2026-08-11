@@ -35,12 +35,26 @@
 import type { Stamped } from '@sync/record.js';
 
 export interface TradeLeg {
-  kind:              'entry' | 'exit';
-  quantity:          string;   // integer contracts as string
-  price:             string;
-  date:              string;   // 'YYYY-MM-DD'
-  time:              string;   // 'HH:mm:ss' — seconds PRESERVED here
-  sourceExecutionId: string;   // digits-only string, NEVER a number
+  kind:               'entry' | 'exit';
+  /**
+   * Positive numeric string. Whole contracts for futures; fractional
+   * lots (e.g. '0.25') are legitimate for forex — this was never an
+   * integer-only field in practice, and manual scale entry relies on
+   * that. Validation enforces whole numbers for futures only.
+   */
+  quantity:           string;
+  price:              string;
+  date:               string;   // 'YYYY-MM-DD'
+  time:               string;   // 'HH:mm:ss' — seconds PRESERVED here
+  /**
+   * Digits-only string, NEVER a number. Broker execution provenance.
+   *
+   * ABSENT ENTIRELY on manually entered legs — a manual leg has no
+   * broker execution behind it, so it carries no execution ID rather
+   * than a fabricated one. Absence IS the provenance statement; do not
+   * write `sourceExecutionId: undefined` and do not invent an ID.
+   */
+  sourceExecutionId?: string;
 }
 
 /** A trade's business content — zero sync identity. See file header. */

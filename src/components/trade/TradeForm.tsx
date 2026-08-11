@@ -32,7 +32,17 @@ import React, { useState, useCallback } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { FX_SYMBOLS, FUT_SYMBOLS } from '@constants/symbols.js';
 import { createEmptyTrade } from '@apptypes/trade.js';
-import { toManualSaveMessage, validateTradeContent } from '@services/tradeValidation.js';
+import {
+  toManualSaveMessage,
+  validateManualScaleLegs,
+  validateTradeContent,
+} from '@services/tradeValidation.js';
+import {
+  buildScaledTradeCandidate,
+  deriveAggregatesFromLegs,
+  hasManualLegs,
+} from '@calculations/scaleLegs.js';
+import { ScaleLegsSection } from '@components/trade/ScaleLegsSection.js';
 import { Modal } from '@components/ui/Modal.js';
 import { Select } from '@components/ui/Select.js';
 import { Input } from '@components/ui/Input.js';
@@ -83,14 +93,44 @@ export function TradeForm({
   );
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Manual scale legs own five aggregate fields while they exist.
+  // Imported trades are excluded: their legs are broker executions and
+  // their aggregates were reconciled against the broker's own Trades
+  // file, so nothing here recomputes or rewrites them.
+  const scaled = hasManualLegs(t);
+  // Live preview — the disabled aggregate inputs must show what the
+  // CURRENT legs derive to, never a stale pre-scale value. This is
+  // display only; handleSave re-derives and never trusts it.
+  const preview = scaled ? deriveAggregatesFromLegs(t.legs ?? []) : null;
+  const scaleErrors = scaled ? validateManualScaleLegs(t) : [];
+
   const handleSave = useCallback(() => {
-    const message = toManualSaveMessage(validateTradeContent(t, accounts));
+    // FROZEN SAVE PIPELINE (RFC §14). The candidate that passes final
+    // validation is the exact object handed to onSave — validating the
+    // stale editable aggregates and deriving afterwards would persist
+    // values that were never validated.
+    //   1. manual leg invariants V1-V10, using canonical ordering
+    //   2/3/4/5. canonicalize legs, apply the trade date to every leg,
+    //            derive aggregates, construct the candidate
+    //   6. validateTradeContent(candidate)
+    //   7. onSave(candidate)
+    // Trades with no legs, and imported trades, keep the v1.2 path
+    // unchanged: buildScaledTradeCandidate returns them untouched.
+    if (hasManualLegs(t)) {
+      const legMessage = toManualSaveMessage(validateManualScaleLegs(t));
+      if (legMessage) {
+        setSaveError(legMessage);
+        return;
+      }
+    }
+    const candidate = buildScaledTradeCandidate(t);
+    const message = toManualSaveMessage(validateTradeContent(candidate, accounts));
     if (message) {
       setSaveError(message);
       return;
     }
     setSaveError(null);
-    onSave(t);
+    onSave(candidate);
   }, [accounts, onSave, t]);
 
   // Generic field setter — matches original s(k) curried function
@@ -252,19 +292,41 @@ export function TradeForm({
               <Select value={t.direction} onChange={setField('direction')} options={lists.Direction || []} />
             </FormField>
             <FormField label={t.market === 'futures' ? 'Contracts' : 'Lots'}>
-              <Input value={t.positionSize} onChange={setField('positionSize')} type="number" placeholder="1" />
+              <Input
+                value={preview ? preview.positionSize : t.positionSize}
+                onChange={setField('positionSize')}
+                type="number"
+                placeholder="1"
+                disabled={scaled}
+              />
             </FormField>
             <FormField label="Entry Time">
-              <Input value={t.entryTime} onChange={setField('entryTime')} type="time" />
+              <Input
+                value={preview ? preview.entryTime : t.entryTime}
+                onChange={setField('entryTime')}
+                type="time"
+                disabled={scaled}
+              />
             </FormField>
             <FormField label="Exit Time">
-              <Input value={t.exitTime} onChange={setField('exitTime')} type="time" />
+              <Input
+                value={preview ? preview.exitTime : t.exitTime}
+                onChange={setField('exitTime')}
+                type="time"
+                disabled={scaled}
+              />
             </FormField>
           </div>
 
           <div style={g4}>
             <FormField label="Entry Price">
-              <Input value={t.entryPrice} onChange={setField('entryPrice')} type="number" placeholder="0.00" />
+              <Input
+                value={preview ? preview.entryPrice : t.entryPrice}
+                onChange={setField('entryPrice')}
+                type="number"
+                placeholder="0.00"
+                disabled={scaled}
+              />
             </FormField>
             <FormField label="Stop Loss">
               <Input value={t.stopLoss} onChange={setField('stopLoss')} type="number" placeholder="0.00" />
@@ -273,9 +335,24 @@ export function TradeForm({
               <Input value={t.target} onChange={setField('target')} type="number" placeholder="0.00" />
             </FormField>
             <FormField label="Exit Price">
-              <Input value={t.exitPrice} onChange={setField('exitPrice')} type="number" placeholder="0.00" />
+              <Input
+                value={preview ? preview.exitPrice : t.exitPrice}
+                onChange={setField('exitPrice')}
+                type="number"
+                placeholder="0.00"
+                disabled={scaled}
+              />
             </FormField>
           </div>
+
+          {/* FROZEN LOCATION (RFC §4): directly below the Entry Price /
+              Stop Loss / Target / Exit Price row, directly above
+              QUALITY & REVIEW. Collapsed by default for a legless trade. */}
+          <ScaleLegsSection
+            trade={t}
+            onChange={setT}
+            error={scaleErrors.length ? scaleErrors[0] : null}
+          />
 
           <SectionHeader color={C.purple} label="Quality & Review" />
           <div style={g4}>

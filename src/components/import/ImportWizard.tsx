@@ -203,6 +203,9 @@ export function ImportWizard({ trades, rawTrades, accounts, onImport, onClose }:
     for (const trade of rawTrades) {
       if (!Array.isArray(trade.legs) || !trade.sourcePlatform || !trade.sourceAccountId || !trade.sourceInstrument) continue;
       for (const leg of trade.legs) {
+        // `sourceExecutionId` is optional since manual scale legs exist: a leg with
+        // no broker execution behind it contributes no broker provenance key.
+        if (!leg.sourceExecutionId) continue;
         existingProvenance.add(executionProvenanceKey(
           trade.sourcePlatform, trade.sourceAccountId, trade.sourceInstrument, leg.sourceExecutionId,
         ));

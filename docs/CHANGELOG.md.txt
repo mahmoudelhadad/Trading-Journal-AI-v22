@@ -1,7 +1,161 @@
+# v1.3 — Manual Scale In / Out
+
+Status:
+IMPLEMENTATION + RUNTIME COMPLETE — RELEASE CLOSURE PENDING SEPARATE
+AUTHORIZATION
+
+Summary:
+A trade can now be entered by hand as the sequence of executions it actually
+was, rather than as a single entry and a single exit. An optional, collapsed
+`SCALE IN / OUT (Optional)` section on the manual trade form accepts multiple
+entries and partial exits, and derives the aggregate fields from those legs.
+The legs are the same optional `legs` array v1.2 introduced for imported
+trades — no parallel manual execution model, no migration, no storage or
+backup format change. Imported NinjaTrader trades remain read-only in this
+section and keep their provenance and idempotency behaviour exactly as
+shipped. Trades with no legs behave precisely as before.
+
+## Manual Scale In / Out
+
+- New optional section on the manual trade form, **collapsed by default** and
+  labelled `SCALE IN / OUT (Optional)`. A trade entered without it takes the
+  unchanged v1.2 path.
+- Multiple entry legs and multiple partial exit legs are supported.
+- A partial exit followed by a re-entry is supported **while the position
+  remains open**.
+- One Journal Trade remains one completed flat-to-flat episode. A leg sequence
+  that returns the position to flat before the final leg is **rejected** with a
+  message naming the time it goes flat, and pointing at recording it as a
+  separate trade.
+- Over-exiting the open position is rejected, and total entry quantity must
+  equal total exit quantity.
+- Direction is chosen once on the trade and inherited by every leg; it must be
+  set before legs are added.
+
+## Editing order versus calculation order
+
+- **Editing order is stable.** Rows do not move while a time is being typed, so
+  the field under the cursor does not change identity mid-edit.
+- **Canonical chronological order** is what validation, aggregate derivation
+  and save use. A saved trade reopens in that canonical order.
+
+These are deliberately two different orderings; the UI order is presentational
+only and is never the arithmetic authority.
+
+## Leg-derived aggregates
+
+While manual legs are present they are the form's source of truth, and five
+aggregate fields are derived from them rather than typed:
+
+- `positionSize`, `entryPrice`, `exitPrice`, `entryTime`, `exitTime`.
+
+Downstream calculations, analytics, charts, export and backup continue to read
+the aggregates, unchanged.
+
+- `positionSize` is **total entry-side transacted quantity, not peak
+  simultaneous exposure**. For `Entry 2 → Exit 1 → Entry 1 → Exit 2` it is 3,
+  though exposure never exceeded 2. This is the only multiplier for which
+  `size × (weighted-average exit − weighted-average entry)` equals the exact
+  realized difference, and it matches what v1.2 already persists for imported
+  trades.
+- Weighted averages are computed with **exact bigint arithmetic** — scaled
+  integers and long division — never `Number`. Float64 accumulation produces
+  artefacts such as `1.0834633333333335` on ordinary five-decimal forex prices.
+  This reuses the technique established by the v1.2 NinjaTrader adapter without
+  importing from it; that file stays frozen.
+
+## Numeric grammar
+
+One decimal grammar governs manual scale legs at every layer — validation,
+decimal-place limits, bigint parsing, position folding and aggregate
+derivation — so no two layers can disagree about what a number is.
+
+- Forex fractional lots are accepted, including `.5`.
+- Futures quantities must be **whole contracts**; fractional contracts are
+  rejected.
+- **Exponent notation is rejected.** `1e2`, and likewise `Infinity` and `0x1F`,
+  are not valid input. `Number()` accepts these and the exact bigint layer
+  cannot parse them; that validator/parser split is precisely what previously
+  allowed an unparseable quantity to reach the save pipeline.
+- Manual leg times are entered as `HH:mm` and persist as `HH:mm:00`. The trade
+  date propagates to every manual leg.
+
+## Provenance
+
+- Manual legs carry **no fabricated broker provenance**. `sourceExecutionId` is
+  now optional on the leg shape, and a manual leg omits the property entirely
+  rather than carrying an invented digits-only ID. The absence is the
+  provenance statement.
+- When the property *is* present — every imported leg — it must still be a real
+  digits-only string. The validation change widens the accepted set and never
+  narrows it, which matters because the same validator gates backup restore:
+  existing v1.2 backups restore unchanged.
+- **Imported NinjaTrader legs are read-only.** The Scale section renders
+  read-only whenever a source platform is present, and the save-candidate
+  builder returns imported trades untouched. Imported provenance and re-import
+  idempotency are preserved.
+
+## Unchanged
+
+- No migration. Trades with no legs remain completely valid and were not
+  rewritten.
+- Backup format stays at **version 2**.
+- CSV export remains **aggregate-only**.
+- Generic CSV/XLSX import, NinjaTrader import, Forex/CFD behaviour, analytics
+  and backup/restore are otherwise unchanged.
+
+## Verification
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors and the same 7 pre-existing warnings.
+- **451 tests passing across 24 files.** No existing test was weakened,
+  renamed, or removed.
+- Production build passed.
+- Local Runtime Acceptance passed, covering: the legless regression path; a
+  scaled Futures example reconciling to `$4,020` gross; edit and reopen in
+  canonical order; partial exit followed by re-entry; rejection of over-exit,
+  unbalanced, and flat-before-final leg sets; Forex `.5`; `1e2` rejection;
+  Futures whole-contract enforcement; trade-date propagation to legs; imported
+  NinjaTrader legs read-only with provenance intact; repeated-import
+  idempotency; Backup/Restore; aggregate-only CSV; the editing-row stability
+  repair; and a clean console.
+- No P0 and no P1 findings.
+
+## Defects found and fixed during implementation
+
+- An optional `sourceExecutionId` typecheck failure in `ImportWizard`.
+- A numeric grammar mismatch between validation and exact parsing.
+- A vacuous `0n === 0n` balance path: an unparseable quantity pair left both
+  fold totals at zero and passed the balance rule silently. The fold now
+  reports whether every quantity parsed, and a parse failure is always an
+  error, never a skipped check.
+- Mid-edit row reordering, which moved the field under the cursor while a time
+  was being typed. **Resolved, not deferred.**
+
+## Known limitations
+
+Non-blocking; none is a release blocker.
+
+- Externally malformed data carrying `sourceExecutionId` without a
+  `sourcePlatform` is not specifically classified.
+- There is no full DOM-level integration harness for `TradeForm.handleSave`;
+  the logic is unit-covered.
+- Destructive actions still rely on `window.confirm` (pre-existing): a browser
+  configured to suppress dialogs can silently disable deletion.
+- Narrow/mobile visual coverage of the Scale section is partial.
+- The explicit equal-time A/B runtime case is partial, though unit-covered.
+- Externally malformed manual leg seconds other than `:00` are tolerated rather
+  than rejected.
+- Removing every leg from a never-saved trade can leave the unlocked aggregate
+  fields blank.
+- A pre-existing `Trade not saved` message can persist until the next save.
+
+---
+
 # v1.2 — NinjaTrader Futures Import & Minimal Leg Foundation
 
 Status:
-IMPLEMENTATION + RUNTIME COMPLETE — NOT YET RELEASED
+IMPLEMENTATION + RUNTIME COMPLETE — RELEASED (tag `v1.2.0`)
 
 Summary:
 Real NinjaTrader futures activity can now be imported as logical trades. A
@@ -131,7 +285,7 @@ corrected or recalculated.
 # v1.1 — Honest Import & Release Operability
 
 Status:
-IMPLEMENTATION + RUNTIME COMPLETE — NOT YET RELEASED
+IMPLEMENTATION + RUNTIME COMPLETE — RELEASED (tag `v1.1.0`)
 
 Summary:
 Three bounded repairs. Excel import — advertised since the migration but

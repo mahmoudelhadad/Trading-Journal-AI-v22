@@ -2508,3 +2508,237 @@ storage isolation).
 - Additional NinjaTrader Futures roots are approved for broker import.
 - Aggregate `positionSize` semantics need to distinguish transacted quantity
   from peak simultaneous exposure.
+
+---
+
+# AD-022
+
+## Title
+
+Manual Scale In/Out: Leg-Derived Aggregates and Stable Editing Order
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-11
+
+---
+
+## Context
+
+v1.2 introduced an optional `legs` array so imported NinjaTrader executions
+would not be irreversibly collapsed into a weighted average. AD-021 recorded
+that decision and explicitly flagged the next question: what happens when
+manual scale editing is approved and the leg model has to become read-write
+rather than import-only.
+
+Manual entry raises three problems the import path never had.
+
+First, an imported episode arrives complete and is never edited, so ordering is
+a one-time sort. A manual episode is typed a character at a time, and the field
+that identifies a leg — its time — is itself being edited. Sorting on every
+keystroke moves the row under the cursor.
+
+Second, imported legs come with real broker execution identity. Manual legs
+have none. The existing leg shape required a digits-only `sourceExecutionId`,
+and the same validator gates backup restore, so any change there risks making
+legitimate v1.2 backups unrestorable.
+
+Third, manual entry must express five-decimal forex prices and fractional lots,
+where the v1.2 adapter only ever handled four-decimal futures prices. Float64
+accumulation over those values produces artefacts such as
+`1.0834633333333335` on ordinary inputs.
+
+A fourth issue surfaced during implementation and shaped the decision. The
+validator and the arithmetic layer had drifted apart on what counts as a
+number: `Number()` accepts `1e2`, `Infinity`, and `0x1F`, which the exact
+bigint parser cannot read. That disagreement let an unparseable quantity reach
+the save pipeline, where it folded to a zero position and satisfied the
+entry-equals-exit balance rule vacuously.
+
+---
+
+## Decision
+
+1. **The existing `legs` array is reused.** Manual scale legs are the same
+   optional v1.2 structure, not a parallel manual execution model. No new
+   persisted shape, no migration, no backup format change.
+2. **Legs are the form's source of truth when present; downstream calculations
+   remain aggregate-driven.** While manual legs exist, `positionSize`,
+   `entryPrice`, `exitPrice`, `entryTime`, and `exitTime` are derived from them
+   rather than typed. Every consumer — P/L, R, analytics, charts, export,
+   backup — continues to read only the aggregates and was not changed.
+3. **`sourceExecutionId` is optional, and its absence means no broker execution
+   provenance.** A manual leg omits the property entirely rather than carrying
+   a fabricated ID. When present it must still be a real digits-only string.
+   The rule widens the accepted set and never narrows it, so existing v1.2
+   backups keep restoring.
+4. **UI editing order is stable and independent of canonical calculation
+   order.** Rows hold their position while a time is typed. Canonical
+   chronological order is computed separately and is what validation,
+   derivation, and save use; a saved trade reopens in canonical order. The
+   presentational order is never the arithmetic authority.
+5. **`positionSize` means total entry-side transacted quantity, not peak
+   simultaneous exposure.** For `Entry 2 → Exit 1 → Entry 1 → Exit 2` it is 3,
+   though exposure never exceeded 2.
+6. **Imported broker legs are read-only.** This is enforced structurally — the
+   Scale section renders read-only whenever a source platform is present, and
+   the save-candidate builder returns imported trades untouched — rather than
+   by a validation rule, because no rule reading a single current trade object
+   can prove that legs were unchanged.
+7. **Exact decimal/bigint arithmetic is used for manual weighted aggregates,**
+   through one shared numeric grammar that governs validation, decimal-place
+   limits, parsing, folding, and derivation alike.
+
+---
+
+## Reason
+
+Reusing `legs` is what keeps the change free of migration. The v1.2 foundation
+was designed for exactly this, and introducing a second manual-only structure
+would have created two representations of the same fact and a conversion
+between them.
+
+Keeping calculations aggregate-driven is what keeps the change safe. Legs
+change how the aggregates are *produced*; they do not change what anything
+downstream *reads*. That is the same property that made v1.2 import safe, and
+it is why analytics, export, and backup needed no work.
+
+Separating editing order from canonical order is not a UI nicety. Time is both
+the sort key and an editable field, so any design where display order follows
+the current value reorders rows mid-keystroke and moves the input under the
+cursor. Two orderings is the honest model: one for the human, one for the
+arithmetic.
+
+`positionSize` as entry-side total is arithmetic necessity rather than
+convention. `size × (weighted-average exit − weighted-average entry)` equals
+the exact realized difference only when `size` is the entry-side total, and it
+is already what v1.2 persists for imported trades.
+
+One numeric grammar exists because two of them produced a real defect. Making
+the exact parser the single authority means a value that cannot be computed
+with can never be declared valid.
+
+---
+
+## Tradeoff
+
+Two orderings are more machinery than one, and a reader of the code must hold
+both. It is accepted because collapsing them breaks either editing or
+arithmetic, and breaking editing is invisible in tests while being immediately
+obvious to the user.
+
+Deriving five aggregate fields means those inputs are locked while legs exist,
+which is less freedom than the plain form offers. It is accepted because the
+alternative — letting a typed aggregate and its legs disagree — has no correct
+resolution at save time.
+
+Enforcing imported-leg immutability structurally rather than by validation
+means there is no single assertion to point at. It is accepted because the
+assertion would have required threading an original-trade baseline through the
+validator for one rule, and a rule that cannot see the baseline can only
+pretend to check it.
+
+Bigint arithmetic is more code than floating-point arithmetic. It is accepted
+because the artefacts it prevents appear on ordinary forex prices, not on
+contrived ones.
+
+---
+
+## Alternatives Considered
+
+- **A separate manual execution model alongside `legs`.** Rejected: two
+  representations of one fact, plus a conversion layer and a migration, to
+  express something the existing optional array already expresses.
+- **Sort rows on every keystroke so display order is always canonical.**
+  Rejected: it moves the row under the cursor while a time is being typed,
+  which is the exact defect found and repaired during implementation.
+- **Sort only on blur or save, with no separate canonical order.** Rejected:
+  validation and derivation would then depend on whichever order the user
+  happened to leave behind, so the same legs could validate differently.
+- **Fabricate a synthetic `sourceExecutionId` for manual legs to keep the field
+  required.** Rejected: it writes a broker execution identity that does not
+  exist, which is unfalsifiable downstream and defeats the purpose of
+  provenance.
+- **Write `sourceExecutionId: undefined` on manual legs.** Rejected: it
+  survives neither JSON round-trip nor a `hasOwnProperty` check cleanly;
+  absence of the property is the durable statement.
+- **Add the cross-leg manual invariants to `validateTradeContent`.** Rejected:
+  that validator is a shared boundary used by manual save, generic import,
+  NinjaTrader import, and backup restore, and restore aborts on the first
+  error. Cross-leg rules there could make legitimate existing backups
+  unrestorable.
+- **Make legs the authority all the way down, with calculations reading legs
+  directly.** Rejected: it would touch every calculation, analytic, chart,
+  export, and backup path for no user-visible gain, and would strand every
+  legless historical trade on a second code path.
+- **Interpret `positionSize` as peak simultaneous exposure.** Rejected: it
+  breaks the weighted-average P/L identity and contradicts what v1.2 already
+  persists for imported trades.
+- **Allow imported legs to be edited in the same section.** Rejected: an
+  edited broker leg is no longer the broker's record, and provenance and
+  re-import idempotency both depend on it being.
+- **Keep `Number()` as the validation authority and parse exactly only at save
+  time.** Rejected: this is precisely the split that let an unparseable
+  quantity through to a vacuously balanced fold.
+- **Auto-split a flat-before-final sequence into two trades.** Rejected: it
+  invents an intent the user did not express. The sequence is reported with the
+  time it goes flat, and the user decides.
+
+---
+
+## Consequences
+
+- The leg shape's `sourceExecutionId` is now optional. Presence is checked
+  rather than required, which widens the accepted set; backup format stays at
+  version 2 and v1.2-shaped backups restore unchanged.
+- Manual and imported trades now travel the same leg structure but different
+  editing rules, so "does this trade have a source platform" becomes the
+  operative distinction in the form.
+- Price and quantity scales for manual legs are wider than the v1.2 adapter's,
+  because manual entry must express five-decimal forex prices and fractional
+  lots. The adapter itself is untouched: the technique is reused, the module is
+  not imported.
+- The dependency direction is one-way and frozen: validation may import
+  ordering, folding, and parsing helpers from the scale module, and the scale
+  module never imports validation. Candidate construction is a pure
+  transformation that never validates; the form orchestrates validate → build →
+  validate → save. No import cycle is possible.
+- A parse failure is always an error and never a skipped check. The fold
+  reports whether every quantity was read exactly, so an unreadable quantity
+  can no longer become a meaningful zero-position episode.
+- Trades with no legs keep the v1.2 path in full, which is what makes the
+  release migration-free.
+
+---
+
+## Spec References
+
+v1.3 Final RFC (§9 position semantics, §15 dependency direction, §16 exact
+arithmetic); v1.3 implementation and runtime-verification authorizations;
+AD-021 (flat-to-flat journal trade identity and the additive leg foundation
+this decision builds on); AD-019 (portable Backup/Restore durability
+contract); AD-017 (win-rate and outcome denominators).
+
+---
+
+## Revisit Only If
+
+- Reversal through zero within a single trade is approved, which would change
+  the flat-to-flat identity this decision inherits from AD-021.
+- Per-leg P/L, commission, or R is approved, at which point aggregates would no
+  longer be the only downstream surface.
+- Editing of imported broker legs is approved, which would remove the
+  structural read-only guarantee and require a provenance model for modified
+  executions.
+- A calculation is approved that genuinely needs peak simultaneous exposure, at
+  which point it must be a distinct field rather than a reinterpretation of
+  `positionSize`.
+- Leg-level export or a backup format change is approved.

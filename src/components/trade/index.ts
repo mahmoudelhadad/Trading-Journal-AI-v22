@@ -8,6 +8,7 @@
  */
 
 export * from './TradeForm.js';
+export * from './ScaleLegsSection.js';
 export * from './TradeRow.js';
 export * from './TradeTable.js';
 export * from './TradeReview.js';

@@ -12,18 +12,34 @@ IMPLEMENTATION + AUTOMATED VERIFICATION COMPLETE
 LOCAL RUNTIME ACCEPTANCE PASSED
 DOCUMENTATION + VERSION CLOSURE COMPLETE
 RELEASE-CANDIDATE COMMIT CREATED AND VERIFIED
-PUSH PENDING — separately authorized
-ANNOTATED `v1.3.0` TAG PENDING — separately authorized
-DEPLOYMENT AND LIVE VERIFICATION PENDING — separately authorized
+PUSH COMPLETED
+PRODUCTION DEPLOYMENT COMPLETED
+LIVE PRODUCTION VERIFICATION PASSED
 
-**Production v1.2 is the currently released baseline** (`v1.2.0`, commit
-`de734061dafe8f1db78f044a28d1f85c78741ffe`) until v1.3 release closure is
-completed. The `v1.1.0` and `v1.2.0` tags both exist locally and resolve to
+FINAL RELEASE MARKER — the annotated `v1.3.0` tag on the final
+release-closure commit is the authoritative release marker for v1.3 and is
+controlled by the separate tag gate. The tag itself, in the repository, is the
+source of truth for whether that final release control has been executed; this
+document does not restate it.
+
+**v1.3.0 feature code is the deployed production feature version.** It was
+built and published by the repository's GitHub Pages workflow and verified
+live. **v1.2.0** (`de734061dafe8f1db78f044a28d1f85c78741ffe`) is the
+historical parent and released baseline of this feature work, not the current
+production feature version.
+
+A final documentation-only release-closure commit follows this record and may
+become the branch and build commit. It changes no source, no test, and no
+version metadata, so it cannot change Manual Scale behaviour or any other
+feature behaviour; the deployed feature code remains that of the
+release-candidate commit.
+
+The `v1.1.0` and `v1.2.0` tags both exist and resolve to
 `92d9fde9957bd7e838f1b3e064804594af3d1b13` and
 `de734061dafe8f1db78f044a28d1f85c78741ffe` respectively; the CHANGELOG status
-lines for those two releases, which still read `NOT YET RELEASED`, were
-corrected to match that evidence during this gate. No historical feature
-summary, date, calculation, or narrative was rewritten.
+lines for those two releases, which had read `NOT YET RELEASED`, were corrected
+to match that evidence during the v1.3 documentation gate. No historical
+feature summary, date, calculation, or narrative was rewritten.
 
 - Base release: **v1.2.0**
 - Target release: **v1.3.0**
@@ -201,6 +217,41 @@ Local Runtime Acceptance **PASSED**. Verified through the real UI:
 
 Runtime cleanup was completed and the dev server stopped.
 
+Live Deployment Verification **PASSED**, at a historical live-verification
+checkpoint. Production v1.3 was live-verified from release-candidate work
+published at commit `e428d742efb523ef2e1da78cb1befb07475933d0`, before the
+final release-closure documentation commit:
+
+- The GitHub Pages deployment workflow for that commit succeeded (build and
+  deploy jobs both green).
+- Production self-reported its build identity as **`v1.3.0 · build e428d74`**,
+  read from the application's own Settings metadata rather than inferred from
+  appearance.
+- Production authentication resolved against Supabase, including across a hard
+  reload, confirming the build-time environment configuration is present. The
+  console emitted nothing at all, so the missing-configuration error path never
+  fired.
+- Manual Scale smoke passed on the deployed build: the section is present,
+  collapsed by default, and correctly placed; visible row order stayed stable
+  while out-of-order times were typed; the leg-derived aggregates matched the
+  accepted example exactly at `4` / `28925` / `28975.25` with the five
+  aggregate fields locked and Stop Loss, Target, and Commission still editable;
+  Futures fractional quantities and exponent notation were both rejected, and a
+  Forex `.5` lot was accepted.
+- The same run also demonstrated canonical ordering live: the legs were entered
+  in an order that would have tripped the flat-before-final rule if evaluated
+  literally, and instead validated and derived correctly.
+- **No production data was persisted.** Trade count, trade store, and recovery
+  bin were unchanged and empty afterwards; nothing was saved, imported,
+  restored, or deleted.
+- Console and network were clean, with no failed asset, no routing failure, and
+  no application exception.
+
+Imported NinjaTrader read-only behaviour was **not** re-verified live: the
+disposable production account held no imported trades, and no fixture was
+imported merely to create one. Local Runtime Acceptance remains the evidence
+for imported-leg read-only rendering and provenance.
+
 ---
 
 ## Defect Findings
@@ -221,11 +272,12 @@ Runtime cleanup was completed and the dev server stopped.
 - Package semantic version: **1.3.0**, written during the documentation/version
   gate in `package.json` and in the two root-project version fields of
   `package-lock.json`.
-- Target release: **v1.3.0**, title `Manual Scale In / Out`.
-- The v1.3 release-candidate commit has been **created and verified** against
-  the approved candidate fingerprint. The annotated `v1.3.0` tag, the push, and
-  the resulting deployment remain separately authorized steps and have **NOT**
-  been performed.
+- Release: **v1.3.0**, title `Manual Scale In / Out`.
+- The v1.3 release-candidate commit was **created and verified** against the
+  approved candidate fingerprint, **pushed**, **deployed** by the repository's
+  GitHub Pages workflow, and **verified live in production**.
+- Final release marker: the annotated `v1.3.0` tag on the final
+  release-closure commit, controlled by the separate tag gate.
 
 ---
 
@@ -274,14 +326,21 @@ v1.3 does not include:
       scope.
 - [x] Release-candidate commit created and verified byte-exactly against the
       approved candidate fingerprint.
-- [ ] Push — OUTSTANDING, pending separate authorization.
-- [ ] Annotated `v1.3.0` tag — OUTSTANDING, pending separate authorization.
-- [ ] Deployment and live verification — OUTSTANDING, pending separate
-      authorization.
+- [x] Push completed; remote and local `main` agreed at the verified
+      checkpoint.
+- [x] Production deployment completed by the GitHub Pages workflow.
+- [x] Live production verification passed, including production auth/Supabase
+      smoke and Manual Scale runtime smoke, with no production data persisted.
 
-v1.3 implementation, runtime acceptance, documentation/version preparation, and
-release-candidate commit exit criteria are satisfied. The push, tag, and
-deployment exit criteria remain open.
+Every v1.3 exit criterion — implementation, automated verification, Local
+Runtime Acceptance, documentation/version preparation, release-candidate
+commit, push, production deployment, and live production verification — is
+satisfied.
+
+Final release marker: the annotated `v1.3.0` tag on the final release-closure
+commit. That tag is a release-control action governed by its own gate, and the
+repository's tag itself is the source of truth for it; it is deliberately not
+tracked as a checkbox here.
 
 ---
 
@@ -334,9 +393,13 @@ P3:
 
 ## Repository State
 
+Durable release lineage for v1.3:
+
 - v1.3 implementation/release-candidate commit:
   `02a9a8425b941614922991f782cc442e752e7ba5`
-- Its parent, the released v1.2 baseline:
+- Post-commit status documentation commit:
+  `e428d742efb523ef2e1da78cb1befb07475933d0`
+- Parent and released v1.2 baseline:
   `de734061dafe8f1db78f044a28d1f85c78741ffe`
 
 The approved 15-path candidate was committed **byte-exactly**: the deterministic
@@ -346,21 +409,25 @@ was reproduced identically from the working tree, from the index, and from the
 committed tree, so the commit contains exactly the verified release candidate
 and nothing else. The commit has a single parent and carries no amend.
 
-No amend, branch, tag, push, pull request, merge, rebase, or deployment has
-occurred. The release tag `v1.3.0` has not been created locally or remotely.
-Push, tag, and deployment remain separate pending gates.
+The release-candidate work was pushed to `origin/main` as a normal
+fast-forward. No amend, no force push, no branch, no pull request, no merge,
+and no rebase was used anywhere in this release; history was never rewritten.
 
-At the post-implementation-commit checkpoint, `origin/main` remained at the
-released v1.2 baseline `de734061dafe8f1db78f044a28d1f85c78741ffe`, with the
-local `main` branch one commit ahead and zero behind.
+The release lineage is linear —
+`de734061…` → `02a9a842…` → `e428d742…` — each commit having exactly one
+parent, with no merge commit anywhere in the chain.
+
+The final documentation-only release-closure commit follows this record. It
+touches documentation only — no source, no test, no version metadata — so the
+deployed feature code is unchanged by it.
 
 ---
 
-## Next Planned Gate
+## Release Control and Next Phase
 
-**Push and tag closure for v1.3**, separately authorized: pushing the
-release-candidate commit and creating the annotated `v1.3.0` tag — followed by
-separate approval for deployment and live acceptance.
+**Release-control mechanism for v1.3:** the annotated `v1.3.0` tag on the final
+release-closure commit. Tag creation is governed by its own gate, and the
+repository's tag is the source of truth for it.
 
-The next feature or major phase after that release remains a **USER DECISION**
-and has deliberately not been chosen here.
+**Next development phase: USER DECISION.** No feature or major phase has been
+selected, and none is proposed here.

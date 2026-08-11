@@ -1,8 +1,8 @@
 # v1.3 — Manual Scale In / Out
 
 Status:
-IMPLEMENTATION + RUNTIME COMPLETE — RELEASE CLOSURE PENDING SEPARATE
-AUTHORIZATION
+IMPLEMENTATION + RUNTIME + LIVE VERIFICATION COMPLETE — RELEASE MARKER:
+ANNOTATED `v1.3.0` TAG
 
 Summary:
 A trade can now be entered by hand as the sequence of executions it actually
@@ -120,6 +120,29 @@ derivation — so no two layers can disagree about what a number is.
   idempotency; Backup/Restore; aggregate-only CSV; the editing-row stability
   repair; and a clean console.
 - No P0 and no P1 findings.
+
+## Live production verification
+
+Verified on the deployed GitHub Pages build:
+
+- The Pages deployment workflow succeeded.
+- Production self-reported **`v1.3.0 · build e428d74`**, read from the
+  application's own build metadata.
+- Production authentication resolved against Supabase, confirming the
+  build-time configuration is present.
+- The Scale section is present, collapsed by default, and correctly placed
+  between the price row and Quality & Review.
+- Stable editing order confirmed live: rows did not move while out-of-order
+  times were typed.
+- Leg-derived aggregates matched exactly — `4` / `28925` / `28975.25`.
+- Futures fractional quantities rejected; exponent notation rejected; Forex
+  `.5` accepted.
+- No production data was persisted, and console and network were clean.
+
+Imported NinjaTrader read-only behaviour was not re-verified live, because the
+disposable production account held no imported trades and none was created for
+the purpose. Local Runtime Acceptance remains the evidence for imported-leg
+read-only rendering and provenance.
 
 ## Defects found and fixed during implementation
 

@@ -11,8 +11,10 @@ Status:
 IMPLEMENTATION + AUTOMATED VERIFICATION COMPLETE
 LOCAL RUNTIME ACCEPTANCE PASSED
 DOCUMENTATION + VERSION CLOSURE COMPLETE
-RELEASE GIT OPERATIONS NOT YET AUTHORIZED — commit, push, annotated tag, and
-deployment each remain separately authorized and have NOT been performed
+RELEASE-CANDIDATE COMMIT CREATED AND VERIFIED
+PUSH PENDING — separately authorized
+ANNOTATED `v1.3.0` TAG PENDING — separately authorized
+DEPLOYMENT AND LIVE VERIFICATION PENDING — separately authorized
 
 **Production v1.2 is the currently released baseline** (`v1.2.0`, commit
 `de734061dafe8f1db78f044a28d1f85c78741ffe`) until v1.3 release closure is
@@ -220,8 +222,10 @@ Runtime cleanup was completed and the dev server stopped.
   gate in `package.json` and in the two root-project version fields of
   `package-lock.json`.
 - Target release: **v1.3.0**, title `Manual Scale In / Out`.
-- The commit, the annotated `v1.3.0` tag, the push, and the resulting
-  deployment are separately authorized steps and have **NOT** been performed.
+- The v1.3 release-candidate commit has been **created and verified** against
+  the approved candidate fingerprint. The annotated `v1.3.0` tag, the push, and
+  the resulting deployment remain separately authorized steps and have **NOT**
+  been performed.
 
 ---
 
@@ -268,11 +272,16 @@ v1.3 does not include:
 - [x] Local Runtime Acceptance passed; no P0 and no P1.
 - [x] Documentation and version metadata closure completed without widening
       scope.
-- [ ] Commit, annotated `v1.3.0` tag, push, and deployment — OUTSTANDING,
-      pending separate authorization.
+- [x] Release-candidate commit created and verified byte-exactly against the
+      approved candidate fingerprint.
+- [ ] Push — OUTSTANDING, pending separate authorization.
+- [ ] Annotated `v1.3.0` tag — OUTSTANDING, pending separate authorization.
+- [ ] Deployment and live verification — OUTSTANDING, pending separate
+      authorization.
 
-v1.3 implementation, runtime acceptance, and documentation/version preparation
-exit criteria are satisfied. The release exit criterion remains open.
+v1.3 implementation, runtime acceptance, documentation/version preparation, and
+release-candidate commit exit criteria are satisfied. The push, tag, and
+deployment exit criteria remain open.
 
 ---
 
@@ -325,19 +334,33 @@ P3:
 
 ## Repository State
 
-The implementation, documentation, and version diff remains **unstaged**. No
-`git add`, commit, amend, branch, tag, push, pull request, merge, rebase, or
-deployment has occurred. The release tag `v1.3.0` has not been created locally
-or remotely. `HEAD` remains `de734061dafe8f1db78f044a28d1f85c78741ffe` on
-`main`.
+- v1.3 implementation/release-candidate commit:
+  `02a9a8425b941614922991f782cc442e752e7ba5`
+- Its parent, the released v1.2 baseline:
+  `de734061dafe8f1db78f044a28d1f85c78741ffe`
+
+The approved 15-path candidate was committed **byte-exactly**: the deterministic
+blob fingerprint
+`27d1b210977b7972c5781ed6faaae5c78afb286a2554efef97719b9f134831b8`
+was reproduced identically from the working tree, from the index, and from the
+committed tree, so the commit contains exactly the verified release candidate
+and nothing else. The commit has a single parent and carries no amend.
+
+No amend, branch, tag, push, pull request, merge, rebase, or deployment has
+occurred. The release tag `v1.3.0` has not been created locally or remotely.
+Push, tag, and deployment remain separate pending gates.
+
+At the post-implementation-commit checkpoint, `origin/main` remained at the
+released v1.2 baseline `de734061dafe8f1db78f044a28d1f85c78741ffe`, with the
+local `main` branch one commit ahead and zero behind.
 
 ---
 
 ## Next Planned Gate
 
-**Local Git closure for v1.3**, separately authorized: staging the frozen
-manifest, the commit, and the annotated `v1.3.0` tag — followed by separate
-approval for push, deployment, and live acceptance.
+**Push and tag closure for v1.3**, separately authorized: pushing the
+release-candidate commit and creating the annotated `v1.3.0` tag — followed by
+separate approval for deployment and live acceptance.
 
 The next feature or major phase after that release remains a **USER DECISION**
 and has deliberately not been chosen here.

@@ -1,3 +1,232 @@
+# v1.5 — Restore Integrity
+
+Package semantic version: **1.5.0**.
+
+Release type:
+RELIABILITY / CORRECTNESS HARDENING
+
+Risk tier:
+MEDIUM
+
+Status:
+IMPLEMENTATION, AUTOMATED VERIFICATION, AND LOCALHOST RUNTIME ACCEPTANCE
+COMPLETE
+
+Release marker:
+ANNOTATED `v1.5.0` TAG
+
+Evidence scope:
+v1.5 localhost functional acceptance was completed against the release
+candidate derived from governance baseline `1025235`, with the implementation
+surface limited to `src/components/settings/BackupPanel.tsx` and
+`src/components/settings/RestorePointsPanel.tsx`. Git history is the canonical
+identity for the commit that carries that implementation.
+
+Summary:
+Restoring a whole journal is now something the application asks about first,
+and something the running application actually reflects afterwards. Both
+whole-journal restore entry points — Restore from File and Restore Point — used
+to execute on a single unconfirmed action, and a restore that succeeded left
+the running app displaying and holding its pre-restore state. This release
+changes when a restore is authorised and when the application re-reads storage.
+It changes nothing about what a restore writes.
+
+## The defect
+
+`restoreBackup()` replaces up to twelve storage sections by calling each
+section's existing `save()` directly. That write path is correct, and it was
+never the problem. The problem was that it bypasses React entirely, while every
+hook in the app persists its own in-memory snapshot whenever that snapshot
+changes. After a successful restore the hooks still held the **pre-restore**
+data, so the next ordinary mutation — adding, editing or deleting a single
+trade — wrote that stale snapshot back over the restored data.
+
+The consequences were silent and asymmetric. Records the restore had brought
+back were destroyed, with **no tombstone, no Recovery Bin entry, and no error**,
+which meant they were unrecoverable through any in-app path. Records the restore
+had removed were resurrected. The Recovery Bin itself could be rewritten the
+same way, in the same single action.
+
+The only mitigation was advisory prose — a success message asking the user to
+reload — with nothing enforcing it. A user restoring a backup to undo a mistake
+would see a green confirmation, still see the mistake on screen, keep working,
+and lose the restore.
+
+This was reproduced at runtime on both entry points before any code changed:
+with a two-trade state restored over a three-trade state, storage held the
+restored two while the interface showed the pre-restore three, and one ordinary
+confirmed delete then rewrote storage from stale memory.
+
+## What changed
+
+- **Both restore entry points now confirm first**, through the existing v1.4
+  `ConfirmDialog`. Choosing a file no longer restores it; clicking Restore on a
+  restore point no longer restores it. The selected payload, or the exact
+  restore-point identifier, is captured into component state and the restore
+  begins only on Confirm.
+- **A successful restore performs one full application reload.** Hydration then
+  reacquires the restored storage through the app's normal startup path, so the
+  first thing the user can act on is the restored journal rather than a stale
+  copy of the old one.
+- **Cancel and failure never reload and never mutate.** A cancelled restore
+  invokes the restore path zero times.
+- **Repeated confirmation cannot execute a restore twice.** The pending payload
+  is cleared and an in-flight marker is set synchronously, before anything is
+  awaited, so a second click in the same tick cannot start a second restore.
+- The restore-point identifier is captured once when the confirmation opens and
+  is never re-derived from a list position, so sorting or list changes cannot
+  re-target a confirmed restore.
+
+## Confirmation copy
+
+File restore:
+
+> Restore this backup?
+> This will replace your current journal data with the selected backup.
+> — confirm: `Restore Backup`
+
+Restore point:
+
+> Restore from this point?
+> This will replace your current journal data with this restore point.
+> — confirm: `Restore This Point`
+
+Both use the existing `danger` variant and the existing Cancel behaviour
+(explicit button plus `Modal`'s backdrop click). No native `window.confirm`,
+`window.alert` or `window.prompt` was introduced; executable occurrences in
+application source remain **zero**.
+
+## The obsolete success message
+
+The success string `Restored {n} section(s). Reload the app to see restored
+data.` was removed from both success branches. Its instruction is now performed
+by the application, so keeping it would have meant rendering a false sentence
+for the duration of a reload. Failure messages are unchanged: `RestoreResult`'s
+own error text remains authoritative and is displayed exactly as before.
+
+## Preserved
+
+`services/backupService.ts` was not modified. Unchanged: restore validation;
+supported backup versions; the twelve-section restore surface and its ordering;
+all-or-nothing pre-write validation; unknown-key tolerance; read-back
+verification; the `RestoreResult` shape; the backup JSON and restore-point
+snapshot formats; restore-point creation and cap semantics; storage keys and
+the authenticated user namespace; account referential validation; `RawTrade`
+`_tid` identity; the Recovery Bin architecture; the Phase 29, 30, 31, 32 and
+32C contracts; and the v1.4 `ConfirmDialog` contract, including its optional
+`message` rule and its nested z-index of 400.
+
+## Verification
+
+Automated, on the prepared release candidate:
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors and exactly 7 pre-existing warnings; no new warning.
+- Tests: **460 passing across 25 files** — the full v1.4 baseline, with no test
+  weakened, renamed or removed.
+- Production build: passed. `git diff --check`: clean.
+- No dependency, test-framework, or test-configuration change.
+
+**No new test file was added, deliberately.** The project's harness is Node-only
+(`vitest.config.ts` sets `environment: 'node'`, and its include glob is
+`src/**/*.test.ts`), with no DOM. The decision-critical behaviour here is click
+wiring, asynchronous result handling and a page reload, none of which that
+harness can reach. A server-rendered structural test would have proven only
+that the confirmation is absent from a component's initial render, which does
+not exercise the invariant. Adding jsdom, a testing library, or production
+seams existing only for mocking would have been a larger and less honest change
+than the fix itself. Static inspection and runtime acceptance carry this
+evidence instead, and the limitation is recorded rather than papered over.
+
+Localhost Runtime Acceptance **PASSED** — RA-1 through RA-11, all eleven checks,
+against a disposable synthetic user only. The primary journal account was never
+used, opened or inspected.
+
+- Both confirmations rendered the frozen wording, exactly one dialog per
+  restore, measured at z-index 400 above `SettingsModal`'s 300; a backdrop click
+  dismissed only the confirmation and left Settings open.
+- Cancel, on both paths, produced zero restore calls, zero changed storage keys,
+  zero storage writes and zero reloads; a cancelled file could be selected again
+  immediately afterwards.
+- All three failure classes — unparseable JSON, unsupported version, and a
+  referentially invalid trade whose backup also carried a modified `settings`
+  payload — returned their existing errors, changed **zero of thirteen storage
+  keys**, and did not reload. The unwritten `settings` payload confirms
+  all-or-nothing pre-write validation at runtime.
+- Successful restores reloaded automatically **exactly once**, and after
+  hydration the interface matched persisted storage with no manual refresh
+  performed at any point.
+- **The baseline data-loss sequence was specifically re-tested after the fix.**
+  Following an automatic reload from a restored three-trade state, one ordinary
+  confirmed delete left exactly the restored set minus the deleted trade: the
+  restored trade that the stale snapshot did not contain **survived**, the trade
+  removed by the restore did **not** resurrect, and the Recovery Bin received
+  exactly one entry. This is the sequence that silently destroyed data before.
+- With `confirm`, `alert` and `prompt` instrumented to record across the reload,
+  both paths reported zero native invocations; the primitives were verified
+  native afterwards.
+- Post-reload smoke passed: every page rendered, Settings and Recovery Bin
+  rendered, no ErrorBoundary, console clean.
+
+No P0 and no P1 findings. No implementation correction was required during
+acceptance.
+
+## Explicitly not included
+
+v1.5 deliberately did **not** introduce: Restore Point delete confirmation;
+saved-filter delete confirmation; checklist or custom-field delete
+confirmation; List reset or General Settings reset confirmation; account-delete
+UI changes; Backtest dialog consistency; the `TradeForm` stale save-error fix;
+the stale `useTrades` JSDoc cleanup; any `deploy.yml` change; automatic
+pre-restore backups or `maybeCreateAutoBackup()` wiring; a storage-invalidation
+bus, rehydration event architecture, `UserStorageContext` change or hook reset
+API; a reload abstraction; IndexedDB or LocalStorage migration; sync, cloud or
+multi-device work; backup format changes; transaction or durability redesign;
+general unsaved-form protection; or a `Modal` accessibility, focus or Escape
+overhaul.
+
+A successful whole-journal restore is a deliberate destructive replacement, so
+the reload may discard transient unsaved interface state. That is accepted for
+this scope: the action is confirmed first, and retaining stale in-memory state
+is precisely the defect being closed.
+
+## Architecture and migration
+
+No new Architecture Decision was recorded, and
+`docs/ARCHITECTURE_DECISIONS.md.txt` was not modified. Confirmation plus a
+success-only reload is a bounded UI and lifecycle correction that uses the
+application's existing hydration and storage authority; it introduces no
+cross-cutting invalidation authority and no new module boundary. AD-001 through
+AD-022 were reviewed and none governs restore confirmation or state
+reacquisition.
+
+Migration impact: none. No schema, storage key, namespace, backup version or
+restore format change, and no data migration.
+
+## Known limitations
+
+Non-blocking; none is a release blocker.
+
+- Confirm/Cancel click wiring, the success-only reload condition, and the
+  post-restore reacquisition are not covered by automated tests, because the
+  Node-only harness cannot reach them. Runtime acceptance is the evidence.
+- Escape does not dismiss a restore confirmation; Cancel and backdrop click are
+  the dismissal paths, matching the rest of the v1.4 confirmation surface.
+- Destructive actions outside the two restore paths and the six flows migrated
+  in v1.4 still have no confirmation: account delete, restore-point delete,
+  saved-filter delete, checklist and custom-field delete, List reset and
+  General Settings reset.
+- A stale JSDoc comment in `src/hooks/useTrades.ts` still names `window.confirm`;
+  its substantive claim remains true, and it stayed outside this release's
+  frozen surface.
+- The v1.3 and v1.4 P3 items are carried forward unchanged: partial
+  narrow/mobile Scale coverage, blank aggregates after removing every leg from a
+  never-saved trade, a `Trade not saved` message that can persist until the next
+  save, and externally malformed data carrying `sourceExecutionId` without a
+  `sourcePlatform` not being specifically classified.
+
+---
+
 # v1.4 — App-Owned Confirmation Reliability
 
 Status:

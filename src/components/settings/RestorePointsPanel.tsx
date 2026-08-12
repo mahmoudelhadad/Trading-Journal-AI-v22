@@ -13,15 +13,26 @@
  * useRestorePoints.ts / services/backupService.ts for where that lives.
  *
  * SCOPE NOTE: not wired into any existing page in this phase.
+ *
+ * v1.5 — Restore Integrity. Restore used to fire on a single click, and
+ * afterwards the running React tree kept its PRE-restore snapshot while
+ * storage held the restored data. Because every hook re-persists its own
+ * state on change, the next ordinary mutation wrote that stale snapshot
+ * back over the restore. Restoring now requires an app-owned
+ * ConfirmDialog, and a SUCCESSFUL restore reloads the application so the
+ * restored storage is reacquired through normal hydration. Cancel and
+ * failure never reload. See BackupPanel.tsx — the file-backup path has
+ * the same defect, the same shape of fix, and the same reasoning.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { Card } from '@components/ui/Card.js';
 import { Button } from '@components/ui/Button.js';
 import { Input } from '@components/ui/Input.js';
 import { Badge } from '@components/ui/Badge.js';
 import { EmptyState } from '@components/ui/EmptyState.js';
+import { ConfirmDialog } from '@components/ui/ConfirmDialog.js';
 import { MAX_RESTORE_POINTS } from '@calculations/recoveryBin.js';
 import type { RestorePoint } from '@calculations/recoveryBin.js';
 import type { RestoreResult } from '@services/backupService.js';
@@ -40,6 +51,17 @@ export interface RestorePointsPanelProps {
 export function RestorePointsPanel({ restorePoints, onCreate, onRestore, onDelete }: RestorePointsPanelProps) {
   const [label, setLabel] = useState('');
   const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  /**
+   * The id captured when Restore was clicked. Non-null is exactly "a
+   * confirmation is open" — the payload and the open state are one
+   * value, so the dialog can never be showing for a different point
+   * than the one that will be restored. Sorting or list changes
+   * underneath cannot re-target it, because nothing re-derives the id
+   * from a position.
+   */
+  const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null);
+  /** Same same-tick double-click authority as BackupPanel — see there. */
+  const restoreInFlightRef = useRef(false);
 
   // Phase 6g-1: onCreate/onRestore are now async (§3.4 — the resolver-
   // backed sections require it). Both handlers await and report failure
@@ -53,15 +75,37 @@ export function RestorePointsPanel({ restorePoints, onCreate, onRestore, onDelet
     }
   }
 
+  /** Cancel — and the ConfirmDialog backdrop click, via its onCancel. */
+  function handleCancelRestore() {
+    setPendingRestoreId(null);
+  }
+
+  function handleConfirmRestore() {
+    if (restoreInFlightRef.current) return;
+    const id = pendingRestoreId;
+    if (id === null) return;
+    // Both happen BEFORE anything is awaited — see BackupPanel.tsx.
+    restoreInFlightRef.current = true;
+    setPendingRestoreId(null);
+    void handleRestore(id);
+  }
+
   async function handleRestore(id: string) {
     try {
       const result = await onRestore(id);
       if (result.success) {
-        setMessage({ text: `✅ Restored ${result.restoredKeys?.length ?? 0} section(s). Reload the app to see restored data.`, isError: false });
-      } else {
-        setMessage({ text: `❌ ${result.error}`, isError: true });
+        // Reload is the fix: storage was replaced underneath a React
+        // tree still holding the pre-restore snapshot, and hydration is
+        // what reacquires it. No success notice — it would only flash,
+        // and its old wording ("Reload the app to see restored data")
+        // is now false.
+        window.location.reload();
+        return;
       }
+      restoreInFlightRef.current = false;
+      setMessage({ text: `❌ ${result.error}`, isError: true });
     } catch (err) {
+      restoreInFlightRef.current = false;
       setMessage({ text: `❌ ${err instanceof Error ? err.message : String(err)}`, isError: true });
     }
   }
@@ -102,7 +146,7 @@ export function RestorePointsPanel({ restorePoints, onCreate, onRestore, onDelet
                 <div style={{ color: C.dim, fontSize: 10 }}>{new Date(p.createdAt).toLocaleString()}</div>
               </div>
               {p.label.startsWith('Auto: ') && <Badge color={C.blue}>Auto</Badge>}
-              <button onClick={() => handleRestore(p.id)} style={{ background: `${C.blue}22`, border: `1px solid ${C.blue}44`, color: C.blue, borderRadius: 6, padding: '4px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+              <button onClick={() => setPendingRestoreId(p.id)} style={{ background: `${C.blue}22`, border: `1px solid ${C.blue}44`, color: C.blue, borderRadius: 6, padding: '4px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
                 Restore
               </button>
               <button onClick={() => onDelete(p.id)} style={{ background: 'none', border: 'none', color: C.red, fontSize: 14, cursor: 'pointer', padding: '0 4px' }} title="Delete">
@@ -111,6 +155,16 @@ export function RestorePointsPanel({ restorePoints, onCreate, onRestore, onDelet
             </div>
           ))}
         </div>
+      )}
+
+      {pendingRestoreId !== null && (
+        <ConfirmDialog
+          title="Restore from this point?"
+          message="This will replace your current journal data with this restore point."
+          confirmLabel="Restore This Point"
+          onConfirm={handleConfirmRestore}
+          onCancel={handleCancelRestore}
+        />
       )}
     </Card>
   );

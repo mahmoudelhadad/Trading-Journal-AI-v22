@@ -4,126 +4,132 @@
 
 ## Phase
 
-v1.4 — App-Owned Confirmation Reliability
+v1.5 — Restore Integrity
+
+Release type:
+
+RELIABILITY / CORRECTNESS HARDENING
+
+Risk tier:
+
+MEDIUM
 
 Status:
 
 IMPLEMENTATION COMPLETE
 AUTOMATED VERIFICATION COMPLETE
-LOCAL RUNTIME ACCEPTANCE COMPLETE (RA-1 through RA-17)
+LOCAL RUNTIME ACCEPTANCE COMPLETE (RA-1 through RA-11)
 DOCUMENTATION + VERSION CLOSURE COMPLETE
-LOCAL GIT RELEASE-CANDIDATE CLOSURE COMPLETE
-PUSH COMPLETE
-PRODUCTION DEPLOYMENT COMPLETE
-PRODUCTION FUNCTIONAL ACCEPTANCE COMPLETE
 
-Package semantic version: **1.4.0**.
+Package semantic version: **1.5.0**.
 
-- Base release: **v1.3.0** (annotated tag resolving to
-  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`) — the historical baseline this
+- Base release: **v1.4.0** (annotated tag resolving to
+  `426cbbba806e65231cc51ebc8fac64b571a1753b`) — the historical baseline this
   work departed from.
-- Target release: **v1.4.0**.
-
----
-
-## Release Evidence
-
-**The v1.4 application implementation that received full automated, localhost
-Runtime, and Production functional acceptance is commit
-`790f7eea242aaf64600adfd9067a582f34a00b1a`.** All functional evidence in this
-record is anchored there.
-
-- `main` was fast-forward pushed from `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`
-  to `790f7ee`.
-- GitHub Pages workflow run **#7** deployed source SHA `790f7ee` successfully,
-  with the `build` and `deploy` jobs both green.
-- **At the time of full Production functional acceptance, the deployed
-  application identified itself as `v1.4.0 · build 790f7ee`**, read from its own
-  Settings build metadata rather than inferred.
-- That acceptance covered the six migrated confirmation flows, the Phase 29
-  Delete ALL population invariant, the native-confirm suppression proof,
-  nested-modal behaviour, and authenticated Production smoke.
-- No P0 and no P1 findings.
+- Target release: **v1.5.0**.
 
 ---
 
 ## Release Marker
 
-The canonical release marker for this version is the annotated tag **`v1.4.0`**.
+The canonical release marker for this version is the annotated tag **`v1.5.0`**.
 
 The Git repository's tag reference is authoritative for which commit carries
 that marker. It is deliberately not restated as mutable prose here.
 
 ---
 
-## Documentation-Only Descendants
+## Evidence Scope
 
-After functional acceptance, documentation-only descendant commits may close
-the release record without changing application source, tests, package
-metadata, configuration, workflow, storage behaviour, or business behaviour.
-The functional application evidence remains anchored to `790f7ee`.
+v1.5 localhost functional acceptance was completed against the release
+candidate derived from governance baseline
+`10252356ac25576d3c400084ef3069163cb0eba4`, with the implementation surface
+limited to `src/components/settings/BackupPanel.tsx` and
+`src/components/settings/RestorePointsPanel.tsx`.
 
-Because build identity embeds the Git commit SHA, a deployment built from such
-a descendant may carry a different build identity, a different JavaScript
-bundle hash, and different generated bundle bytes. **Repository application
-content being unchanged is therefore not a claim that the generated production
-artifact is byte-identical.** A docs-only deployment accordingly warrants
-identity and boot smoke only, not full functional re-acceptance.
+That baseline is the governance commit this work departed from. It is **not**
+the v1.5 implementation commit. Git history is the canonical identity for the
+commit that carries the v1.5 implementation, and for the commit that carries
+the release marker.
 
 ---
 
 ## Objective
 
-Replace the six executable browser-native `window.confirm` destructive flows
-with application-owned React confirmation UI, while preserving every existing
-deletion and recovery business contract exactly.
+Make a whole-journal restore an explicit, confirmed replacement that the running
+application actually reflects afterwards, while preserving every existing
+restore, backup and storage contract exactly.
 
-The defect this closes was recorded as a v1.3 known limitation: a browser
-configured to suppress dialogs silently disabled deletion. `window.confirm()`
-returns `false` immediately when the host suppresses dialogs, and every call
-site treated that as "the user cancelled" — so a capability failure was
-indistinguishable from a decision. The deletion code itself was never broken.
+v1.5 changes **when a restore is authorised** and **when the application
+re-reads storage**. It changes nothing about what a restore writes.
 
-v1.4 changes confirmation **delivery only**.
+---
+
+## Frozen Invariant
+
+A restore is an explicit, confirmed, complete replacement of local state. It
+does not begin without the user's confirmation. Once a restore succeeds, the
+running application reacquires the restored state before the user can continue
+mutating the journal. A failed or cancelled restore does not reload and does not
+mutate data.
+
+---
+
+## The Defect This Closes
+
+`restoreBackup()` replaces up to twelve storage sections through each section's
+existing `save()`. That write path was correct and was never the defect. It
+bypasses React entirely, while every hook persists its own in-memory snapshot
+whenever that snapshot changes — so after a successful restore the hooks still
+held the **pre-restore** data, and the next ordinary mutation wrote that stale
+snapshot back over the restored data.
+
+Records the restore had brought back were destroyed with no tombstone, no
+Recovery Bin entry and no error, leaving them unrecoverable through any in-app
+path. Records the restore had removed were resurrected. The Recovery Bin could
+be rewritten the same way in the same action. The only mitigation was an
+advisory success message asking the user to reload, with nothing enforcing it.
+
+The defect was reproduced at runtime on both entry points before any code
+changed.
 
 ---
 
 ## Delivered Scope
 
-1. **`ConfirmDialog`** — a bounded, application-owned React confirmation
-   component composed from the existing `Modal` + `Button` atoms and the
-   existing `COLORS` palette. No dependency, no provider, no context, no
-   portal, no `confirm()` shim, no destructive-action framework, and no `Modal`
-   redesign.
+1. **Confirmation before replacement.** Both whole-journal restore entry points
+   render the existing v1.4 `ConfirmDialog`. Selecting a backup file does not
+   restore it; clicking Restore on a restore point does not restore it. The
+   payload, or the exact restore-point identifier, is captured into component
+   state and the restore begins only on Confirm.
 
-2. **Six migrated flows** — Single Trade Delete, Bulk Selected Delete, Delete
-   ALL, Recovery Bin Restore All, Recovery Bin Permanent Delete, Recovery Bin
-   Empty Bin.
+2. **Success-only reload.** A successful restore performs exactly one full
+   application reload, so hydration reacquires the restored storage through the
+   normal startup path before the user can mutate anything.
 
-3. **Zero native dialog primitives** in these paths. Executable occurrences of
-   `window.confirm`, `window.alert`, and `window.prompt` in application source
-   are now zero. The primitive was removed, not wrapped or relocated.
+3. **Cancel and failure are inert.** Zero restore invocations, zero storage
+   mutation, zero reloads.
 
-4. **Bulk ID snapshot at dialog-open time**, so the confirmed count and the
-   acted-upon set are provably the same list. This preserves an atomicity
-   guarantee that `window.confirm`'s synchronous blocking previously supplied
-   for free.
+4. **Double-submit prevention.** The pending payload is cleared and an in-flight
+   marker set synchronously, before anything is awaited, so repeated
+   confirmation cannot start a second restore.
 
-5. **One authorized copy correction** — the bulk-delete confirmation no longer
-   claims "This cannot be undone."
+5. **Exact restore-point capture.** The identifier is captured once when the
+   confirmation opens and never re-derived from a list position.
+
+6. **Obsolete success copy removed.** `Restored {n} section(s). Reload the app
+   to see restored data.` was removed from both success branches; the
+   application now performs that instruction itself.
 
 ---
 
 ## Exact Implementation Manifest
 
-Production (4):
-- src/components/ui/ConfirmDialog.tsx (new)
-- src/pages/Raw.tsx
-- src/components/trade/TradeTable.tsx
-- src/components/trade/RecoveryBinPanel.tsx
+Production (2):
+- src/components/settings/BackupPanel.tsx
+- src/components/settings/RestorePointsPanel.tsx
 
-Tests (1):
-- src/components/ui/ConfirmDialog.test.ts (new)
+Tests (0) — see Verification below for why this is deliberate.
 
 Documentation + version (4):
 - docs/CHANGELOG.md.txt
@@ -131,79 +137,55 @@ Documentation + version (4):
 - package.json
 - package-lock.json
 
-The implementation manifest is exactly 5 paths — 4 production and 1 test. The
+The implementation manifest is exactly 2 production paths. The
 documentation/version gate wrote 4 further paths and touched no implementation
-path, for a release-preparation total of **9 paths**.
+path, for a release-preparation total of **6 paths**.
 
-`package-lock.json` was edited only in its root-project `version` metadata; no
-dependency, lockfile structure, configuration, or build change occurred.
+`package-lock.json` was edited only in its root-project `version` metadata: 458
+lockfile package entries before and after, with no dependency version, resolved
+URL or integrity hash changed.
 
 **No `docs/ARCHITECTURE_DECISIONS.md.txt` change** — see Architecture Decision
 below.
 
-Deliberately **not** modified: `src/App.jsx`, `src/components/ui/Modal.tsx`,
+Deliberately **not** modified: `src/services/backupService.ts`,
+`src/contexts/UserStorageContext.tsx`, `src/hooks/useRestorePoints.ts`,
+`src/components/ui/ConfirmDialog.tsx`, `src/components/ui/Modal.tsx`,
 `src/components/ui/index.ts`, `src/components/settings/SettingsModal.tsx`,
-`src/components/trade/TradeRow.tsx`,
-`src/components/backtest/BacktestResultsList.tsx`, and all of `src/hooks`,
-`src/services`, `src/calculations`, and `src/sync`.
+`src/App.jsx`, `.github/workflows/deploy.yml`, and all of `src/hooks`,
+`src/services`, `src/contexts`, `src/calculations`, and `src/sync`.
 
 ---
 
-## ConfirmDialog Contract
+## Confirmation Copy
 
-- `title` (required), `message` (**optional**), `confirmLabel` (required),
-  `onConfirm`, `onCancel`, `confirmVariant` (`danger` default, or `primary`).
-- When `message` is omitted, **no element is rendered in its place** — not an
-  empty node.
-- Severity reuses the existing `Button` variants. `primary` exists solely
-  because Restore All is additive rather than destructive; native `confirm`
-  carried no severity styling, so red would have invented a semantic the app
-  never had.
-- Nested **z-index 400**, via `Modal`'s existing `zIndex` prop.
-- Cancel is the explicit button plus `Modal`'s existing backdrop click. Escape
-  handling was deliberately not added, since that requires changing the shared
-  `Modal`.
-- Callers render conditionally; there is no `open` prop.
+File restore — title `Restore this backup?`; message `This will replace your
+current journal data with the selected backup.`; confirm label `Restore Backup`.
+
+Restore point — title `Restore from this point?`; message `This will replace
+your current journal data with this restore point.`; confirm label `Restore
+This Point`.
+
+Both use the existing `danger` variant and the existing Cancel behaviour
+(explicit button plus `Modal`'s backdrop click). Executable occurrences of
+`window.confirm`, `window.alert` and `window.prompt` in application source
+remain **zero**.
 
 ---
 
 ## Preserved Historical Contracts
 
-**Single Delete** — one confirmation; Cancel mutates nothing; Confirm invokes
-the existing soft-delete path unchanged.
-
-**Bulk Selected Delete** — exactly one confirmation per batch, never N; IDs
-snapshotted at dialog-open time; every selected trade remains recoverable;
-selection preserved on Cancel and cleared after Confirm.
-
-**Delete ALL** — population is **all active `rawTrades`**, never the filtered
-or visible rows; **no count in the confirmation**; the Phase 29 snapshot,
-order, `_tid`, and `softDeleteMany` contracts are untouched. The dialog holds
-no trade context at all, which is what makes the filtered view structurally
-incapable of influencing the deleted population.
-
-**Restore All** — existing ordering, original `_tid`, and the one existing
-`importTrades()` reinsertion path.
-
-**Permanent Delete / Empty Bin** — Phase 31 exactly-once on Confirm and
-zero-on-Cancel semantics preserved; permanent delete passes the same captured
-Recovery entry ID; neither path mutates active trades; historical wording
-preserved.
-
----
-
-## Copy Correction
-
-Exactly one historical confirmation string was intentionally changed.
-
-- Old bulk message: `This cannot be undone.`
-- New truth: the selected trades are moved to the Recovery Bin and can be
-  restored from there.
-
-The Delete ALL and Recovery Bin strings are preserved exactly — each is split
-across the dialog's title and message at its existing sentence boundary and
-reconstructs the original string character-for-character. Single Delete and
-Restore All keep their historical question text with no message added.
+`services/backupService.ts` was not modified. Unchanged: restore validation;
+supported backup versions; the twelve-section restore surface and its ordering;
+all-or-nothing pre-write validation; unknown-key tolerance; read-back
+verification; the `RestoreResult` shape; the backup JSON and restore-point
+snapshot formats; restore-point creation and cap semantics; storage keys and the
+authenticated user namespace; account referential validation; `RawTrade` `_tid`
+identity; the Recovery Bin architecture; Phase 29 Delete ALL population
+semantics; Phase 30 account-deletion safety; Phase 31 permanent Recovery
+deletion safety; Phase 32 user isolation; Phase 32C data-integrity contracts;
+the v1.4 `ConfirmDialog` contract including its optional `message` rule and its
+nested z-index of 400; and the Supabase-auth-only architecture.
 
 ---
 
@@ -211,81 +193,69 @@ Restore All keep their historical question text with no message added.
 
 - TypeScript: 0 errors.
 - ESLint: 0 errors and exactly 7 pre-existing warnings; no new warning.
-- Focused `ConfirmDialog` tests: 9/9.
-- Full tests: **460 passing across 25 files** (baseline was 451 across 24).
+- Tests: **460 passing across 25 files** — the full v1.4 baseline, with no test
+  weakened, renamed or removed.
 - Production build: passed.
 - `git diff --check`: clean.
 - Static proof: executable `window.confirm` / `window.alert` / `window.prompt`
-  in `src/` = **0**.
+  in `src/` = **0**; the reload primitive appears only inside a successful
+  `RestoreResult` branch in each of the two files, and appears in no cancel,
+  failure or catch path.
 - Dependency, test-framework, and test-configuration changes: none.
-- No existing test was weakened, renamed, or removed.
+
+**No new test file was added, deliberately.** The harness is Node-only
+(`vitest.config.ts` sets `environment: 'node'`; its include glob is
+`src/**/*.test.ts`) with no DOM. The decision-critical behaviour is click
+wiring, asynchronous result handling and a page reload, none of which that
+harness can reach. A server-rendered structural test would have proven only that
+the confirmation is absent from a component's initial render. Adding jsdom, a
+testing library, or production seams existing purely for mocking would have been
+a larger and less honest change than the fix. Static inspection and runtime
+acceptance carry this evidence, and the limitation is recorded rather than
+concealed.
 
 ---
 
 ## Runtime Evidence
 
-Browser Runtime Acceptance **PASSED** — RA-1 through RA-17, all seventeen
-checks. Disposable synthetic user only; a 6-trade / 2-account dataset; the
-primary account was never used.
+Localhost Runtime Acceptance **PASSED** — RA-1 through RA-11, all eleven
+checks. Disposable synthetic user only; the primary journal account was never
+used, opened or inspected.
 
-- Single Delete: Cancel mutated nothing; Confirm produced exactly one Recovery
-  entry, and restore **preserved the original `_tid`**.
-- Bulk: a 3-trade operation produced **exactly 3 Recovery entries** and
-  required **one confirmation only**; no per-trade dialog appeared. Cancel
-  retained the selection intact.
-- Delete ALL tested with **3 total active and 2 visible** under a strict-subset
-  account filter. Confirm deleted and captured **all 3 active trades**,
-  including the one **not visible** under the filter. No missing and no
-  duplicate Recovery entries; snapshot order and `_tid` values intact; the
-  dialog displayed no count.
-- Restore All restored every entry with original `_tid` values, with no
-  duplicate reinsertion.
-- Permanent Delete removed **only** the captured Recovery entry; the other
-  entry and all active trades were untouched.
-- Empty Bin affected the Recovery Bin only; active trades unchanged.
-- Nested modal integrity measured live: `SettingsModal` **z-index 300**,
-  `ConfirmDialog` **z-index 400**; a backdrop click closed only the
-  confirmation and left Settings open.
-- Backdrop-Cancel parity passed for **all six** flows, with zero callbacks
-  fired in every case.
-- **Deterministic native-dialog suppression proof.** With `window.confirm`,
-  `window.alert`, and `window.prompt` patched to record and throw, all six
-  flows were exercised through both Cancel and Confirm: `nativeCalls = []` and
-  `nativeErrors = []` — **zero native invocations, no thrown error**. The
-  original primitives were restored afterwards and re-verified native following
-  a hard refresh.
-- Hard refresh and authenticated-session smoke passed; Raw, Dashboard,
-  Settings, and Recovery Bin all render; no ErrorBoundary; zero console errors
-  attributable to v1.4.
+- Both confirmations rendered the frozen wording, exactly one dialog per
+  restore, measured live at z-index 400 above `SettingsModal`'s 300; a backdrop
+  click dismissed only the confirmation and left Settings open.
+- Cancel, on both paths, produced zero restore calls, zero changed storage keys,
+  zero storage writes and zero reloads; a cancelled file was selectable again
+  immediately afterwards.
+- All three failure classes — unparseable JSON, unsupported version, and a
+  referentially invalid trade whose backup also carried a modified `settings`
+  payload — returned their existing errors, changed **zero of thirteen storage
+  keys** and did not reload. The unwritten `settings` payload confirms
+  all-or-nothing pre-write validation at runtime.
+- Successful restores reloaded automatically **exactly once**, and after
+  hydration the interface matched persisted storage, with no manual refresh
+  performed at any point.
+- **Double-submit proof:** five synchronous confirmation clicks on one opened
+  dialog produced exactly one restore pass — twelve section writes and one
+  reload — on both entry points.
+- **Exact capture proof:** with three restore points present, confirming from
+  the middle row restored exactly that point's three-trade payload, neither the
+  two-trade nor the four-trade neighbour; a second run from the top row restored
+  exactly its own four-trade payload.
+- **The baseline data-loss sequence was specifically re-tested after the fix.**
+  Following an automatic reload from a restored three-trade state, one ordinary
+  confirmed delete left exactly the restored set minus the deleted trade: the
+  restored trade absent from the stale snapshot **survived**, the trade removed
+  by the restore did **not** resurrect, and the Recovery Bin received exactly
+  one entry.
+- With `confirm`, `alert` and `prompt` instrumented to record across the reload,
+  both paths reported zero native invocations; the primitives were verified
+  native afterwards.
+- Post-reload smoke passed: every page rendered, Settings and Recovery Bin
+  rendered, no ErrorBoundary, console clean.
 
 Disposable test data was cleaned up through the tested flows themselves.
-
-Production Live Acceptance **PASSED**, on the deployed GitHub Pages build at
-`790f7eea242aaf64600adfd9067a582f34a00b1a`, using a disposable test account
-only. The primary journal account was never used, opened, or inspected.
-
-- Pages workflow run **#7** succeeded on that source SHA, `build` and `deploy`
-  jobs both green; production self-reported **`v1.4.0 · build 790f7ee`**.
-- The deployed bundle `index-DJovhp3Y.js` carries the baked identity with no
-  placeholder remaining, and contains **zero executable `window.confirm`
-  calls**.
-- Single Delete, Bulk Delete, Delete ALL, Restore All, Permanent Delete, and
-  Empty Bin all presented the app-owned dialog with the frozen wording; Cancel
-  mutated nothing in every case; Confirm performed exactly the intended action.
-- Bulk required **one** confirmation for the batch, with no per-trade dialogs,
-  and Cancel preserved the selection.
-- Delete ALL displayed **no count** and, tested live with a strict-subset
-  filter showing **1 of 3 active trades**, deleted and captured **all three**.
-  The Phase 29 population invariant holds on the deployed artifact.
-- Nested modal integrity confirmed live: `SettingsModal` z-index 300,
-  `ConfirmDialog` z-index 400, backdrop cancelling only the inner dialog.
-- **Deterministic native-dialog proof on production:** with `confirm`, `alert`,
-  and `prompt` patched to record and throw, the representative flows were
-  exercised through Cancel and Confirm with `nativeCalls = []` and
-  `nativeErrors = []` — zero native invocations. Originals restored and
-  re-verified native after a hard refresh.
-- Authenticated smoke and hard refresh passed; console completely clean; no P0
-  and no P1; disposable data cleaned up through the tested flows.
 
 ---
 
@@ -299,42 +269,49 @@ only. The primary journal account was never used, opened, or inspected.
 
 ## Versioning
 
-- Package semantic version: **1.3.0 → 1.4.0**, written during the
+- Package semantic version: **1.4.0 → 1.5.0**, written during the
   documentation/version gate in `package.json` and in the root-project version
   metadata of `package-lock.json`. No dependency, lockfile structure, or
   configuration change accompanied it.
-- Release: **v1.4.0**, title `App-Owned Confirmation Reliability`.
-- Build identity is resolved at build time from the Git commit. The
-  pre-commit local build therefore reported the then-current fallback SHA,
-  and CI bakes the SHA of whichever commit it builds. Semantic version and
-  build SHA are independent: the former comes from `package.json`, the latter
-  from Git.
+- Release: **v1.5.0**, title `Restore Integrity`.
+- Build identity is resolved at build time from the Git commit. Semantic version
+  and build SHA are independent identifiers: the former comes from
+  `package.json`, the latter from Git. A pre-commit local build therefore
+  reports the then-current fallback SHA, and CI bakes the SHA of whichever
+  commit it builds. Repository application content being unchanged is never a
+  claim that a generated production artifact is byte-identical.
 
 ---
 
 ## Explicit Non-Scope
 
-v1.4 does not include:
+v1.5 does not include:
 
-- account-delete confirmation;
-- Restore Point confirmation changes;
-- backup-file restore confirmation changes;
+- Restore Point delete confirmation;
 - saved-filter delete confirmation;
 - checklist or custom-field delete confirmation;
-- List reset confirmation;
-- General Settings reset confirmation;
-- Backtest confirmation migration;
+- List reset and General Settings reset confirmation;
+- account-delete UI changes;
+- Backtest confirmation-dialog consistency;
 - the `TradeForm` stale save-error fix;
-- mobile/responsive overhaul;
-- Escape / focus / `role="dialog"` overhaul;
-- unsaved-form protection;
-- automatic restore points or `maybeCreateAutoBackup()` wiring;
-- transactional or durable-ack deletion;
-- Recovery Bin redesign or relocation;
-- storage, schema, or namespace changes;
-- global undo;
-- a toast framework;
-- a destructive-action registry or framework.
+- the stale `useTrades` JSDoc cleanup;
+- any `.github/workflows/deploy.yml` change;
+- automatic pre-restore backups or `maybeCreateAutoBackup()` wiring;
+- a storage-invalidation bus, rehydration event architecture,
+  `UserStorageContext` change, or hook reset API;
+- a reload abstraction;
+- LocalStorage or IndexedDB migration;
+- sync, cloud, or multi-device work;
+- backup format changes;
+- transactional or durable-ack redesign;
+- general unsaved-form protection;
+- `Modal` accessibility, focus, or Escape redesign;
+- mobile/responsive overhaul.
+
+A successful whole-journal restore is a deliberate destructive replacement, so
+the reload may discard transient unsaved interface state. That is accepted for
+this scope: the action is confirmed first, and retaining stale in-memory state
+is exactly the defect being closed.
 
 Two historical contracts remain deliberately deferred and were not reopened:
 **deletion does not automatically create a backup or restore point**, and
@@ -344,38 +321,31 @@ Two historical contracts remain deliberately deferred and were not reopened:
 
 ## Exit Criteria
 
-- [x] All six executable `window.confirm` flows replaced by app-owned UI.
-- [x] Executable `window.confirm` / `alert` / `prompt` in `src/` = 0, with the
-      primitive removed rather than wrapped.
-- [x] `ConfirmDialog` built only from existing `Modal` + `Button` + `COLORS`,
-      with no dependency, provider, shim, or `Modal` change.
-- [x] Optional `message` renders no placeholder node when omitted.
-- [x] Nested z-index 400 verified live above `SettingsModal`'s 300.
-- [x] Single Delete: one confirmation; Cancel no mutation; Confirm soft-deletes
-      and restores with original `_tid`.
-- [x] Bulk: exactly one confirmation per batch; IDs snapshotted; selection
-      preserved on Cancel and cleared after Confirm.
-- [x] Delete ALL: all active `rawTrades` affected, not the visible subset; no
-      count shown; Phase 29 contracts intact.
-- [x] Restore All: ordering, `_tid`, and single reinsertion path preserved.
-- [x] Permanent Delete / Empty Bin: exactly-once on Confirm, zero on Cancel,
-      same captured entry ID, active trades untouched.
-- [x] Only the bulk-delete copy corrected; all other wording preserved exactly.
-- [x] Typecheck, lint, focused tests, full tests, diff check, and production
-      build passed (460/460 across 25 files).
-- [x] Browser Runtime Acceptance RA-1 through RA-17 passed; no P0 and no P1.
-- [x] Deterministic native-confirm suppression proof: zero native invocations.
-- [x] Native primitives restored after instrumentation.
+- [x] Neither whole-journal restore entry point can begin without an app-owned
+      confirmation.
+- [x] Selecting a backup file captures it without restoring it; clicking Restore
+      on a restore point captures its exact id without restoring it.
+- [x] Cancel invokes the restore path zero times, mutates nothing, and does not
+      reload — on both entry points, via button and backdrop.
+- [x] Failed restores preserve existing error behaviour, change zero storage
+      keys, and do not reload.
+- [x] Successful restores reload exactly once, and hydration then reflects the
+      restored storage with no manual refresh.
+- [x] Repeated confirmation cannot execute more than one restore.
+- [x] The restore-point identifier is never re-derived from a list position.
+- [x] Confirmation wording matches the frozen copy exactly on both paths.
+- [x] Executable `window.confirm` / `alert` / `prompt` in `src/` = 0.
+- [x] `backupService.ts`, `UserStorageContext.tsx`, `useRestorePoints.ts`,
+      `ConfirmDialog.tsx` and `Modal.tsx` unmodified.
+- [x] Typecheck, lint, full tests, diff check, and production build passed
+      (460/460 across 25 files; exactly 7 pre-existing warnings).
+- [x] Browser Runtime Acceptance RA-1 through RA-11 passed; no P0 and no P1.
+- [x] The baseline data-loss sequence re-tested post-fix with no stale-state
+      destruction or resurrection.
 - [x] Documentation and version metadata closure completed without widening
       scope.
-- [x] Local Git release-candidate closure
-      (`790f7eea242aaf64600adfd9067a582f34a00b1a`, single parent, no amend).
-- [x] Push, deployment, and Production functional acceptance — pushed as a
-      normal fast-forward, deployed by Pages run #7 on that exact SHA, and
-      accepted with the deployed application identifying itself as
-      `v1.4.0 · build 790f7ee`.
 
-The annotated `v1.4.0` tag is the release-control marker and is authoritative
+The annotated `v1.5.0` tag is the release-control marker and is authoritative
 in Git rather than duplicated as mutable checklist state.
 
 ---
@@ -385,25 +355,26 @@ in Git rather than duplicated as mutable checklist state.
 **No new ADR was recorded, and `docs/ARCHITECTURE_DECISIONS.md.txt` was not
 modified.**
 
-v1.4 replaces a browser-native confirmation delivery primitive with an
-application-owned React component while deliberately preserving every existing
-deletion and recovery business contract. It changes no deletion architecture,
-no Recovery architecture, no storage, schema, or namespace, no backup format,
-no Restore semantics, no `_tid` identity, no Delete ALL population semantics,
-no transactional durability posture, and no automatic backup policy.
+Confirmation plus a success-only full reload is a bounded UI and lifecycle
+correction that uses the application's **existing** hydration and storage
+authority. It introduces no cross-cutting invalidation authority, no rehydration
+event system, no new storage abstraction and no new module boundary — it changes
+only when the application re-enters a startup path it already had. The existing
+ADR set was reviewed and none of AD-001 through AD-022 governs restore
+confirmation or post-restore state reacquisition.
 
-`ConfirmDialog` is a bounded UI implementation choice with a local prop
-contract used at six call sites and carrying zero business logic — not a new
-cross-cutting architectural authority. The existing ADR set was reviewed and
-none of AD-001 through AD-022 governs confirmation delivery.
+The reload primitive itself follows existing repository practice: a direct
+`window.location.reload()` call in a component, as already used by
+`src/components/ErrorBoundary.tsx` and `src/components/LocalPersistenceNotice.tsx`.
 
 ---
 
 ## Migration Impact
 
-None. No storage key, namespace, schema, or backup format version change. No
-historical data was rewritten and no trade was migrated. The change is confined
-to how a user's confirmation decision is captured.
+None. No storage key, namespace, schema, backup version, or restore format
+change. No historical data was rewritten and no record was migrated. The change
+is confined to when a restore is authorised and when the running application
+re-reads storage it already owns.
 
 ---
 
@@ -412,23 +383,26 @@ to how a user's confirmation decision is captured.
 Non-blocking. None of these is a release blocker.
 
 P2:
-- Destructive actions **outside** the six migrated flows still have no
-  confirmation at all: account delete, restore-point delete and restore,
-  backup-file restore, saved-filter delete, checklist and custom-field delete,
-  and List reset. These were explicitly out of v1.4 scope.
-- There is no full DOM-level integration harness; Confirm/Cancel click wiring
-  is not automatically tested, because the harness is Node-only with no DOM.
-  Runtime acceptance is the evidence, and no fake event framework was added.
+- Confirm/Cancel click wiring, the success-only reload condition, and
+  post-restore reacquisition are not covered by automated tests, because the
+  Node-only harness cannot reach them. Runtime acceptance is the evidence, and
+  no test architecture was added to manufacture coverage.
+- Destructive actions outside the two restore paths and the six flows migrated
+  in v1.4 still have no confirmation: account delete, restore-point delete,
+  saved-filter delete, checklist and custom-field delete, List reset, and
+  General Settings reset.
 - Externally malformed data carrying `sourceExecutionId` without a
   `sourcePlatform` is not specifically classified (carried from v1.3).
 
 P3:
-- Escape does not dismiss a confirmation; Cancel and backdrop click are the
-  dismissal paths.
-- A stale JSDoc comment in `src/hooks/useTrades.ts` still names
-  `window.confirm`. Its substantive claim — that confirmation is a UI-layer
-  concern — remains true. The file is outside the frozen v1.4 manifest and was
-  deliberately not edited; this is a deferred documentation cleanup.
+- Escape does not dismiss a restore confirmation; Cancel and backdrop click are
+  the dismissal paths, matching the rest of the v1.4 confirmation surface.
+- A successful restore's reload discards transient unsaved interface state, such
+  as an open trade form. This is accepted and deliberate for a confirmed
+  destructive replacement.
+- A stale JSDoc comment in `src/hooks/useTrades.ts` still names `window.confirm`.
+  Its substantive claim — that confirmation is a UI-layer concern — remains
+  true. The file stayed outside this release's frozen surface.
 - Narrow/mobile visual coverage of the Scale section is partial (from v1.3).
 - Externally malformed manual leg seconds other than `:00` are tolerated rather
   than rejected (from v1.3).
@@ -445,42 +419,22 @@ Durable release lineage:
 
 - Released v1.2 baseline:
   `de734061dafe8f1db78f044a28d1f85c78741ffe`
-- v1.3 release-candidate commit:
-  `02a9a8425b941614922991f782cc442e752e7ba5`
 - v1.3.0 release baseline (annotated tag `v1.3.0`):
   `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`
-- **v1.4 functionally accepted application commit:**
+- v1.4 functionally accepted application commit:
   `790f7eea242aaf64600adfd9067a582f34a00b1a`
-- Documentation-only closure descendant(s): release-record maintenance only;
-  no application, test, package, or configuration change.
+- v1.4.0 release baseline (annotated tag `v1.4.0`):
+  `426cbbba806e65231cc51ebc8fac64b571a1753b`
+- Governance baseline this release departed from:
+  `10252356ac25576d3c400084ef3069163cb0eba4`
 
-`790f7ee` was created from a nine-path staged manifest — five implementation
-and test paths plus four documentation/version paths — and carries exactly
-that content: 9 files changed, 923 insertions, 345 deletions. It has a single
-parent and no amend. It was pushed to `origin/main` as a normal fast-forward
-`aa03a04..790f7ee`. No force push, no branch, no pull request, no merge, and
-no rebase was used; history has not been rewritten, and the lineage
-`de734061…` → `02a9a842…` → `e428d742…` → `aa03a04…` → `790f7ee…` is linear.
-
-Documentation-only closure descendants exist because the release documents,
-written during the release-preparation gate, described release state that
-later steps superseded — statements true when written and stale afterwards.
-Those descendants change **documentation only**: no application, test,
-package, storage, workflow, or configuration content. The v1.4 functional
-evidence therefore remains anchored to `790f7ee`, the commit that was deployed
-and functionally accepted in production.
+Release history is kept linear and single-parent. Git history and the annotated
+tag reference are authoritative for release identity; that identity is
+deliberately not duplicated here as mutable prose.
 
 ---
 
-## Release Control and Next Phase
+## Next Phase
 
-**Release-control mechanism for v1.4:** the annotated `v1.4.0` tag. Tag
-creation is governed by its own gate, and the repository's tag reference is the
-source of truth for which commit carries the marker.
-
-Local Git release-candidate closure, push, GitHub Pages deployment, and
-Production functional acceptance were all completed against `790f7ee`, which
-remains the anchor for every functional claim in this record.
-
-**Next development phase: USER DECISION.** No feature or major phase has been
-selected, and none is proposed here.
+**USER DECISION.** No feature or major phase has been selected, and none is
+proposed here.

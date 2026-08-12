@@ -60,6 +60,23 @@ Use delegation selectively.
 - **Do** delegate when independent verification, focused implementation, or adversarial
   review materially improves confidence in the result.
 
+### Delegated evidence is reviewed, not trusted
+
+Claude must independently re-check, against the repository itself, any delegated claim
+that gates:
+
+- scope
+- mutation
+- Git closure
+- deployment
+- release tagging
+
+### No duplicated ceremony
+
+Do not duplicate already-valid delegated investigation or verification merely for
+ceremony. Review it proportionally, and rerun only what is needed to establish
+confidence at the relevant risk boundary.
+
 ---
 
 ## 3. No concurrent edits
@@ -74,6 +91,8 @@ Never let Claude and Codex modify the same files at the same time.
 
 ## 4. Current repository state is the source of truth
 
+- Repository identity and the frozen RFC scope are **authoritative over any agent
+  report**, including Claude's own earlier reports.
 - Repository contents, tests, git state, and current documentation override stale
   chat/session assumptions.
 - Verify factual claims against the codebase before acting, whenever practical.
@@ -95,6 +114,16 @@ Never let Claude and Codex modify the same files at the same time.
 ## 6. RFC / phase discipline
 
 - Work only on the approved phase or task.
+- Classify every change under the Playbook's **LOW / MEDIUM / HIGH** risk-tier model
+  (`docs/PROJECT_PLAYBOOK.md.txt` §18). The tier is proposed at Discovery, confirmed by
+  the user at Scope Decision, and frozen in the RFC. It may be raised, never silently
+  lowered.
+- Follow the Simplified Hybrid Workflow (§19) and its four default approval gates (§20):
+  **A** analysis → code mutation, **B** local → Git history closure, **C** local →
+  remote/deployment, **D** deployment → canonical release marker. Do not invent extra
+  gates merely because a separate command is being run.
+- HIGH-tier work runs in the stricter exception mode (§29), where gates A–D are never
+  merged.
 - When an RFC/spec is marked **FINAL** or **FROZEN**, treat these sections as binding:
   - Scope
   - Allowed Files
@@ -136,6 +165,10 @@ task/RFC.
 - If runtime verification requires user authentication or user-owned data, stop and guide
   the user through the checks rather than fabricating results.
 - Report failures and discrepancies honestly; do not silently work around them.
+- A descendant commit proven by diff to change **documentation only** — no application
+  source, tests, package metadata, configuration, or workflow content — does not require
+  full functional re-acceptance. It requires deployment identity, boot/assets smoke, auth
+  initialization smoke, and a fatal-console check only. See Playbook §24.
 
 ---
 
@@ -178,6 +211,13 @@ Then:
 - Record measured facts, not estimated values.
 - Do not create a new Architecture Decision unless a genuine architectural decision was
   made.
+- Durable documentation must not read like a live Git status dashboard. Do not write
+  "current HEAD is…", "origin/main is…", ahead/behind counts, "the tag does not exist
+  yet", "next gate is…", "only remaining step…", "Production currently serves build X",
+  or unchecked release-gate checkboxes into committed documentation. Use evidence
+  anchors, historical lineage, release-marker definitions, and time-scoped acceptance
+  statements instead. The Git tag reference is authoritative for canonical release state.
+  See Playbook §26.
 
 ---
 

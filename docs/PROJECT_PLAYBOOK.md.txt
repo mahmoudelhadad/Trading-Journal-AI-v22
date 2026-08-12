@@ -1,6 +1,6 @@
 # Trading Journal AI – Engineering Playbook
 
-Version: 1.0
+Version: 2.0
 
 ---
 
@@ -69,13 +69,20 @@ Preserve:
 
 Immediately stop if:
 
-- New file required
+- A file outside the frozen manifest is required
 - Architecture change required
 - Specification ambiguity
 - Scope expansion
 - Breaking public API
 - Behavior cannot remain identical
 - Unexpected dependency discovered
+- Evidence proves the accepted RFC wrong or incomplete
+- The risk tier must be raised
+- A preserved contract must change
+- An Architecture Decision becomes necessary
+
+A new file is permitted when the accepted manifest lists it. Creating a file
+is not itself a stop condition; creating a file the manifest does not name is.
 
 Do not continue after reporting.
 
@@ -83,17 +90,28 @@ Do not continue after reporting.
 
 # 6. Verification Requirements
 
-Every implementation must prove:
+Verification must be proportional to the risk tier (section 18).
+
+Every implementation must prove, at the depth its tier requires:
 
 - TypeScript status
-- Build status
-- Runtime status
-- Behavior parity
-- Migration correctness
+- Lint status
+- Test status
+- Build status, when production-affecting
+- Behavior parity for every preserved contract
 - No regressions
 - No new circular dependencies
 - No scope violations
 - No hidden changes
+
+Runtime acceptance and migration-correctness proof are not universal
+requirements. They are required where the tier requires them:
+
+- LOW: runtime acceptance normally omitted; migration proof not applicable.
+- MEDIUM: numbered localhost runtime acceptance; migration proof only if
+  storage semantics are in scope.
+- HIGH: full localhost runtime acceptance, full Production functional
+  re-acceptance, and an explicit migration/rollback proof.
 
 Verification must contain evidence.
 
@@ -103,14 +121,27 @@ Never assumptions.
 
 # 7. Reporting Format
 
-Always end every implementation with:
+Reporting depth follows the risk tier.
+
+LOW:
 
 - Summary
 - Files Changed
 - Verification
+- Blocker / deviation, if any
+
+MEDIUM and HIGH:
+
+- Summary
+- Files Changed
+- Verification
+- Runtime / manual verification, where applicable
 - Remaining Risks
 - Open Questions
 - Next Recommended Step
+
+Report fuller evidence when the risk justifies it. Do not pad a low-risk
+report to satisfy a format.
 
 ---
 
@@ -166,17 +197,14 @@ Never guess.
 - No silent migrations
 - Backward compatibility required
 
-Status as of Phase 6g-2 (COMPLETE): Resolver Architecture and Atomic
-Storage Cutover are no longer aspirational — both are implemented and
-verified. The Resolver (services/localDatabase.ts) is live and routes
-every read/write for trades/accounts/lists/settings/cursors; the cutover
-(services/storageCutover.ts) is wired end-to-end behind its own
-independent flag (VITE_STORAGE_CUTOVER_ENABLED), gated on an
-authenticated user and leader election, sharing the existing Web Lock.
-Both remain OFF by default in every real environment until explicitly
-enabled. See docs/ARCHITECTURE_DECISIONS.md.txt (AD-004 through AD-013)
-for the permanent decisions behind this, and docs/CURRENT_PHASE.md.txt
-for what remains open.
+The permanent decisions behind the Resolver Architecture and the Atomic
+Storage Cutover — including their scope, their flags, and the reasoning that
+produced them — are recorded in docs/ARCHITECTURE_DECISIONS.md.txt
+(AD-004 through AD-013). Those records are authoritative.
+
+Project status is deliberately not narrated here. This document states
+durable rules only; the state of any given phase or release belongs in
+docs/CURRENT_PHASE.md.txt, docs/CHANGELOG.md.txt, and the Git history.
 
 ---
 
@@ -186,10 +214,19 @@ Each phase must be:
 
 - Self-contained
 - Reversible (when possible)
-- Fully verified
-- Documented
 - Completed before the next phase
 - No overlapping unfinished work
+
+Verification and documentation depth follow the risk tier (section 18) rather
+than a fixed maximum:
+
+- LOW: automated verification where code is touched; documentation updated
+  only where a durable record would otherwise become wrong.
+- MEDIUM: full automated verification plus numbered runtime acceptance;
+  release documentation updated.
+- HIGH: the stricter mode in section 29.
+
+A phase is not required to produce documentation merely because it is a phase.
 
 ---
 
@@ -204,6 +241,9 @@ Do not reopen closed architectural decisions unless new evidence exists.
 Do not reverify unchanged code.
 
 Verify only affected areas.
+
+This principle is the ancestor of the documentation-only descendant rule in
+section 24.
 
 ---
 
@@ -225,8 +265,8 @@ Never hide uncertainty.
 A phase is complete only if:
 
 - All approved work is finished.
-- Verification passed.
-- Documentation updated.
+- Verification passed, at the depth its tier requires.
+- Documentation updated, at the depth its tier requires.
 - Remaining risks documented.
 - Reviewer approved.
 
@@ -244,12 +284,478 @@ Minimal Change > Large Refactor
 
 No Silent Behavior Changes
 
+Separate semantic risk, not ceremony.
+
 ---
 
 # 17. Definition of Done
 
 - Implementation Complete
-- Verification Complete
+- Verification Complete, at the depth the risk tier requires
 - Documentation Updated
-- Architecture Decisions Updated
 - Current Phase Updated
+- Architecture Decisions updated **only if** a genuine architectural decision
+  was made
+
+An Architecture Decision is not a per-phase deliverable. Do not record one
+when no architectural decision occurred.
+
+---
+
+# 18. Risk Tiers
+
+Every change is classified into exactly one tier. The tier determines how much
+process the change receives.
+
+The tier is proposed during Discovery and confirmed by the user during Scope
+Decision. It is then frozen in the Final RFC.
+
+The tier may be raised mid-phase when evidence justifies it. It must never be
+silently lowered.
+
+---
+
+## LOW RISK
+
+Examples:
+
+- copy / UI text
+- isolated presentational components
+- documentation-only changes
+- bounded tests
+- non-semantic refactors with strong coverage
+
+Minimum expectations:
+
+- focused discovery
+- short RFC
+- bounded implementation surface
+- `npm run verify` where code is touched
+- runtime acceptance normally not required
+- deployment identity + boot smoke, if released
+
+---
+
+## MEDIUM RISK
+
+Examples:
+
+- user-visible feature behavior
+- calculations against existing contracts
+- import / export behavior
+- destructive UI **delivery** changes
+- local state interactions
+
+Minimum expectations:
+
+- contract inventory for everything in the blast radius
+- full RFC
+- exact frozen path manifest
+- characterization tests for preserved behavior
+- `npm run verify`
+- `npm run build` when production-affecting
+- numbered localhost runtime acceptance
+- targeted Production flow smoke
+
+---
+
+## HIGH RISK
+
+Examples:
+
+- LocalStorage / IndexedDB migrations
+- authentication / user isolation
+- sync / cloud architecture
+- backup / restore format
+- data migration
+- referential integrity
+- schema changes
+- transaction / durability semantics
+- cross-device state
+- destructive-**data** architecture
+
+Minimum expectations:
+
+- full contract and failure-mode inventory
+- prior ADR review
+- exact frozen manifest
+- explicit deliberately-not-modified list
+- migration / rollback plan
+- characterization tests written before mutation
+- independently derived expected values
+- red-green / mutation proof where relevant
+- localhost full runtime acceptance
+- full Production functional re-acceptance
+- ADR if architecture changes
+- the stricter approval mode in section 29
+
+---
+
+# 19. Simplified Hybrid Workflow
+
+This is the default workflow for all work.
+
+1. Discovery
+2. Scope Decision
+3. Final RFC
+4. Implementation + Automated Verification
+5. Runtime Acceptance
+6. Docs + Version + Final Verification
+7. Local Git Closure
+8. Push + Deployment + Live Acceptance
+9. Final Release Tag Closure
+
+These are workflow **stages**, not nine mandatory approval prompts.
+
+Stages 1–3 are normally one conversation.
+
+Stages 4–6 are normally one authorization: they are local, reversible, of a
+single risk type, and governed by acceptance criteria already frozen at
+stage 3.
+
+Stages 5 and 6 may be reordered or merged at LOW and MEDIUM tier. Stage 5 may
+be omitted entirely at LOW tier.
+
+Stages 7, 8, and 9 each carry their own approval, because each crosses a real
+risk boundary.
+
+---
+
+# 20. Approval Boundaries
+
+Default gates:
+
+GATE A — analysis → code mutation
+
+GATE B — local / reversible → Git history closure
+
+GATE C — local → remote / deployment
+
+GATE D — deployment → canonical release marker
+
+---
+
+Adjacent stages may be combined into one authorization when **all** are true:
+
+1. every action in the span is local and reversible
+2. the risk type does not change across the span
+3. no new architectural decision is introduced
+4. acceptance criteria were already frozen in the accepted RFC
+
+---
+
+A new approval is required when:
+
+- the first code mutation begins
+- Git history is written
+- remote or deployment work begins
+- the canonical release tag is created
+- the frozen manifest must grow
+- the risk tier must rise
+- a preserved contract must change
+- an Architecture Decision becomes necessary
+
+---
+
+Do not create an approval boundary merely because a separate command is being
+run. Splitting reversible local commands into separate gates adds ceremony,
+not safety.
+
+---
+
+# 21. Discovery Rules
+
+Discovery is a ranking tool, not a shopping list.
+
+It must answer:
+
+1. What problem is real?
+2. What evidence supports it?
+3. What is the smallest useful change?
+4. What is explicitly not included?
+5. Which existing contracts are in the blast radius?
+
+Rules:
+
+- Discovery proposes; the user selects.
+- Unrelated cleanup remains a separate ranked candidate. It is never a rider
+  on a feature candidate.
+- No silent UX redesign.
+- Discovery output is temporary. It is not written into durable documentation.
+- No evidence means no candidate.
+
+---
+
+# 22. Final RFC Rules
+
+The Final RFC freezes only decision-critical information:
+
+- baseline identity
+- problem statement
+- objective / narrow invariant
+- accepted behavior
+- preserved historical contracts
+- implementation surface
+- explicit out-of-scope
+- verification plan
+- runtime acceptance criteria, where required
+- STOP conditions
+- release impact
+- ADR yes / no
+- migration impact
+
+Once the RFC is accepted, the following are FROZEN and binding:
+
+- objective
+- preserved contracts
+- manifest / bounded surface
+- out-of-scope
+- runtime acceptance criteria
+- STOP conditions
+
+Do not require artificial sections that change neither the implementation nor
+the proof.
+
+---
+
+# 23. Implementation Rules
+
+- Follow the frozen RFC.
+- No opportunistic redesign.
+- No unrelated cleanup.
+- No silent behavior change.
+- No business or storage contract change unless the RFC authorized it.
+- Implementation and automated verification normally share one working phase.
+- New files are allowed when the manifest names them.
+- A file outside the manifest triggers STOP.
+- If evidence proves the RFC wrong or incomplete, STOP and report rather than
+  improvising a repair.
+- Preserve pinned baselines — warning counts, test counts, module counts —
+  where the RFC pins them.
+
+---
+
+# 24. Verification Rules
+
+Escalate only as far as the invariant requires:
+
+unit / static
+→ integration
+→ runtime
+
+Rules:
+
+- Structurally provable invariants may be proven statically.
+- DOM, runtime, and host-environment behavior requires runtime proof, because
+  static analysis and a Node-only test harness structurally cannot reach it.
+- Never weaken, rename, or remove a test to make a change pass.
+- Do not repeatedly reverify unchanged code without a reason.
+- Report failures and discrepancies honestly. Never work around them silently.
+
+---
+
+## Documentation-only descendant rule
+
+Functional acceptance may be anchored to a specific implementation commit.
+
+If a later descendant commit is proven by repository diff to change
+**only documentation**, with no change to:
+
+- application source
+- tests
+- package metadata
+- configuration
+- workflow content
+
+then full functional re-acceptance is **not** required.
+
+Require only:
+
+- deployment identity
+- boot / assets smoke
+- auth initialization smoke
+- fatal-console check
+
+Do not repeat RA-1 … RA-N for a proven documentation-only descendant.
+
+This is a **fallback** mechanism for genuine post-acceptance correction. It is
+not a normal release stage. See section 28.
+
+---
+
+# 25. Runtime Acceptance Rules
+
+- Checks are numbered (RA-1, RA-2, …), each with an explicit expected
+  observation. Pass or fail is recorded per check.
+- Disposable or synthetic data only.
+- The primary journal account must never be used, opened, or inspected.
+- Clean up test data through the tested flows themselves where practical, so
+  that cleanup is itself evidence.
+- Classify findings P0 / P1 / P2 / P3.
+- P0 and P1 block release. P2 and P3 are recorded as Known Limitations.
+- Where a negative is claimed — "no native dialog fires", "no duplicate is
+  written" — prove it deterministically by instrumentation where possible.
+- Restore any instrumented primitive afterwards and re-verify it.
+- Production build identity must be read from the application's own build
+  metadata, never inferred from a URL, a CI log, or an assumption.
+
+Tier behavior:
+
+- LOW: runtime acceptance normally omitted.
+- MEDIUM: localhost runtime acceptance plus targeted Production smoke.
+- HIGH: localhost full runtime acceptance plus full Production functional
+  re-acceptance on the deployed artifact.
+
+---
+
+# 26. Documentation Durability Rules
+
+Permanent and release documentation must not behave like a live Git status
+dashboard.
+
+Avoid unscoped durable statements such as:
+
+- current HEAD is …
+- origin/main is …
+- ahead / behind …
+- the tag does not exist yet
+- next gate is …
+- only remaining step …
+- Production currently serves build X
+- unchecked release-gate checkboxes
+
+unless the statement is explicitly historical or time-scoped.
+
+Prefer:
+
+- evidence anchors
+- historical lineage
+- release-marker definitions
+- time-scoped Production acceptance statements
+
+GOOD:
+
+At the time of full Production functional acceptance, the deployed
+application identified itself as v1.4.0 · build 790f7ee.
+
+BAD:
+
+Production currently serves build 790f7ee.
+
+Rules:
+
+- The Git tag / reference is authoritative for canonical release state, and
+  must not be duplicated as mutable checklist prose.
+- Stage-progress tracking belongs in conversation and active execution
+  context, not in permanently committed governance or history prose.
+- A durable document that would become false by running `git push` must be
+  rewritten before it is committed.
+
+---
+
+# 27. Build Identity Rules
+
+Repository application content unchanged does **not** imply the generated
+build artifact is byte-identical.
+
+Because the Git commit SHA is embedded at build time, even a
+documentation-only descendant may change:
+
+- the reported build SHA
+- the JavaScript bundle hash
+- the generated bundle bytes
+
+while application source and business behavior remain unchanged.
+
+Rules:
+
+- Never claim a "byte-identical artifact" unless it was proven at artifact
+  level.
+- Semantic version and build SHA are independent identifiers. The former comes
+  from package.json; the latter comes from Git.
+- A pre-commit local build reports the then-current fallback SHA. CI bakes the
+  SHA of whichever commit it builds. The local build's identity is not the
+  release identity.
+
+---
+
+# 28. Git and Release Closure Rules
+
+Preferred durable release sequence:
+
+1. verified implementation
+2. durable docs + version preparation
+3. local release commit
+4. fast-forward push
+5. CI deploys that exact SHA
+6. Production acceptance per tier
+7. annotated version tag on the canonical release commit
+
+---
+
+## Anti-loop rule
+
+Release documentation must be written in durable, evidence-scoped wording
+**before** the initial release commit.
+
+Do not write into durable release documentation:
+
+- what has not happened yet
+- pending gate prose
+- unchecked gate checkboxes
+- current mutable Git state
+
+Writing gate-progress prose into a durable document is what forces a later
+correction commit. Removing the cause is preferred over documenting how to
+unwind the effect.
+
+---
+
+## Fallback closure descendant
+
+A documentation-only post-Production closure descendant is a fallback for
+genuine correction, not a normal release step.
+
+When one is genuinely necessary:
+
+- functional evidence remains anchored to the accepted implementation commit
+- prove by diff that the descendant is documentation-only
+- apply the minimal identity and boot smoke rule from section 24
+- place the final release tag on the canonical final release commit
+
+---
+
+## Git rules
+
+- Stage explicit paths.
+- Do not use `git add -A` or `git add .` for controlled release closure.
+- Push as a normal fast-forward.
+- No force push.
+- No history rewrite after remote publication.
+- Use an annotated version tag.
+- Keep release history linear and single-parent unless explicitly approved
+  otherwise.
+- Never commit, push, reset, checkout, clean, stash, amend, rebase, tag,
+  merge, or open a PR unless explicitly requested.
+
+---
+
+# 29. High-Risk Exception Mode
+
+HIGH-tier work uses the stricter historical mode. When it is invoked, the RFC
+states so explicitly, and the following become mandatory:
+
+- exact frozen manifest
+- explicit deliberately-not-modified list
+- characterization tests written before implementation
+- independently derived expected values
+- red-green / mutation proof where applicable
+- migration / rollback plan
+- ADR when architecture changes
+- localhost full runtime acceptance
+- Production full functional re-acceptance
+- Gates A through D are never merged
+
+Reference examples of HIGH-tier work: synchronization architecture, storage
+migration, authentication and user isolation, backup / restore format, and
+data migration.

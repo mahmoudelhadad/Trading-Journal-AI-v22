@@ -17,15 +17,24 @@
  *      all CURRENTLY FILTERED rows (matches toggleAll() exactly)
  *   3. "🗑 Delete N" button appears only when selectedCount > 0
  *      (matches original conditional rendering exactly)
- *   4. window.confirm() before bulk delete and delete-all
- *      (matches original confirm messages verbatim)
+ *   4. Exactly one confirmation before bulk delete, and one before
+ *      delete-all (v1.4: delivered by ConfirmDialog rather than the
+ *      browser's native dialog — the decision, not the semantics,
+ *      changed. See components/ui/ConfirmDialog.tsx)
  *   5. "🗑 Delete ALL" always visible, top-right, muted red
  *
  * Backward compatibility: FULLY PRESERVED
  * - Same 28 columns in same order
  * - Same filter logic (AND across all 4 filters)
- * - Same confirm() dialog text
+ * - Same Delete ALL confirmation text (v1.4 splits the historical
+ *   single string across ConfirmDialog's title + message, which
+ *   reconstruct it exactly, and still shows NO trade count)
  * - Same minWidth:1800 horizontal scroll behavior
+ *
+ * ONE INTENTIONAL COPY CORRECTION (v1.4, authorized): the bulk-delete
+ * confirmation used to end "This cannot be undone.", which was false —
+ * onBulkDeleteTrade routes to softDeleteTrade, so the trades land in
+ * the Recovery Bin and ARE restorable. It now says so.
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
@@ -34,6 +43,7 @@ import { FX_SYMBOLS, FUT_SYMBOLS } from '@constants/symbols.js';
 import { Select } from '@components/ui/Select.js';
 import { TableHeader } from '@components/ui/Table.js';
 import { EmptyState } from '@components/ui/EmptyState.js';
+import { ConfirmDialog } from '@components/ui/ConfirmDialog.js';
 import { TradeRow } from './TradeRow.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
 import type { Account } from '@hooks/useAccounts.js';
@@ -52,7 +62,7 @@ export interface TradeTableProps {
    * deleteSelected() below already shows its own single confirm dialog
    * covering the whole batch. Added to fix a real bug: onDelete (see
    * above) is shared with the single-row path in Raw.tsx, where it is
-   * wrapped in its own per-trade window.confirm('Delete this trade?').
+   * wrapped in its own per-trade "Delete this trade?" confirmation.
    * Reusing onDelete for bulk delete meant every selected trade
    * triggered its own extra confirmation dialog on top of this
    * component's bulk confirm — N+1 dialogs for N selected trades —
@@ -136,6 +146,15 @@ export function TradeTable({
     });
   }, [filtered, allFilteredSelected]);
 
+  // ── v1.4 confirmation state ──────────────────────────────
+  // `pendingBulkIds` is the SNAPSHOT of exactly which trades the user
+  // was shown when they opened the bulk-delete confirmation. Both the
+  // displayed count and the acted-upon set read from this one array —
+  // see deleteSelected/confirmBulkDelete below for why that matters.
+  // `pendingDeleteAll` deliberately carries NO context at all.
+  const [pendingBulkIds, setPendingBulkIds]   = useState<number[] | null>(null);
+  const [pendingDeleteAll, setPendingDeleteAll] = useState(false);
+
   const deleteSelected = useCallback(() => {
     // NOTE: Object.keys() always returns string[] at runtime, even though
     // `selected` is typed Record<number, boolean> (t._tid is a number).
@@ -150,7 +169,7 @@ export function TradeTable({
     // SECOND, INDEPENDENT BUG found and fixed in the same pass: the loop
     // below calls onBulkDeleteTrade (not onDelete). onDelete is shared
     // with TradeRow's single-row delete button, and in Raw.tsx it is
-    // wrapped in its own window.confirm('Delete this trade?') — correct
+    // wrapped in its own "Delete this trade?" confirmation — correct
     // for a single delete, but when reused here it meant every trade in
     // a bulk selection triggered its OWN extra confirmation dialog on
     // top of the one line below, i.e. N+1 dialogs for N selected trades,
@@ -160,15 +179,55 @@ export function TradeTable({
     // the only one needed for the bulk path. onDelete, TradeRow's
     // single-row path, and deleteTrade's own logic are all untouched.
     const ids = Object.keys(selected).filter((k) => selected[k as unknown as number]);
+    // Preserved exactly: an empty selection never opens a confirmation.
     if (!ids.length) return;
-    // Matches original confirm message exactly
-    if (!window.confirm(`Delete ${ids.length} selected trades? This cannot be undone.`)) return;
-    ids.forEach((id) => onBulkDeleteTrade(Number(id)));
-    setSelected({});
-  }, [selected, onBulkDeleteTrade]);
+    // v1.4 — SNAPSHOT AT OPEN TIME. window.confirm blocked the thread,
+    // so the confirmed count and the deleted set could not diverge. A
+    // React dialog does not block, so the id list is frozen here, at
+    // the moment the user is shown "Delete N selected trades?", and
+    // confirmBulkDelete acts on that same array rather than re-reading
+    // `selected`. The Number() conversion (Object.keys stringifies the
+    // numeric _tid keys — the KI-001 fix) now happens at snapshot time
+    // instead of inside the loop; the values handed to
+    // onBulkDeleteTrade are identical.
+    setPendingBulkIds(ids.map(Number));
+  }, [selected]);
 
+  // Cancel clears the snapshot ONLY. onBulkDeleteTrade is not called,
+  // and `selected` is deliberately NOT cleared — matching the early
+  // `return` this replaced, which left the selection badge intact.
+  const cancelBulkDelete = useCallback(() => {
+    setPendingBulkIds(null);
+  }, []);
+
+  const confirmBulkDelete = useCallback(() => {
+    if (!pendingBulkIds) return;
+    const ids = pendingBulkIds;
+    setPendingBulkIds(null);
+    // ONE confirmation for the whole batch, then the original loop
+    // semantics unchanged. onBulkDeleteTrade is the raw, un-confirmed
+    // delete action (see this component's props doc): reusing onDelete
+    // here is what used to produce N+1 dialogs. That fix stands.
+    ids.forEach((id) => onBulkDeleteTrade(id));
+    setSelected({});
+  }, [pendingBulkIds, onBulkDeleteTrade]);
+
+  // Delete ALL captures NOTHING — no ids, no count, no population.
+  // The Phase 29 contract says the population is every active RawTrade,
+  // resolved downstream in App.jsx's handleSoftDeleteAllTrades, NOT the
+  // filtered rows this component happens to be rendering. Holding no
+  // trade context here is what makes that impossible to get wrong, and
+  // is why the confirmation copy carries no count.
   const deleteAll = useCallback(() => {
-    if (!window.confirm('Delete ALL active trades? They will be moved to the Recovery Bin and can be restored from there.')) return;
+    setPendingDeleteAll(true);
+  }, []);
+
+  const cancelDeleteAll = useCallback(() => {
+    setPendingDeleteAll(false);
+  }, []);
+
+  const confirmDeleteAll = useCallback(() => {
+    setPendingDeleteAll(false);
     onDeleteAll();
     setSelected({});
   }, [onDeleteAll]);
@@ -318,6 +377,37 @@ export function TradeTable({
           </tbody>
         </table>
       </div>
+
+      {/* ── Bulk delete confirmation ─────────────────────────── */}
+      {/* Count comes from the SNAPSHOT, never from `selected` or
+          `filtered`, so the number the user confirms is exactly the
+          number deleted. Copy corrected in v1.4: the old text said
+          "This cannot be undone.", which was false — this path routes
+          to softDeleteTrade, so the trades ARE recoverable. */}
+      {pendingBulkIds !== null && (
+        <ConfirmDialog
+          title={`Delete ${pendingBulkIds.length} selected trades?`}
+          message="They will be moved to the Recovery Bin and can be restored from there."
+          confirmLabel={`Delete ${pendingBulkIds.length}`}
+          confirmVariant="danger"
+          onConfirm={confirmBulkDelete}
+          onCancel={cancelBulkDelete}
+        />
+      )}
+
+      {/* ── Delete ALL confirmation ──────────────────────────── */}
+      {/* NO COUNT — deliberately. title + message reconstruct the
+          historical Phase 29 string exactly. */}
+      {pendingDeleteAll && (
+        <ConfirmDialog
+          title="Delete ALL active trades?"
+          message="They will be moved to the Recovery Bin and can be restored from there."
+          confirmLabel="Delete ALL"
+          confirmVariant="danger"
+          onConfirm={confirmDeleteAll}
+          onCancel={cancelDeleteAll}
+        />
+      )}
     </div>
   );
 }

@@ -43,6 +43,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { TradeTable } from '@components/trade/TradeTable.js';
 import { TradeForm } from '@components/trade/TradeForm.js';
+import { ConfirmDialog } from '@components/ui/ConfirmDialog.js';
 import type { EnrichedTrade } from '@calculations/tradeCalc.js';
 import type { RawTrade, RawTradeContent } from '@hooks/useTrades.js';
 import type { Account } from '@hooks/useAccounts.js';
@@ -198,19 +199,38 @@ export function RawPage({
     [editingTrade, addTrade, updateTrade],
   );
 
-  // Matches original delTrade(id) exactly — confirm() lives here, not in
-  // TradeTable. The confirm dialog and its message are UNCHANGED; only
-  // the function called after confirmation changed, from the raw
-  // deleteTrade to softDeleteTrade (which captures + bins the trade,
-  // then calls the same, unchanged deleteTrade internally).
-  const handleDelete = useCallback(
-    (tid: number) => {
-      if (window.confirm('Delete this trade?')) {
-        softDeleteTrade(tid);
-      }
-    },
-    [softDeleteTrade],
-  );
+  // Matches original delTrade(id) — the confirmation still lives HERE,
+  // not in TradeTable, and there is still exactly ONE confirmation per
+  // single-delete operation.
+  //
+  // v1.4: the decision moved off window.confirm and onto ConfirmDialog
+  // (see components/ui/ConfirmDialog.tsx for why). The confirmed action
+  // is byte-identical: softDeleteTrade(tid), which captures + bins the
+  // trade then calls the same, unchanged deleteTrade internally. The
+  // historical question text is preserved verbatim.
+  //
+  // `pendingDeleteTid` holds the exact tid the user clicked Del on,
+  // which is the same value handed to softDeleteTrade on Confirm — a
+  // React dialog is asynchronous where window.confirm was synchronous,
+  // so the target is captured rather than re-derived.
+  const [pendingDeleteTid, setPendingDeleteTid] = useState<number | null>(null);
+
+  const handleDelete = useCallback((tid: number) => {
+    setPendingDeleteTid(tid);
+  }, []);
+
+  // Cancel clears pending state and NOTHING else — softDeleteTrade is
+  // not called, so no trade is captured, binned, or removed.
+  const cancelDelete = useCallback(() => {
+    setPendingDeleteTid(null);
+  }, []);
+
+  const confirmDelete = useCallback(() => {
+    if (pendingDeleteTid === null) return;
+    const tid = pendingDeleteTid;
+    setPendingDeleteTid(null);
+    softDeleteTrade(tid);
+  }, [pendingDeleteTid, softDeleteTrade]);
 
   return (
     <>
@@ -232,6 +252,16 @@ export function RawPage({
           defaultAccId={defaultAccId}
           onSave={handleSave}
           onClose={closeForm}
+        />
+      )}
+
+      {pendingDeleteTid !== null && (
+        <ConfirmDialog
+          title="Delete this trade?"
+          confirmLabel="Delete Trade"
+          confirmVariant="danger"
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </>

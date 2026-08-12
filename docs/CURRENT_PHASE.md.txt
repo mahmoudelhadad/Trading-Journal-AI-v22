@@ -4,190 +4,175 @@
 
 ## Phase
 
-v1.3 — Manual Scale In / Out
+v1.4 — App-Owned Confirmation Reliability
 
 Status:
 
-IMPLEMENTATION + AUTOMATED VERIFICATION COMPLETE
-LOCAL RUNTIME ACCEPTANCE PASSED
-DOCUMENTATION + VERSION CLOSURE COMPLETE
-RELEASE-CANDIDATE COMMIT CREATED AND VERIFIED
-PUSH COMPLETED
-PRODUCTION DEPLOYMENT COMPLETED
-LIVE PRODUCTION VERIFICATION PASSED
+IMPLEMENTATION COMPLETE
+AUTOMATED VERIFICATION COMPLETE
+BROWSER RUNTIME ACCEPTANCE COMPLETE (RA-1 through RA-17)
+DOCUMENTATION + VERSION RELEASE PREPARATION COMPLETE
 
-FINAL RELEASE MARKER — the annotated `v1.3.0` tag on the final
-release-closure commit is the authoritative release marker for v1.3 and is
-controlled by the separate tag gate. The tag itself, in the repository, is the
-source of truth for whether that final release control has been executed; this
-document does not restate it.
+**v1.4 is NOT committed, NOT pushed, NOT tagged, and NOT deployed.**
 
-**v1.3.0 feature code is the deployed production feature version.** It was
-built and published by the repository's GitHub Pages workflow and verified
-live. **v1.2.0** (`de734061dafe8f1db78f044a28d1f85c78741ffe`) is the
-historical parent and released baseline of this feature work, not the current
-production feature version.
+At entry to this phase the currently tagged and released version is **v1.3.0**,
+whose annotated tag resolves to `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`.
+**Production is still running v1.3.0.** Nothing in this phase has changed what
+is deployed, and no claim is made here that production runs v1.4.
 
-A final documentation-only release-closure commit follows this record and may
-become the branch and build commit. It changes no source, no test, and no
-version metadata, so it cannot change Manual Scale behaviour or any other
-feature behaviour; the deployed feature code remains that of the
-release-candidate commit.
+The working tree carries the verified v1.4 release candidate. The next gate is
+**LOCAL GIT CLOSURE / COMMIT APPROVAL**.
 
-The `v1.1.0` and `v1.2.0` tags both exist and resolve to
-`92d9fde9957bd7e838f1b3e064804594af3d1b13` and
-`de734061dafe8f1db78f044a28d1f85c78741ffe` respectively; the CHANGELOG status
-lines for those two releases, which had read `NOT YET RELEASED`, were corrected
-to match that evidence during the v1.3 documentation gate. No historical
-feature summary, date, calculation, or narrative was rewritten.
-
-- Base release: **v1.2.0**
-- Target release: **v1.3.0**
+- Base release: **v1.3.0**
+- Target release: **v1.4.0**
 
 ---
 
 ## Objective
 
-Let a trade be entered by hand as the sequence of executions it actually was —
-multiple entries, partial exits, and re-entry while the position remains open —
-without introducing a second execution model, a migration, or any change to the
-aggregate surface that every existing calculation reads. Imported NinjaTrader
-trades, generic CSV/XLSX import, Forex/CFD behaviour, analytics, export, and
-backup/restore remain unchanged.
+Replace the six executable browser-native `window.confirm` destructive flows
+with application-owned React confirmation UI, while preserving every existing
+deletion and recovery business contract exactly.
+
+The defect this closes was recorded as a v1.3 known limitation: a browser
+configured to suppress dialogs silently disabled deletion. `window.confirm()`
+returns `false` immediately when the host suppresses dialogs, and every call
+site treated that as "the user cancelled" — so a capability failure was
+indistinguishable from a decision. The deletion code itself was never broken.
+
+v1.4 changes confirmation **delivery only**.
 
 ---
 
 ## Delivered Scope
 
-1. **Optional Manual Scale In / Out section.** A collapsed-by-default
-   `SCALE IN / OUT (Optional)` section on the manual trade form. A trade
-   entered without it takes the unchanged v1.2 path.
+1. **`ConfirmDialog`** — a bounded, application-owned React confirmation
+   component composed from the existing `Modal` + `Button` atoms and the
+   existing `COLORS` palette. No dependency, no provider, no context, no
+   portal, no `confirm()` shim, no destructive-action framework, and no `Modal`
+   redesign.
 
-2. **Multiple entries and partial exits.** Several entry legs and several
-   partial exit legs are supported, including a partial exit followed by a
-   re-entry while the position is still open.
+2. **Six migrated flows** — Single Trade Delete, Bulk Selected Delete, Delete
+   ALL, Recovery Bin Restore All, Recovery Bin Permanent Delete, Recovery Bin
+   Empty Bin.
 
-3. **Flat-to-flat enforcement.** A leg sequence returning the position to flat
-   before the final leg is rejected, naming the time it goes flat. Over-exit
-   and entry/exit quantity imbalance are also rejected.
+3. **Zero native dialog primitives** in these paths. Executable occurrences of
+   `window.confirm`, `window.alert`, and `window.prompt` in application source
+   are now zero. The primitive was removed, not wrapped or relocated.
 
-4. **Leg-derived aggregates.** While manual legs exist they are the form's
-   source of truth and derive `positionSize`, `entryPrice`, `exitPrice`,
-   `entryTime`, and `exitTime`. Downstream calculations stay aggregate-driven.
+4. **Bulk ID snapshot at dialog-open time**, so the confirmed count and the
+   acted-upon set are provably the same list. This preserves an atomicity
+   guarantee that `window.confirm`'s synchronous blocking previously supplied
+   for free.
 
-5. **Exact arithmetic and one numeric grammar.** Weighted averages use bigint
-   scaled-integer arithmetic. A single decimal grammar governs validation,
-   decimal-place limits, parsing, folding, and derivation, so no two layers can
-   disagree.
-
-6. **Honest manual provenance.** `sourceExecutionId` became optional; manual
-   legs omit it entirely rather than carrying a fabricated broker ID. Imported
-   legs are read-only.
+5. **One authorized copy correction** — the bulk-delete confirmation no longer
+   claims "This cannot be undone."
 
 ---
 
 ## Exact Implementation Manifest
 
-Production (7):
-- src/types/trade.ts
-- src/services/tradeValidation.ts
-- src/components/trade/TradeForm.tsx
-- src/components/trade/index.ts
-- src/calculations/scaleLegs.ts (new)
-- src/components/trade/ScaleLegsSection.tsx (new)
-- src/components/import/ImportWizard.tsx
+Production (4):
+- src/components/ui/ConfirmDialog.tsx (new)
+- src/pages/Raw.tsx
+- src/components/trade/TradeTable.tsx
+- src/components/trade/RecoveryBinPanel.tsx
 
-Tests (3):
-- src/calculations/scaleLegs.test.ts (new)
-- src/components/trade/ScaleLegsSection.test.ts (new)
-- src/services/tradeValidation.test.ts
+Tests (1):
+- src/components/ui/ConfirmDialog.test.ts (new)
 
-Documentation + version (5):
+Documentation + version (4):
 - docs/CHANGELOG.md.txt
 - docs/CURRENT_PHASE.md.txt
-- docs/ARCHITECTURE_DECISIONS.md.txt
 - package.json
 - package-lock.json
 
-The implementation manifest is exactly 10 paths — 7 production and 3 tests.
-The documentation/version gate wrote 5 further paths and touched no
-implementation path. `package-lock.json` was edited only in its two
-root-project `version` fields; no dependency, lockfile structure, npm-managed
-normalization, configuration, or build change occurred.
+The implementation manifest is exactly 5 paths — 4 production and 1 test. The
+documentation/version gate wrote 4 further paths and touched no implementation
+path, for a release-preparation total of **9 paths**.
+
+`package-lock.json` was edited only in its root-project `version` metadata; no
+dependency, lockfile structure, configuration, or build change occurred.
+
+**No `docs/ARCHITECTURE_DECISIONS.md.txt` change** — see Architecture Decision
+below.
+
+Deliberately **not** modified: `src/App.jsx`, `src/components/ui/Modal.tsx`,
+`src/components/ui/index.ts`, `src/components/settings/SettingsModal.tsx`,
+`src/components/trade/TradeRow.tsx`,
+`src/components/backtest/BacktestResultsList.tsx`, and all of `src/hooks`,
+`src/services`, `src/calculations`, and `src/sync`.
 
 ---
 
-## Manual Scale Contract
+## ConfirmDialog Contract
 
-- The Scale section is **optional and collapsed by default**. A trade with no
-  legs behaves exactly as it did in v1.2.
-- Direction is chosen once on the trade and inherited by every leg; it must be
-  set before legs are added.
-- Manual legs reuse the existing v1.2 `legs` array. There is no parallel manual
-  execution model and no new persisted structure.
-- Imported broker legs are **read-only**: the section renders read-only
-  whenever a source platform is present, and the save-candidate builder returns
-  imported trades untouched.
-- The v1.2 NinjaTrader import contract — two required CSV files, fail-closed
-  all-or-nothing reconciliation, four supported roots, composite-provenance
-  idempotency — is unchanged and was not reopened.
-
----
-
-## Logical Trade Contract
-
-One Journal Trade is one **completed flat-to-flat episode**, for manual entry
-exactly as for import. Multiple entries, partial exits, and re-entry all belong
-to the same trade while the position remains non-zero. The trade closes when
-the position returns to zero, and returning to zero before the final leg is an
-error rather than a second implicit trade.
+- `title` (required), `message` (**optional**), `confirmLabel` (required),
+  `onConfirm`, `onCancel`, `confirmVariant` (`danger` default, or `primary`).
+- When `message` is omitted, **no element is rendered in its place** — not an
+  empty node.
+- Severity reuses the existing `Button` variants. `primary` exists solely
+  because Restore All is additive rather than destructive; native `confirm`
+  carried no severity styling, so red would have invented a semantic the app
+  never had.
+- Nested **z-index 400**, via `Modal`'s existing `zIndex` prop.
+- Cancel is the explicit button plus `Modal`'s existing backdrop click. Escape
+  handling was deliberately not added, since that requires changing the shared
+  `Modal`.
+- Callers render conditionally; there is no `open` prop.
 
 ---
 
-## Aggregate Contract
+## Preserved Historical Contracts
 
-- `entryPrice` — quantity-weighted average of entry legs, exact.
-- `exitPrice` — quantity-weighted average of exit legs, exact.
-- `positionSize` — **total entry-side transacted quantity, not peak
-  simultaneous exposure.** For `Entry 2 → Exit 1 → Entry 1 → Exit 2` it is 3,
-  though exposure never exceeded 2. This is the only multiplier for which
-  `size × (weighted-average exit − weighted-average entry)` equals the exact
-  realized difference, and it matches what v1.2 already persists for imported
-  trades.
-- P/L, R, points, and outcome remain derived from the aggregates. No
-  calculation, analytic, chart, export, or backup path had to change.
+**Single Delete** — one confirmation; Cancel mutates nothing; Confirm invokes
+the existing soft-delete path unchanged.
 
-Weighted averages are computed in bigint scaled integers with long division and
-trimmed decimal output — never `Number`. Prices retain 8 decimal places and
-quantities 4, wider than the v1.2 adapter's 4, because manual entry must
-express five-decimal forex prices and fractional lots.
+**Bulk Selected Delete** — exactly one confirmation per batch, never N; IDs
+snapshotted at dialog-open time; every selected trade remains recoverable;
+selection preserved on Cancel and cleared after Confirm.
+
+**Delete ALL** — population is **all active `rawTrades`**, never the filtered
+or visible rows; **no count in the confirmation**; the Phase 29 snapshot,
+order, `_tid`, and `softDeleteMany` contracts are untouched. The dialog holds
+no trade context at all, which is what makes the filtered view structurally
+incapable of influencing the deleted population.
+
+**Restore All** — existing ordering, original `_tid`, and the one existing
+`importTrades()` reinsertion path.
+
+**Permanent Delete / Empty Bin** — Phase 31 exactly-once on Confirm and
+zero-on-Cancel semantics preserved; permanent delete passes the same captured
+Recovery entry ID; neither path mutates active trades; historical wording
+preserved.
 
 ---
 
-## Numeric and Time Contract
+## Copy Correction
 
-- One decimal grammar for every layer of the scale path.
-- Forex fractional lots accepted, including `.5`.
-- Futures quantities must be whole contracts.
-- Exponent notation rejected (`1e2`), as are `Infinity` and `0x1F`. `Number()`
-  accepts these and the bigint layer cannot parse them; that split is what
-  previously let an unparseable quantity reach the save pipeline.
-- Manual leg times are entered as `HH:mm` and persist as `HH:mm:00`. The trade
-  date propagates to every manual leg.
-- **UI editing order is stable while typing.** Rows do not move mid-edit.
-- **Canonical chronological order** governs validation, derivation, and save. A
-  saved trade reopens in canonical order.
+Exactly one historical confirmation string was intentionally changed.
+
+- Old bulk message: `This cannot be undone.`
+- New truth: the selected trades are moved to the Recovery Bin and can be
+  restored from there.
+
+The Delete ALL and Recovery Bin strings are preserved exactly — each is split
+across the dialog's title and message at its existing sentence boundary and
+reconstructs the original string character-for-character. Single Delete and
+Restore All keep their historical question text with no message added.
 
 ---
 
 ## Automated Verification
 
 - TypeScript: 0 errors.
-- ESLint: 0 errors and exactly 7 pre-existing warnings.
-- Full tests: **451 passing across 24 files** (baseline was 377 across 22).
+- ESLint: 0 errors and exactly 7 pre-existing warnings; no new warning.
+- Focused `ConfirmDialog` tests: 9/9.
+- Full tests: **460 passing across 25 files** (baseline was 451 across 24).
 - Production build: passed.
-- `npm run verify`: passed.
-- `git diff --check`: passed.
+- `git diff --check`: clean.
+- Static proof: executable `window.confirm` / `window.alert` / `window.prompt`
+  in `src/` = **0**.
 - Dependency, test-framework, and test-configuration changes: none.
 - No existing test was weakened, renamed, or removed.
 
@@ -195,62 +180,44 @@ express five-decimal forex prices and fractional lots.
 
 ## Runtime Evidence
 
-Local Runtime Acceptance **PASSED**. Verified through the real UI:
+Browser Runtime Acceptance **PASSED** — RA-1 through RA-17, all seventeen
+checks. Disposable synthetic user only; a 6-trade / 2-account dataset; the
+primary account was never used.
 
-- Legless regression: a trade entered without the Scale section is unchanged.
-- Scaled Futures example reconciling to `$4,020` gross.
-- Edit and reopen: a saved scaled trade reopens in canonical order with legs
-  and aggregates intact.
-- Partial exit followed by re-entry while the position remains open.
-- Rejection of over-exit, unbalanced entry/exit quantity, and flat-before-final
-  leg sets.
-- Forex `.5` accepted; `1e2` rejected; Futures whole-contract enforcement.
-- Trade date propagates to every manual leg.
-- Imported NinjaTrader legs read-only, with provenance intact.
-- Repeated NinjaTrader import remained idempotent.
-- Backup download, clear, and restore preserved legs at backup format
-  version 2.
-- CSV export remained aggregate-only.
-- The row-stability UX repair confirmed: the field under the cursor does not
-  change identity while a time is being typed.
-- Browser console clean.
+- Single Delete: Cancel mutated nothing; Confirm produced exactly one Recovery
+  entry, and restore **preserved the original `_tid`**.
+- Bulk: a 3-trade operation produced **exactly 3 Recovery entries** and
+  required **one confirmation only**; no per-trade dialog appeared. Cancel
+  retained the selection intact.
+- Delete ALL tested with **3 total active and 2 visible** under a strict-subset
+  account filter. Confirm deleted and captured **all 3 active trades**,
+  including the one **not visible** under the filter. No missing and no
+  duplicate Recovery entries; snapshot order and `_tid` values intact; the
+  dialog displayed no count.
+- Restore All restored every entry with original `_tid` values, with no
+  duplicate reinsertion.
+- Permanent Delete removed **only** the captured Recovery entry; the other
+  entry and all active trades were untouched.
+- Empty Bin affected the Recovery Bin only; active trades unchanged.
+- Nested modal integrity measured live: `SettingsModal` **z-index 300**,
+  `ConfirmDialog` **z-index 400**; a backdrop click closed only the
+  confirmation and left Settings open.
+- Backdrop-Cancel parity passed for **all six** flows, with zero callbacks
+  fired in every case.
+- **Deterministic native-dialog suppression proof.** With `window.confirm`,
+  `window.alert`, and `window.prompt` patched to record and throw, all six
+  flows were exercised through both Cancel and Confirm: `nativeCalls = []` and
+  `nativeErrors = []` — **zero native invocations, no thrown error**. The
+  original primitives were restored afterwards and re-verified native following
+  a hard refresh.
+- Hard refresh and authenticated-session smoke passed; Raw, Dashboard,
+  Settings, and Recovery Bin all render; no ErrorBoundary; zero console errors
+  attributable to v1.4.
 
-Runtime cleanup was completed and the dev server stopped.
+Disposable test data was cleaned up through the tested flows themselves.
 
-Live Deployment Verification **PASSED**, at a historical live-verification
-checkpoint. Production v1.3 was live-verified from release-candidate work
-published at commit `e428d742efb523ef2e1da78cb1befb07475933d0`, before the
-final release-closure documentation commit:
-
-- The GitHub Pages deployment workflow for that commit succeeded (build and
-  deploy jobs both green).
-- Production self-reported its build identity as **`v1.3.0 · build e428d74`**,
-  read from the application's own Settings metadata rather than inferred from
-  appearance.
-- Production authentication resolved against Supabase, including across a hard
-  reload, confirming the build-time environment configuration is present. The
-  console emitted nothing at all, so the missing-configuration error path never
-  fired.
-- Manual Scale smoke passed on the deployed build: the section is present,
-  collapsed by default, and correctly placed; visible row order stayed stable
-  while out-of-order times were typed; the leg-derived aggregates matched the
-  accepted example exactly at `4` / `28925` / `28975.25` with the five
-  aggregate fields locked and Stop Loss, Target, and Commission still editable;
-  Futures fractional quantities and exponent notation were both rejected, and a
-  Forex `.5` lot was accepted.
-- The same run also demonstrated canonical ordering live: the legs were entered
-  in an order that would have tripped the flat-before-final rule if evaluated
-  literally, and instead validated and derived correctly.
-- **No production data was persisted.** Trade count, trade store, and recovery
-  bin were unchanged and empty afterwards; nothing was saved, imported,
-  restored, or deleted.
-- Console and network were clean, with no failed asset, no routing failure, and
-  no application exception.
-
-Imported NinjaTrader read-only behaviour was **not** re-verified live: the
-disposable production account held no imported trades, and no fixture was
-imported merely to create one. Local Runtime Acceptance remains the evidence
-for imported-leg read-only rendering and provenance.
+Live production verification has **not** been performed for v1.4 and is not in
+scope until after commit, push, and deployment.
 
 ---
 
@@ -258,113 +225,110 @@ for imported-leg read-only rendering and provenance.
 
 - P0: none.
 - P1: none.
-- Repaired during implementation and re-verified: an optional
-  `sourceExecutionId` typecheck failure in `ImportWizard`; a numeric grammar
-  mismatch between validation and exact parsing; a vacuous `0n === 0n` balance
-  path where an unparseable quantity pair left both fold totals at zero and
-  passed the balance rule silently; and mid-edit row reordering. The row
-  movement issue is **resolved, not deferred**.
+- No implementation or test correction was required during runtime acceptance.
 
 ---
 
 ## Versioning
 
-- Package semantic version: **1.3.0**, written during the documentation/version
-  gate in `package.json` and in the two root-project version fields of
-  `package-lock.json`.
-- Release: **v1.3.0**, title `Manual Scale In / Out`.
-- The v1.3 release-candidate commit was **created and verified** against the
-  approved candidate fingerprint, **pushed**, **deployed** by the repository's
-  GitHub Pages workflow, and **verified live in production**.
-- Final release marker: the annotated `v1.3.0` tag on the final
-  release-closure commit, controlled by the separate tag gate.
+- Package semantic version: **1.3.0 → 1.4.0**, written during this
+  documentation/version gate in `package.json` and in the root-project version
+  metadata of `package-lock.json`, with no commit and no tag.
+- Release: **v1.4.0**, title `App-Owned Confirmation Reliability`.
+- The pre-commit local build correctly self-reports version `1.4.0` with build
+  identifier `aa03a04`, resolved by the existing local Git fallback. That is
+  expected: the future commit SHA cannot exist before the commit, and CI will
+  bake the new SHA after push.
+- No `v1.4.0` tag exists.
 
 ---
 
 ## Explicit Non-Scope
 
-v1.3 does not include:
+v1.4 does not include:
 
-- reversal through zero within one trade;
-- automatic splitting of a flat-before-final sequence into separate trades;
-- editing of imported broker legs;
-- a NinjaTrader XLSX adapter or additional broker sources;
-- additional NinjaTrader Futures roots beyond `NQ`, `ES`, `MNQ`, `MES`;
-- per-leg P/L, per-leg commission, or per-leg R;
-- leg-level CSV export or any change to export shape;
-- a backup format version change;
-- IndexedDB expansion or journal-wide migration;
-- Sync or Cutover reactivation;
-- cloud persistence or multi-device;
-- Backtesting V2;
-- AI/Agents or MCP.
+- account-delete confirmation;
+- Restore Point confirmation changes;
+- backup-file restore confirmation changes;
+- saved-filter delete confirmation;
+- checklist or custom-field delete confirmation;
+- List reset confirmation;
+- General Settings reset confirmation;
+- Backtest confirmation migration;
+- the `TradeForm` stale save-error fix;
+- mobile/responsive overhaul;
+- Escape / focus / `role="dialog"` overhaul;
+- unsaved-form protection;
+- automatic restore points or `maybeCreateAutoBackup()` wiring;
+- transactional or durable-ack deletion;
+- Recovery Bin redesign or relocation;
+- storage, schema, or namespace changes;
+- global undo;
+- a toast framework;
+- a destructive-action registry or framework.
+
+Two historical contracts remain deliberately deferred and were not reopened:
+**deletion does not automatically create a backup or restore point**, and
+**transactional / durable-ack deletion remains intentionally deferred.**
 
 ---
 
 ## Exit Criteria
 
-- [x] Optional collapsed Manual Scale In/Out section on the manual form.
-- [x] Multiple entries and partial exits supported.
-- [x] Partial exit then re-entry supported while the position remains open.
-- [x] Flat-before-final, over-exit, and unbalanced leg sets rejected.
-- [x] UI editing order stable while typing.
-- [x] Canonical chronological order used for validation, derivation, and save;
-      saved trades reopen in canonical order.
-- [x] Aggregates derived from legs; `positionSize` is total entry-side
-      transacted quantity.
-- [x] Exact bigint weighted averages.
-- [x] Forex fractional lots including `.5`; Futures whole contracts; exponent
-      notation rejected.
-- [x] Manual legs carry no fabricated broker provenance.
-- [x] Imported NinjaTrader legs read-only; provenance and idempotency
-      preserved.
-- [x] No migration; backup format version 2 unchanged; CSV aggregate-only.
-- [x] Typecheck, lint, tests, verify, diff checks, and production build passed
-      (451/451 across 24 files).
-- [x] Local Runtime Acceptance passed; no P0 and no P1.
+- [x] All six executable `window.confirm` flows replaced by app-owned UI.
+- [x] Executable `window.confirm` / `alert` / `prompt` in `src/` = 0, with the
+      primitive removed rather than wrapped.
+- [x] `ConfirmDialog` built only from existing `Modal` + `Button` + `COLORS`,
+      with no dependency, provider, shim, or `Modal` change.
+- [x] Optional `message` renders no placeholder node when omitted.
+- [x] Nested z-index 400 verified live above `SettingsModal`'s 300.
+- [x] Single Delete: one confirmation; Cancel no mutation; Confirm soft-deletes
+      and restores with original `_tid`.
+- [x] Bulk: exactly one confirmation per batch; IDs snapshotted; selection
+      preserved on Cancel and cleared after Confirm.
+- [x] Delete ALL: all active `rawTrades` affected, not the visible subset; no
+      count shown; Phase 29 contracts intact.
+- [x] Restore All: ordering, `_tid`, and single reinsertion path preserved.
+- [x] Permanent Delete / Empty Bin: exactly-once on Confirm, zero on Cancel,
+      same captured entry ID, active trades untouched.
+- [x] Only the bulk-delete copy corrected; all other wording preserved exactly.
+- [x] Typecheck, lint, focused tests, full tests, diff check, and production
+      build passed (460/460 across 25 files).
+- [x] Browser Runtime Acceptance RA-1 through RA-17 passed; no P0 and no P1.
+- [x] Deterministic native-confirm suppression proof: zero native invocations.
+- [x] Native primitives restored after instrumentation.
 - [x] Documentation and version metadata closure completed without widening
       scope.
-- [x] Release-candidate commit created and verified byte-exactly against the
-      approved candidate fingerprint.
-- [x] Push completed; remote and local `main` agreed at the verified
-      checkpoint.
-- [x] Production deployment completed by the GitHub Pages workflow.
-- [x] Live production verification passed, including production auth/Supabase
-      smoke and Manual Scale runtime smoke, with no production data persisted.
-
-Every v1.3 exit criterion — implementation, automated verification, Local
-Runtime Acceptance, documentation/version preparation, release-candidate
-commit, push, production deployment, and live production verification — is
-satisfied.
-
-Final release marker: the annotated `v1.3.0` tag on the final release-closure
-commit. That tag is a release-control action governed by its own gate, and the
-repository's tag itself is the source of truth for it; it is deliberately not
-tracked as a checkbox here.
+- [ ] Local Git closure / release-candidate commit — **next gate**.
+- [ ] Push, deployment, and live production verification.
+- [ ] Annotated `v1.4.0` tag.
 
 ---
 
 ## Architecture Decision
 
-**AD-022 — Manual Scale In/Out: Leg-Derived Aggregates and Stable Editing
-Order** was recorded. It fixes that the existing `legs` array is reused rather
-than paralleled, that legs are the form source of truth while downstream
-calculations stay aggregate-driven, that absent `sourceExecutionId` means no
-broker provenance, that UI editing order is deliberately independent of
-canonical calculation order, that `positionSize` means total entry-side
-transacted quantity, that imported broker legs are read-only, and that manual
-weighted aggregates use exact decimal/bigint arithmetic.
+**No new ADR was recorded, and `docs/ARCHITECTURE_DECISIONS.md.txt` was not
+modified.**
+
+v1.4 replaces a browser-native confirmation delivery primitive with an
+application-owned React component while deliberately preserving every existing
+deletion and recovery business contract. It changes no deletion architecture,
+no Recovery architecture, no storage, schema, or namespace, no backup format,
+no Restore semantics, no `_tid` identity, no Delete ALL population semantics,
+no transactional durability posture, and no automatic backup policy.
+
+`ConfirmDialog` is a bounded UI implementation choice with a local prop
+contract used at six call sites and carrying zero business logic — not a new
+cross-cutting architectural authority. The existing ADR set was reviewed and
+none of AD-001 through AD-022 governs confirmation delivery.
 
 ---
 
 ## Migration Impact
 
-None. Manual legs reuse the optional `legs` array introduced in v1.2, and
-`sourceExecutionId` became optional, which widens the accepted set and never
-narrows it. No storage key, namespace, or backup format version change —
-backup remains format version 2, and existing v1.2-shaped backups still
-restore. No historical data was rewritten and no trade was migrated to populate
-legs.
+None. No storage key, namespace, schema, or backup format version change. No
+historical data was rewritten and no trade was migrated. The change is confined
+to how a user's confirmation decision is captured.
 
 ---
 
@@ -373,61 +337,55 @@ legs.
 Non-blocking. None of these is a release blocker.
 
 P2:
+- Destructive actions **outside** the six migrated flows still have no
+  confirmation at all: account delete, restore-point delete and restore,
+  backup-file restore, saved-filter delete, checklist and custom-field delete,
+  and List reset. These were explicitly out of v1.4 scope.
+- There is no full DOM-level integration harness; Confirm/Cancel click wiring
+  is not automatically tested, because the harness is Node-only with no DOM.
+  Runtime acceptance is the evidence, and no fake event framework was added.
 - Externally malformed data carrying `sourceExecutionId` without a
-  `sourcePlatform` is not specifically classified.
-- There is no full DOM-level integration harness for `TradeForm.handleSave`;
-  the logic is unit-covered.
-- Pre-existing reliance on `window.confirm` for destructive actions: a browser
-  configured to suppress dialogs can silently disable deletion.
+  `sourcePlatform` is not specifically classified (carried from v1.3).
 
 P3:
-- Narrow/mobile visual coverage of the Scale section is partial.
-- The explicit equal-time A/B runtime case is partial, though unit-covered.
+- Escape does not dismiss a confirmation; Cancel and backdrop click are the
+  dismissal paths.
+- A stale JSDoc comment in `src/hooks/useTrades.ts` still names
+  `window.confirm`. Its substantive claim — that confirmation is a UI-layer
+  concern — remains true. The file is outside the frozen v1.4 manifest and was
+  deliberately not edited; this is a deferred documentation cleanup.
+- Narrow/mobile visual coverage of the Scale section is partial (from v1.3).
 - Externally malformed manual leg seconds other than `:00` are tolerated rather
-  than rejected.
+  than rejected (from v1.3).
 - Removing every leg from a never-saved trade can leave the unlocked aggregate
-  fields blank.
-- A pre-existing `Trade not saved` message can persist until the next save.
+  fields blank (from v1.3).
+- A pre-existing `Trade not saved` message can persist until the next save
+  (from v1.3).
 
 ---
 
 ## Repository State
 
-Durable release lineage for v1.3:
+Durable release lineage at entry to this phase:
 
-- v1.3 implementation/release-candidate commit:
+- Released v1.3 baseline and current `HEAD`:
+  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f` (annotated tag `v1.3.0`)
+- v1.3 release-candidate commit:
   `02a9a8425b941614922991f782cc442e752e7ba5`
-- Post-commit status documentation commit:
-  `e428d742efb523ef2e1da78cb1befb07475933d0`
 - Parent and released v1.2 baseline:
   `de734061dafe8f1db78f044a28d1f85c78741ffe`
 
-The approved 15-path candidate was committed **byte-exactly**: the deterministic
-blob fingerprint
-`27d1b210977b7972c5781ed6faaae5c78afb286a2554efef97719b9f134831b8`
-was reproduced identically from the working tree, from the index, and from the
-committed tree, so the commit contains exactly the verified release candidate
-and nothing else. The commit has a single parent and carries no amend.
-
-The release-candidate work was pushed to `origin/main` as a normal
-fast-forward. No amend, no force push, no branch, no pull request, no merge,
-and no rebase was used anywhere in this release; history was never rewritten.
-
-The release lineage is linear —
-`de734061…` → `02a9a842…` → `e428d742…` — each commit having exactly one
-parent, with no merge commit anywhere in the chain.
-
-The final documentation-only release-closure commit follows this record. It
-touches documentation only — no source, no test, no version metadata — so the
-deployed feature code is unchanged by it.
+`HEAD` is unchanged at `aa03a04…`. Nothing has been staged, committed, amended,
+tagged, pushed, deployed, merged, rebased, reset, cleaned, or stashed during
+v1.4. History has not been rewritten. The working tree holds the 9-path
+release-preparation set and nothing else.
 
 ---
 
 ## Release Control and Next Phase
 
-**Release-control mechanism for v1.3:** the annotated `v1.3.0` tag on the final
-release-closure commit. Tag creation is governed by its own gate, and the
-repository's tag is the source of truth for it.
+**Next gate: LOCAL GIT CLOSURE / COMMIT APPROVAL.**
 
-**Next development phase: USER DECISION.** No feature or major phase has been
-selected, and none is proposed here.
+After that, in order: push, GitHub Pages deployment, live production
+verification, and finally the annotated `v1.4.0` tag as the release marker.
+Each is governed by its own approval gate, and none has been performed.

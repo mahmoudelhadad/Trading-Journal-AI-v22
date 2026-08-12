@@ -1,3 +1,193 @@
+# v1.4 — App-Owned Confirmation Reliability
+
+Status:
+IMPLEMENTATION + AUTOMATED VERIFICATION + RUNTIME ACCEPTANCE COMPLETE —
+RELEASE PREPARATION COMPLETE — NOT YET COMMITTED, PUSHED, TAGGED, OR DEPLOYED
+
+Summary:
+Destructive confirmations are now rendered by the application instead of by the
+browser. Every one of the six executable `window.confirm` flows was replaced
+with an app-owned React dialog, closing the v1.3 known limitation that "a
+browser configured to suppress dialogs can silently disable deletion". The
+defect was never in the deletion code: `window.confirm()` returns `false`
+immediately when the host suppresses dialogs, and every call site read that as
+"the user cancelled", so a capability failure was indistinguishable from a
+decision and Delete silently did nothing. This release changes confirmation
+**delivery only**. Every historical deletion and recovery contract is preserved
+byte-for-byte in effect, and no business logic was moved or redefined.
+
+## The six migrated flows
+
+1. Single Trade Delete
+2. Bulk Selected Delete
+3. Delete ALL
+4. Recovery Bin Restore All
+5. Recovery Bin Permanent Delete
+6. Recovery Bin Empty Bin
+
+Executable occurrences of `window.confirm`, `window.alert`, and `window.prompt`
+in application source are now **zero**. The primitive was removed from these
+paths, not relocated: there is no helper, hook, utility, or wrapper around it.
+
+## ConfirmDialog
+
+- Application-owned React UI, composed from the **existing** `Modal` + `Button`
+  atoms and the existing `COLORS` palette. No new visual language.
+- **No dependency, no global provider, no context, no portal, no
+  promise-returning `confirm()` shim, no destructive-action registry.**
+- **No `Modal` redesign.** `Modal.tsx` was not modified.
+- `message` is **optional**, and when omitted **no element is rendered** in its
+  place — not an empty node.
+- Severity reuses the existing `Button` variants: `danger` by default, and
+  `primary` for Restore All, which is additive rather than destructive. Native
+  `confirm` carried no severity styling at all, so painting that button red
+  would have invented a semantic the app never had.
+- Nested **z-index 400**, passed through `Modal`'s existing `zIndex` prop, so a
+  confirmation opened inside Settings paints above it.
+- Cancel is the explicit button **plus** `Modal`'s existing backdrop click.
+  Escape handling was deliberately not added, as that would require changing
+  the shared `Modal`.
+- Callers render conditionally; there is no `open` prop.
+
+## Historical preservation
+
+**Single Delete** — exactly one confirmation. Cancel mutates nothing. Confirm
+invokes the existing soft-delete path unchanged, so the trade is captured to
+the Recovery Bin before removal and restores with its original `_tid`.
+
+**Bulk Selected Delete** — exactly one confirmation for the whole batch, never
+one per trade. The selected IDs are **snapshotted at dialog-open time**, so the
+confirmed count and the acted-upon set are provably the same list; this is
+contract preservation, not a behaviour change, because `window.confirm` blocked
+the thread where a React dialog does not. Every selected trade remains
+recoverable. Selection is **preserved on Cancel** and cleared after Confirm.
+
+**Delete ALL** — the population remains **all active `rawTrades`**, never the
+filtered or visible rows. The dialog deliberately carries **no count and no
+trade context at all**, which is what makes the filtered view structurally
+incapable of influencing the deleted population. The Phase 29 contracts —
+`RawTrade` snapshot, snapshot order, one Recovery entry per trade, `_tid`
+preservation, capture before deletion, and the `softDeleteMany` batch
+architecture — were not touched.
+
+**Restore All** — existing ordering, original `_tid` values, and the single
+existing `importTrades()` reinsertion path, all unchanged.
+
+**Permanent Delete / Empty Bin** — the Phase 31 semantics hold: Cancel invokes
+the callback **zero** times, Confirm invokes it **exactly once**, permanent
+delete passes the **same Recovery entry ID** captured when the dialog opened,
+and neither path mutates active trades. Historical wording preserved.
+
+## The one intentional copy correction
+
+The bulk-delete confirmation previously ended `This cannot be undone.` That was
+factually wrong: the bulk path routes through soft delete, so the trades land
+in the Recovery Bin and **are** restorable. It now reads:
+
+> Delete {n} selected trades?
+> They will be moved to the Recovery Bin and can be restored from there.
+
+This is the **only** historical confirmation wording intentionally changed in
+v1.4. The Delete ALL and Recovery Bin strings are preserved exactly — each is
+split across the dialog's title and message at its existing sentence boundary
+and reconstructs the original string character-for-character. Single Delete and
+Restore All keep their historical question text with no message added.
+
+## Verification
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors and the same 7 pre-existing warnings; no new warning.
+- **460 tests passing across 25 files** (baseline was 451 across 24). No
+  existing test was weakened, renamed, or removed.
+- Production build passed.
+- `git diff --check`: clean.
+- No dependency, test-framework, or test-configuration change.
+
+`ConfirmDialog.test.ts` covers the reusable render contract only — title,
+optional message present and absent, the absence of a placeholder node, the
+Cancel label, the confirm label, and both variants flowing through the real
+`Button` contract. Click wiring is not assertable in the Node-only harness and
+is deliberately not faked; it is covered by runtime acceptance below.
+
+## Runtime acceptance
+
+RA-1 through RA-17 **all passed**, against a disposable synthetic user only, on
+a 6-trade / 2-account dataset.
+
+- Single Delete: Cancel mutated nothing; Confirm captured exactly one Recovery
+  entry, and restoring it **preserved the original `_tid`**.
+- Bulk: a 3-trade operation produced **exactly 3 Recovery entries** and
+  required **one confirmation only** — no per-trade dialog appeared. Cancel
+  retained the selection.
+- Delete ALL tested with **3 total active trades and 2 visible** under a
+  strict-subset account filter. Confirm deleted and captured **all 3**,
+  including the trade that was **not visible** under the filter. No missing and
+  no duplicate Recovery entries; snapshot order and `_tid` values intact. The
+  dialog displayed no count.
+- Restore All restored every entry with original `_tid` values and no duplicate
+  reinsertion.
+- Permanent Delete removed **only** the captured entry, leaving the other and
+  all active trades untouched.
+- Empty Bin affected the Recovery Bin only; active trades were unchanged.
+- Nested modal integrity: `SettingsModal` measured at **z-index 300** and
+  `ConfirmDialog` at **z-index 400**; a backdrop click closed only the
+  confirmation and left Settings open.
+- Backdrop-cancel parity passed for **all six** flows — identical semantics to
+  the Cancel button, zero callbacks fired.
+- **Deterministic native-dialog proof.** With `window.confirm`, `window.alert`,
+  and `window.prompt` patched to record and throw, all six flows were exercised
+  through both Cancel and Confirm. Result: `nativeCalls = []` and
+  `nativeErrors = []` — **zero native invocations**. The original primitives
+  were restored afterwards and re-verified native following a hard refresh.
+- Hard refresh and authenticated-session smoke passed; zero runtime errors
+  attributable to v1.4; no P0 and no P1; the primary account was never used.
+
+## Unchanged
+
+No change to deletion architecture, Recovery architecture, storage, schema,
+namespaces, backup format, Restore semantics, `_tid` identity, Delete ALL
+population semantics, business calculations, or trade validation. `App.jsx`,
+every hook, every service, every calculation, the sync layer, and `Modal.tsx`
+were not modified.
+
+## Explicitly not included
+
+v1.4 deliberately did **not** introduce: account-delete confirmation; Restore
+Point confirmation changes; backup-file restore confirmation changes;
+saved-filter delete confirmation; checklist or custom-field delete
+confirmation; List reset confirmation; General Settings reset confirmation;
+Backtest confirmation migration; the `TradeForm` stale save-error fix; a
+mobile/responsive overhaul; an Escape/focus/`role="dialog"` overhaul; automatic
+restore points; `maybeCreateAutoBackup()` wiring; transactional or durable-ack
+deletion; a Recovery Bin redesign; storage or schema changes; global undo; a
+toast framework; or a destructive-action registry/framework.
+
+Two historical contracts remain deliberately deferred and were not reopened:
+**deletion does not automatically create a backup or restore point**, and
+**transactional / durable-ack deletion remains intentionally deferred.**
+
+## Known limitations
+
+Non-blocking; none is a release blocker.
+
+- Escape does not dismiss a confirmation; Cancel and backdrop click are the
+  dismissal paths. Adding Escape requires changing the shared `Modal`.
+- Confirm/Cancel click wiring is not covered by an automated test, because the
+  harness is Node-only with no DOM. Runtime acceptance is the evidence.
+- Destructive actions **outside** the six migrated flows still have no
+  confirmation at all: account delete, restore-point delete and restore,
+  backup-file restore, saved-filter delete, checklist and custom-field delete,
+  and List reset.
+- A stale JSDoc comment in `src/hooks/useTrades.ts` still refers to
+  `window.confirm`. Its substantive claim — that confirmation is a UI-layer
+  concern — remains true. The file is outside the frozen v1.4 manifest and was
+  deliberately not edited.
+- The v1.3 P3 items are carried forward unchanged: partial narrow/mobile Scale
+  coverage, blank aggregates after removing every leg from a never-saved trade,
+  and a `Trade not saved` message that can persist until the next save.
+
+---
+
 # v1.3 — Manual Scale In / Out
 
 Status:

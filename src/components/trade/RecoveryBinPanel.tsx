@@ -13,11 +13,12 @@
  * calculations/recoveryBin.ts's file header for the full rationale.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { COLORS as C } from '@constants/lists.js';
 import { Card } from '@components/ui/Card.js';
 import { Badge } from '@components/ui/Badge.js';
 import { EmptyState } from '@components/ui/EmptyState.js';
+import { ConfirmDialog } from '@components/ui/ConfirmDialog.js';
 import { RECOVERY_BIN_RETENTION_MS } from '@calculations/recoveryBin.js';
 import type { RecoveryBinEntry } from '@calculations/recoveryBin.js';
 
@@ -29,7 +30,8 @@ export interface RecoveryBinPanelProps<T> {
   /**
    * "Restore All" — restores every currently-listed entry in one
    * operation. This component owns the single confirmation dialog for
-   * this action (`window.confirm('Restore all deleted trades?')`),
+   * this action ("Restore all deleted trades?" — delivered by
+   * ConfirmDialog since v1.4, previously the browser's native dialog),
    * matching how other bulk actions elsewhere in the app (e.g.
    * TradeTable's bulk delete) keep their confirm next to their own
    * button rather than pushing it up to the caller. onRestoreAll
@@ -54,22 +56,48 @@ function daysRemaining(deletedAt: number): number {
 export function RecoveryBinPanel<T>({
   entries, onRestore, onRestoreAll, onPermanentlyDelete, onEmptyBin,
 }: RecoveryBinPanelProps<T>) {
+  // ── v1.4 confirmation state ──────────────────────────────
+  // Each of the three actions below used to gate on window.confirm.
+  // The decision now lives in ordinary React state and is rendered by
+  // ConfirmDialog; every confirmed callback, and every Cancel path, is
+  // otherwise unchanged. `pendingPurgeId` holds the EXACT Recovery
+  // entry id the user clicked, and that same captured id — never a
+  // re-derived one — is what onPermanentlyDelete receives.
+  const [pendingRestoreAll, setPendingRestoreAll] = useState(false);
+  const [pendingPurgeId, setPendingPurgeId]       = useState<string | null>(null);
+  const [pendingEmptyBin, setPendingEmptyBin]     = useState(false);
+
   function handleRestoreAllClick() {
-    if (window.confirm('Restore all deleted trades?')) {
-      onRestoreAll();
-    }
+    setPendingRestoreAll(true);
   }
 
   function handlePermanentlyDeleteClick(id: string) {
-    if (window.confirm('Permanently delete this Recovery Bin entry? This action cannot be undone through the Recovery Bin.')) {
-      onPermanentlyDelete(id);
-    }
+    setPendingPurgeId(id);
   }
 
   function handleEmptyBinClick() {
-    if (window.confirm('Permanently delete ALL Recovery Bin entries? This action cannot be undone through the Recovery Bin.')) {
-      onEmptyBin();
-    }
+    setPendingEmptyBin(true);
+  }
+
+  // Each confirm handler clears its own pending state FIRST, which
+  // unmounts the dialog, then invokes the existing callback exactly
+  // once. Cancel clears the same state and invokes nothing — none of
+  // these paths touches active trades in either direction.
+  function confirmRestoreAll() {
+    setPendingRestoreAll(false);
+    onRestoreAll();
+  }
+
+  function confirmPermanentlyDelete() {
+    const id = pendingPurgeId;
+    if (id === null) return;
+    setPendingPurgeId(null);
+    onPermanentlyDelete(id);
+  }
+
+  function confirmEmptyBin() {
+    setPendingEmptyBin(false);
+    onEmptyBin();
   }
 
   return (
@@ -112,6 +140,46 @@ export function RecoveryBinPanel<T>({
             </div>
           ))}
         </div>
+      )}
+
+      {/* ── Restore All confirmation ─────────────────────────── */}
+      {/* Additive, not destructive — hence the primary confirm button
+          rather than danger. Historical wording, verbatim. */}
+      {pendingRestoreAll && (
+        <ConfirmDialog
+          title="Restore all deleted trades?"
+          confirmLabel="Restore All"
+          confirmVariant="primary"
+          onConfirm={confirmRestoreAll}
+          onCancel={() => setPendingRestoreAll(false)}
+        />
+      )}
+
+      {/* ── Permanent delete confirmation ────────────────────── */}
+      {/* title + message reconstruct the frozen Phase 31 string. */}
+      {pendingPurgeId !== null && (
+        <ConfirmDialog
+          title="Permanently delete this Recovery Bin entry?"
+          message="This action cannot be undone through the Recovery Bin."
+          confirmLabel="Delete Permanently"
+          confirmVariant="danger"
+          onConfirm={confirmPermanentlyDelete}
+          onCancel={() => setPendingPurgeId(null)}
+        />
+      )}
+
+      {/* ── Empty Bin confirmation ───────────────────────────── */}
+      {/* title + message reconstruct the frozen Phase 31 string.
+          No count, no typed confirmation. */}
+      {pendingEmptyBin && (
+        <ConfirmDialog
+          title="Permanently delete ALL Recovery Bin entries?"
+          message="This action cannot be undone through the Recovery Bin."
+          confirmLabel="Empty Bin"
+          confirmVariant="danger"
+          onConfirm={confirmEmptyBin}
+          onCancel={() => setPendingEmptyBin(false)}
+        />
       )}
     </Card>
   );

@@ -1,8 +1,38 @@
 # v1.4 — App-Owned Confirmation Reliability
 
 Status:
-IMPLEMENTATION + AUTOMATED VERIFICATION + RUNTIME ACCEPTANCE COMPLETE —
-RELEASE PREPARATION COMPLETE — NOT YET COMMITTED, PUSHED, TAGGED, OR DEPLOYED
+FUNCTIONAL ACCEPTANCE COMPLETE — RELEASE CLOSURE RECORDED
+
+Release marker:
+ANNOTATED `v1.4.0` TAG
+
+Release evidence:
+- **Functional acceptance for v1.4 is anchored to commit
+  `790f7eea242aaf64600adfd9067a582f34a00b1a`.** That commit carries the
+  application implementation which passed automated verification, localhost
+  Runtime Acceptance, and Production functional acceptance.
+- `main` was fast-forward pushed from
+  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f` to `790f7ee`.
+- The repository's `Deploy to GitHub Pages` workflow, run **#7**, deployed
+  source SHA `790f7ee` successfully, with the `build` and `deploy` jobs both
+  green.
+- **At the time of full Production functional acceptance, the deployed
+  application identified itself as `v1.4.0 · build 790f7ee`**, read from its
+  own Settings build metadata rather than inferred.
+- Production functional acceptance passed with no P0 and no P1 findings.
+
+Documentation-only descendants:
+After functional acceptance, documentation-only descendant commits close the
+release record without changing application source, tests, package metadata,
+configuration, workflow, storage behaviour, or business behaviour. The
+functional application evidence remains anchored to `790f7ee`.
+
+A deployment built from such a descendant may nevertheless carry a different
+build SHA and a different generated bundle hash, because build identity embeds
+the Git commit. Repository application content being unchanged is therefore
+**not** a claim that the generated production artifact is byte-identical. A
+docs-only deployment accordingly warrants identity and boot smoke only, not
+full functional re-acceptance.
 
 Summary:
 Destructive confirmations are now rendered by the application instead of by the
@@ -141,6 +171,47 @@ a 6-trade / 2-account dataset.
   were restored afterwards and re-verified native following a hard refresh.
 - Hard refresh and authenticated-session smoke passed; zero runtime errors
   attributable to v1.4; no P0 and no P1; the primary account was never used.
+
+## Live production verification
+
+Verified on the deployed GitHub Pages build at
+`790f7eea242aaf64600adfd9067a582f34a00b1a`, using a disposable test account
+only. The primary journal account was never used, opened, or inspected.
+
+- The Pages deployment workflow run **#7** succeeded on that exact source SHA,
+  with both the `build` and `deploy` jobs green.
+- Production self-reported **`v1.4.0 · build 790f7ee`** in Settings. The bundle
+  served at that time, `index-DJovhp3Y.js`, carried the baked identity with no
+  `__APP_VERSION__` / `__APP_COMMIT__` placeholder remaining, which confirmed
+  production was not serving cached v1.3 assets.
+- **That bundle contained zero executable `window.confirm` calls.**
+- Single Delete: app-owned dialog, Cancel mutated nothing, Confirm moved the
+  trade to the Recovery Bin.
+- Bulk Delete: **exactly one** confirmation for the batch with the corrected
+  Recovery Bin copy; Cancel preserved both the data and the selection; Confirm
+  removed exactly the selected trades; **no per-trade confirmations appeared**.
+- Delete ALL: dialog showed **no trade count**. Tested with a strict-subset
+  filter live — **3 total active trades, 1 visible** — and Confirm deleted and
+  captured **all three**, not merely the visible row, with original `_tid`
+  values, no missing and no duplicate Recovery entries. The Phase 29
+  population invariant therefore holds on the deployed artifact.
+- Restore All restored every entry with original `_tid` values; Permanent
+  Delete removed only the captured entry; Empty Bin affected the Recovery Bin
+  only and left active trades untouched. Frozen Phase 31 wording confirmed
+  live.
+- Nested modal integrity: `SettingsModal` at z-index 300 and `ConfirmDialog`
+  at z-index 400; a backdrop click cancelled only the inner dialog, left
+  Settings open, and mutated no Recovery data.
+- **Deterministic native-dialog proof on production.** With `window.confirm`,
+  `window.alert`, and `window.prompt` patched to record and throw, Single
+  Delete, Bulk Delete, and a Recovery Bin destructive action were each
+  exercised through Cancel and Confirm: `nativeCalls = []` and
+  `nativeErrors = []` — **zero native invocations**. The original primitives
+  were restored afterwards and re-verified native following a hard refresh.
+- Authenticated smoke passed across Dashboard, Raw, Settings, and Recovery
+  Bin, including a hard refresh with the session surviving. Console was
+  completely clean, and no P0 or P1 finding was recorded.
+- All disposable synthetic data was cleaned up through the tested flows.
 
 ## Unchanged
 

@@ -10,21 +10,65 @@ Status:
 
 IMPLEMENTATION COMPLETE
 AUTOMATED VERIFICATION COMPLETE
-BROWSER RUNTIME ACCEPTANCE COMPLETE (RA-1 through RA-17)
-DOCUMENTATION + VERSION RELEASE PREPARATION COMPLETE
+LOCAL RUNTIME ACCEPTANCE COMPLETE (RA-1 through RA-17)
+DOCUMENTATION + VERSION CLOSURE COMPLETE
+LOCAL GIT RELEASE-CANDIDATE CLOSURE COMPLETE
+PUSH COMPLETE
+PRODUCTION DEPLOYMENT COMPLETE
+PRODUCTION FUNCTIONAL ACCEPTANCE COMPLETE
 
-**v1.4 is NOT committed, NOT pushed, NOT tagged, and NOT deployed.**
+Package semantic version: **1.4.0**.
 
-At entry to this phase the currently tagged and released version is **v1.3.0**,
-whose annotated tag resolves to `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`.
-**Production is still running v1.3.0.** Nothing in this phase has changed what
-is deployed, and no claim is made here that production runs v1.4.
+- Base release: **v1.3.0** (annotated tag resolving to
+  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`) — the historical baseline this
+  work departed from.
+- Target release: **v1.4.0**.
 
-The working tree carries the verified v1.4 release candidate. The next gate is
-**LOCAL GIT CLOSURE / COMMIT APPROVAL**.
+---
 
-- Base release: **v1.3.0**
-- Target release: **v1.4.0**
+## Release Evidence
+
+**The v1.4 application implementation that received full automated, localhost
+Runtime, and Production functional acceptance is commit
+`790f7eea242aaf64600adfd9067a582f34a00b1a`.** All functional evidence in this
+record is anchored there.
+
+- `main` was fast-forward pushed from `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`
+  to `790f7ee`.
+- GitHub Pages workflow run **#7** deployed source SHA `790f7ee` successfully,
+  with the `build` and `deploy` jobs both green.
+- **At the time of full Production functional acceptance, the deployed
+  application identified itself as `v1.4.0 · build 790f7ee`**, read from its own
+  Settings build metadata rather than inferred.
+- That acceptance covered the six migrated confirmation flows, the Phase 29
+  Delete ALL population invariant, the native-confirm suppression proof,
+  nested-modal behaviour, and authenticated Production smoke.
+- No P0 and no P1 findings.
+
+---
+
+## Release Marker
+
+The canonical release marker for this version is the annotated tag **`v1.4.0`**.
+
+The Git repository's tag reference is authoritative for which commit carries
+that marker. It is deliberately not restated as mutable prose here.
+
+---
+
+## Documentation-Only Descendants
+
+After functional acceptance, documentation-only descendant commits may close
+the release record without changing application source, tests, package
+metadata, configuration, workflow, storage behaviour, or business behaviour.
+The functional application evidence remains anchored to `790f7ee`.
+
+Because build identity embeds the Git commit SHA, a deployment built from such
+a descendant may carry a different build identity, a different JavaScript
+bundle hash, and different generated bundle bytes. **Repository application
+content being unchanged is therefore not a claim that the generated production
+artifact is byte-identical.** A docs-only deployment accordingly warrants
+identity and boot smoke only, not full functional re-acceptance.
 
 ---
 
@@ -216,8 +260,32 @@ primary account was never used.
 
 Disposable test data was cleaned up through the tested flows themselves.
 
-Live production verification has **not** been performed for v1.4 and is not in
-scope until after commit, push, and deployment.
+Production Live Acceptance **PASSED**, on the deployed GitHub Pages build at
+`790f7eea242aaf64600adfd9067a582f34a00b1a`, using a disposable test account
+only. The primary journal account was never used, opened, or inspected.
+
+- Pages workflow run **#7** succeeded on that source SHA, `build` and `deploy`
+  jobs both green; production self-reported **`v1.4.0 · build 790f7ee`**.
+- The deployed bundle `index-DJovhp3Y.js` carries the baked identity with no
+  placeholder remaining, and contains **zero executable `window.confirm`
+  calls**.
+- Single Delete, Bulk Delete, Delete ALL, Restore All, Permanent Delete, and
+  Empty Bin all presented the app-owned dialog with the frozen wording; Cancel
+  mutated nothing in every case; Confirm performed exactly the intended action.
+- Bulk required **one** confirmation for the batch, with no per-trade dialogs,
+  and Cancel preserved the selection.
+- Delete ALL displayed **no count** and, tested live with a strict-subset
+  filter showing **1 of 3 active trades**, deleted and captured **all three**.
+  The Phase 29 population invariant holds on the deployed artifact.
+- Nested modal integrity confirmed live: `SettingsModal` z-index 300,
+  `ConfirmDialog` z-index 400, backdrop cancelling only the inner dialog.
+- **Deterministic native-dialog proof on production:** with `confirm`, `alert`,
+  and `prompt` patched to record and throw, the representative flows were
+  exercised through Cancel and Confirm with `nativeCalls = []` and
+  `nativeErrors = []` — zero native invocations. Originals restored and
+  re-verified native after a hard refresh.
+- Authenticated smoke and hard refresh passed; console completely clean; no P0
+  and no P1; disposable data cleaned up through the tested flows.
 
 ---
 
@@ -231,15 +299,16 @@ scope until after commit, push, and deployment.
 
 ## Versioning
 
-- Package semantic version: **1.3.0 → 1.4.0**, written during this
+- Package semantic version: **1.3.0 → 1.4.0**, written during the
   documentation/version gate in `package.json` and in the root-project version
-  metadata of `package-lock.json`, with no commit and no tag.
+  metadata of `package-lock.json`. No dependency, lockfile structure, or
+  configuration change accompanied it.
 - Release: **v1.4.0**, title `App-Owned Confirmation Reliability`.
-- The pre-commit local build correctly self-reports version `1.4.0` with build
-  identifier `aa03a04`, resolved by the existing local Git fallback. That is
-  expected: the future commit SHA cannot exist before the commit, and CI will
-  bake the new SHA after push.
-- No `v1.4.0` tag exists.
+- Build identity is resolved at build time from the Git commit. The
+  pre-commit local build therefore reported the then-current fallback SHA,
+  and CI bakes the SHA of whichever commit it builds. Semantic version and
+  build SHA are independent: the former comes from `package.json`, the latter
+  from Git.
 
 ---
 
@@ -299,9 +368,15 @@ Two historical contracts remain deliberately deferred and were not reopened:
 - [x] Native primitives restored after instrumentation.
 - [x] Documentation and version metadata closure completed without widening
       scope.
-- [ ] Local Git closure / release-candidate commit — **next gate**.
-- [ ] Push, deployment, and live production verification.
-- [ ] Annotated `v1.4.0` tag.
+- [x] Local Git release-candidate closure
+      (`790f7eea242aaf64600adfd9067a582f34a00b1a`, single parent, no amend).
+- [x] Push, deployment, and Production functional acceptance — pushed as a
+      normal fast-forward, deployed by Pages run #7 on that exact SHA, and
+      accepted with the deployed application identifying itself as
+      `v1.4.0 · build 790f7ee`.
+
+The annotated `v1.4.0` tag is the release-control marker and is authoritative
+in Git rather than duplicated as mutable checklist state.
 
 ---
 
@@ -366,26 +441,46 @@ P3:
 
 ## Repository State
 
-Durable release lineage at entry to this phase:
+Durable release lineage:
 
-- Released v1.3 baseline and current `HEAD`:
-  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f` (annotated tag `v1.3.0`)
+- Released v1.2 baseline:
+  `de734061dafe8f1db78f044a28d1f85c78741ffe`
 - v1.3 release-candidate commit:
   `02a9a8425b941614922991f782cc442e752e7ba5`
-- Parent and released v1.2 baseline:
-  `de734061dafe8f1db78f044a28d1f85c78741ffe`
+- v1.3.0 release baseline (annotated tag `v1.3.0`):
+  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`
+- **v1.4 functionally accepted application commit:**
+  `790f7eea242aaf64600adfd9067a582f34a00b1a`
+- Documentation-only closure descendant(s): release-record maintenance only;
+  no application, test, package, or configuration change.
 
-`HEAD` is unchanged at `aa03a04…`. Nothing has been staged, committed, amended,
-tagged, pushed, deployed, merged, rebased, reset, cleaned, or stashed during
-v1.4. History has not been rewritten. The working tree holds the 9-path
-release-preparation set and nothing else.
+`790f7ee` was created from a nine-path staged manifest — five implementation
+and test paths plus four documentation/version paths — and carries exactly
+that content: 9 files changed, 923 insertions, 345 deletions. It has a single
+parent and no amend. It was pushed to `origin/main` as a normal fast-forward
+`aa03a04..790f7ee`. No force push, no branch, no pull request, no merge, and
+no rebase was used; history has not been rewritten, and the lineage
+`de734061…` → `02a9a842…` → `e428d742…` → `aa03a04…` → `790f7ee…` is linear.
+
+Documentation-only closure descendants exist because the release documents,
+written during the release-preparation gate, described release state that
+later steps superseded — statements true when written and stale afterwards.
+Those descendants change **documentation only**: no application, test,
+package, storage, workflow, or configuration content. The v1.4 functional
+evidence therefore remains anchored to `790f7ee`, the commit that was deployed
+and functionally accepted in production.
 
 ---
 
 ## Release Control and Next Phase
 
-**Next gate: LOCAL GIT CLOSURE / COMMIT APPROVAL.**
+**Release-control mechanism for v1.4:** the annotated `v1.4.0` tag. Tag
+creation is governed by its own gate, and the repository's tag reference is the
+source of truth for which commit carries the marker.
 
-After that, in order: push, GitHub Pages deployment, live production
-verification, and finally the annotated `v1.4.0` tag as the release marker.
-Each is governed by its own approval gate, and none has been performed.
+Local Git release-candidate closure, push, GitHub Pages deployment, and
+Production functional acceptance were all completed against `790f7ee`, which
+remains the anchor for every functional claim in this record.
+
+**Next development phase: USER DECISION.** No feature or major phase has been
+selected, and none is proposed here.

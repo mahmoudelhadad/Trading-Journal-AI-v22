@@ -2742,3 +2742,334 @@ contract); AD-017 (win-rate and outcome denominators).
   which point it must be a distinct field rather than a reinterpretation of
   `positionSize`.
 - Leg-level export or a backup format change is approved.
+
+---
+
+# AD-023
+
+## Title
+
+Historical Market Data Is a Reconstructable Cache Domain in Its Own IndexedDB
+Database, Behind a Provider-Independent Reader
+
+---
+
+## Status
+
+Approved
+
+---
+
+## Date
+
+2026-08-13
+
+---
+
+## Context
+
+The Backtest product needs historical NQ/ES 1-minute bars. Discovery
+established that the existing feature named "Backtest" is filter-based
+analytics over already-journalled trades: it contains no market data, no time
+axis, and no order model. Historical bars are therefore a genuinely new data
+domain rather than an extension of an existing one.
+
+That domain does not behave like journal data. AD-014 already split local
+persistence into two classes: Class A synced business data reached only through
+the resolver, and Class B unsynced local data such as saved filters, the
+Recovery Bin, and backtest results. Both classes are **user-owned**: the user
+authored them, and losing them is harm.
+
+Historical bars are neither. They are an external market fact the application
+holds a copy of. Losing them costs a re-import, not data. They are also large:
+roughly ten million bars for NQ and ES over the available history, which is two
+to three orders of magnitude beyond anything the journal stores.
+
+Two further constraints shaped the decision. `services/indexedDb.ts` exposes no
+cursor, no index creation, and a `getAll` that returns an entire store, so any
+schema needing range scans would have required modifying a frozen Phase 6a
+primitive. And AD-014's own revisit clause records that adding an object store
+to the journal database would be this project's first real schema bump, which
+gap-analysis finding G-3 (`onIndexedDbBlocked` has no subscriber) must be
+resolved before.
+
+Finally, the source is not permanent. The first ingestion path is a local
+NinjaTrader text export, chosen because it costs nothing; a shared historical
+service or a commercial provider may follow. Whatever the Backtest engine reads
+through must survive that change without being rewritten.
+
+---
+
+## Decision
+
+1. **Historical market data is a third data class: a reconstructable cache.**
+   It is not Class A and not Class B. It never participates in the journal's
+   resolver, in sync — including sync tombstones and Tier 1/2 sync conflict
+   detection — in Backup/Restore, or in the Recovery Bin, and it may be
+   discarded at any time. This is a statement about the *journal's*
+   synchronization machinery, not a claim that the domain has no internal
+   safety mechanisms: it has its own deletion tombstone (decision 10) and its
+   own import conflict rule (decision 8's companion in the Reason section),
+   both local to this domain.
+
+2. **It lives in its own IndexedDB database,**
+   `trading-journal-ai-marketdata` version 1, with exactly two object stores —
+   `series` keyed by `seriesId`, and `bar_chunks` keyed by `chunkId` — and **no
+   indexes**. The journal database keeps its name, its version, and its six
+   stores unchanged.
+
+3. **`services/indexedDb.ts` is reused unmodified.** The market-data database
+   is a new caller of the existing generic primitive, not a new primitive.
+   Every access path is a primary-key `get`, which is what makes the absent
+   cursor and index support a non-issue rather than a workaround.
+
+4. **Series identity is provider-neutral; provenance carries the provider.**
+   A series is `{ root, expiryYear, expiryMonth, timeframe }`. No provider
+   token appears in that identity, in `seriesId`, in `chunkId`, in a bar, or in
+   any reader request. The provider appears only in the import descriptor and
+   in stored import provenance.
+
+5. **Canonical time is a UTC instant in epoch milliseconds, stamped at bar
+   start.** The NinjaTrader source is documented as UTC End-of-Bar, so
+   normalization is `start = sourceEnd − 60000` for 1-minute data and the bar
+   covers the half-open interval `[start, start + 60000)`. The adapter refuses
+   any other timeframe/convention pair rather than guessing. No conversion to
+   local time happens anywhere in ingestion or storage.
+
+6. **Individual contracts are the source of truth.** `NQ 03-16` and `NQ 06-16`
+   are separate series. Continuous, rolled, or back-adjusted views are derived
+   later and are never the stored form.
+
+7. **Observations are stored exactly as sourced.** A minute with no source bar
+   has no bar. Nothing is densified with previous-close or zero-volume candles,
+   and two instruments are never aligned by fabricating a bar in one of them.
+
+8. **Chunks are immutable and revision-bearing; one manifest write is the only
+   visibility change.** A day is stored as `…|YYYY-MM-DD|r<n>`. A changed day is
+   always written at `activeRevision + 1`, never over the committed chunk. The
+   reader resolves the series record first and reads only the chunk ids that
+   record references, so a chunk written by a failed import is unreachable
+   rather than merely unlikely to be read.
+
+9. **On the default production mutation path, every mutation holds one
+   origin-wide exclusive Web Lock,** `trading-journal-ai-marketdata:mutation`,
+   and re-reads committed state **inside** that lock. Where the lock primitive
+   is unavailable, mutations return a typed failure and write nothing; there is
+   no same-tab-only fallback.
+
+   The three storage mutation APIs additionally accept an optional,
+   explicitly injectable `runExclusive` runner. Omitting it — which every
+   production call path does — selects the Web Lock above. Supplying it lets a
+   test or a controlled caller substitute a different runner, and such a caller
+   can therefore bypass the host lock. The seam exists because the Web Locks
+   API is host behaviour that a Node-only test harness cannot reach, and it is
+   confined to `services/marketDataStore.ts`. No Replay-facing contract carries
+   or depends on it: `HistoricalBarReader`, its request and result types, and
+   the series identity have no locking concept at all.
+
+10. **Destructive operations make state invisible before removing payload.**
+    `deleteSeries` writes a `state: 'deleting'` tombstone that preserves the
+    day-to-revision map, then removes payload, then removes the record;
+    `clearHistoricalCache` clears `series` before `bar_chunks`.
+
+11. **Availability is reported as observed, never as complete.** A source file
+    records the bars it contains, not the export window that was requested, so
+    no API claims coverage and no universal absence count is stored.
+
+12. **An operational read failure is never reported as absence.** The chunk
+    source returns three distinct outcomes — a value, a proven absence, or a
+    failure — and the reader emits `read_failed` whenever storage prevented it
+    from establishing absence. `series_unavailable` is reserved for absence or
+    a deleting state that was actually observed. `getLocalAvailability` is
+    deliberately asymmetric and answers only "can the local cache serve this
+    now?", for which a failed read and a genuine absence are both honestly
+    `false`.
+
+13. **An import carrying zero accepted bars is rejected unconditionally,**
+    before any read or write, whether or not the series already exists. Such an
+    import could only create an active series with no observations and
+    epoch-zero bounds, or append provenance for an import that contributed
+    nothing.
+
+---
+
+## Reason
+
+The cache classification is what makes everything else cheap. Because loss is a
+re-import rather than harm, this domain needs no sync, no tombstone reconciliation,
+no backup inclusion, and no Recovery Bin — and rollback is "delete the database."
+Placing the same data in the journal's storage authority would have applied
+durability machinery to data that does not need it, and would have made a ten-
+million-row cache a peer of the user's trades.
+
+A separate database is what keeps the journal untouched. It avoids the first
+schema bump, leaves G-3 unresolved-but-unactivated, does not reopen the frozen
+sync spec, and gives an exact, complete undo.
+
+Provider neutrality is the difference between an adapter swap and a rewrite. If
+Replay had to name its data source, then a shared service, a commercial
+provider, and a local import would each be a different Replay. Keeping the
+provider in provenance means locally imported and remotely fetched chunks are
+indistinguishable to every reader-side consumer while remaining fully
+distinguishable to audit.
+
+UTC-at-bar-start is the only timestamp convention that cannot be silently
+wrong. A one-minute shift from an unnormalized End-of-Bar stamp produces
+backtests that look entirely normal and are entirely wrong, and storing local
+wall-clock would make one hour ambiguous every autumn. Storing instants also
+means a future user-selectable display timezone needs no migration, and that
+New-York session semantics can stay fixed while display varies.
+
+Individual contracts are kept because the derivation is one-way. Contracts to a
+continuous series is deterministic; a continuous series back to contracts is
+impossible. Back-adjustment in particular rewrites every historical price level,
+which is precisely what level-based discretionary analysis depends on.
+
+Immutable revisions plus a single-record manifest swap are what make atomic
+visibility achievable without a cross-store transaction the frozen primitive
+cannot offer. A single-record `put` is atomic; making it the only operation that
+changes what a reader can see is what turns "some chunks written" into a state
+that is invisible rather than partially applied.
+
+The lock exists because the revision model alone is not concurrency-safe: two
+mutations reading the same manifest would both allocate the same next revision
+and each commit its own manifest, pairing one writer's provenance with another
+writer's bytes. Re-reading inside the lock is the specific discipline that
+prevents it.
+
+---
+
+## Tradeoff
+
+A second database means two upgrade paths and two failure surfaces, and the
+market-data one cannot borrow the journal's cutover machinery. That is accepted:
+the alternative was making the journal's machinery responsible for data it does
+not own.
+
+Retaining superseded chunk revisions until deletion costs storage that a delete-
+on-commit design would reclaim, and it is deliberate — it keeps commit purely
+additive, which is what lets an in-flight reader holding an older manifest
+finish reading consistently.
+
+One global mutation lock serializes unrelated series. With rare, manual imports
+that costs nothing measurable, and it removes lock-ordering and deadlock
+entirely.
+
+A failed import can leave an unreferenced chunk for a day that was never
+committed, and that chunk is not enumerable from the manifest. It is never
+reader-visible, cannot affect committed state, is reused by a retry, and is
+removed by a cache clear. No staging store, orphan index, background collector,
+or chunk-store scan was added to eliminate residue that nothing can observe.
+
+---
+
+## Alternatives Considered
+
+**A new object store inside the journal database.** Rejected: it triggers the
+project's first schema bump, requires G-3 resolved first per AD-014's own
+revisit clause, and puts a discardable cache inside the authority that owns the
+user's trades.
+
+**LocalStorage.** Rejected on capacity by roughly two orders of magnitude, and
+because it is synchronous and string-only.
+
+**One record per bar.** Rejected: about ten million records, and range reads
+would need cursor or index support that the frozen primitive does not expose.
+
+**One record per series.** Atomic, but a single record grows to millions of bars.
+
+**Deterministic chunk keys with a dataset record as a commit marker.** Rejected
+after review: it is safe for a first import but not for an update to an
+already-visible series, because a reader deriving keys observes a newly written
+day the moment it exists, regardless of the marker.
+
+**Content-addressed chunk ids.** Equivalent safety, but requires a canonical
+byte serialization purely for hashing; the revision counter reuses a comparison
+the planner already performs for conflict detection.
+
+**Per-series locks.** Rejected: lock-ordering complexity for throughput that has
+no value here, when a full cache clear needs global exclusion anyway.
+
+**Documentation-only concurrency guidance.** Rejected as unenforceable.
+
+**A silent in-process mutex when the lock primitive is missing.** Rejected: it
+preserves the appearance of cross-tab safety while removing the substance.
+
+**Emptying the day-to-revision map when tombstoning.** Rejected: it hides the
+series and destroys the only deterministic record of which chunks exist, leaving
+an interrupted deletion unrecoverable without a store scan.
+
+**Clearing chunk payload before manifests.** Rejected: a failure between the two
+leaves visible manifests pointing at deleted payload — worse than either
+endpoint.
+
+**`PIP_TABLE` as the market-data root authority.** Rejected: it couples a new
+domain to journal calculation configuration for no benefit. The market-data
+domain declares its own supported roots.
+
+**Contract plausibility heuristics.** Rejected: thresholds with no exchange
+calendar behind them are invented policy. Declared contract identity is
+authoritative; a listing calendar may add real plausibility later.
+
+**A commercial data provider for the first phase.** Deferred, not rejected. The
+local export costs nothing and the adapter boundary keeps the option open.
+
+---
+
+## Consequences
+
+- The journal database keeps its version and its six stores. No journal
+  LocalStorage key, trade, account, backup format, sync behaviour, or Supabase
+  schema changes. There is no migration.
+- Rollback is exact: revert the code and delete the market-data database.
+  Journal data is unaffected, and no journal backup is needed to undo this.
+- Historical market data is excluded from Backup/Restore for the same reason the
+  Recovery Bin is: regenerable derived state rather than source data.
+- AD-014 is unaffected. Backtest *results* remain Class B, keyed by their own
+  id, in their existing LocalStorage key. This decision introduces a distinct
+  class for market data and does not reclassify anything.
+- A future shared historical service, or any additional provider, becomes a new
+  implementation of the existing chunk-source interface. The reader, the request
+  shape, the bar shape, the chunk format, the key model, and the commit protocol
+  do not change, and neither does Replay.
+- Because provider lives only in provenance, locally imported and remotely
+  fetched chunks coexist in one cache while remaining distinguishable for audit.
+- Distributing this data to other users is a licensing question, not a technical
+  one, and is out of scope here. Nothing in this decision authorizes it.
+- The market-data domain does not read `constants/pipValues.js`. Adding a
+  supported root is a market-data decision, independent of journal calculation
+  configuration.
+
+---
+
+## Spec References
+
+B1 Final RFC and its two correction passes (provider-neutral series identity;
+numeric expiry canonicalization; immutable revision-bearing chunks with a
+manifest-gated reader; the origin-wide mutation lock; the deletion tombstone;
+the fail-safe clear order); the B1 authoritative Runtime Acceptance report;
+AD-014 (backtest results as Class B unsynced local data, and its revisit clause
+naming G-3); AD-019 (portable Backup/Restore durability contract, from which
+this domain is excluded); `SYNC_ARCHITECTURE_SPEC.md` §3.4 (version-upgrade and
+quota-exhaustion protocol observed by the reused IndexedDB primitive).
+
+---
+
+## Revisit Only If
+
+- A shared historical market-data service is adopted, at which point the cache
+  gains a remote fill path and distribution rights must be verified first.
+- Market data must synchronize per user, which would contradict the
+  reconstructable-cache classification outright.
+- An instrument enters this domain whose tick is not a binary fraction — a
+  decimal tick such as `0.01` is not exactly representable in float64, unlike
+  the quarter points NQ and ES trade in.
+- A contract outside 2000–2099 must be ingested, which the two-digit `MM-YY`
+  expiry mapping cannot express.
+- An authoritative exchange listing calendar becomes available, at which point
+  real contract plausibility validation could replace declared identity as a
+  cross-check.
+- Mutation frequency rises far enough that one global lock becomes a measurable
+  bottleneck.
+- The Web Locks primitive becomes unavailable on a supported target, which would
+  force a different serialization mechanism rather than a weaker one.

@@ -1,3 +1,144 @@
+# v1.6 — Free Historical Data Foundation
+
+Package semantic version: **1.6.0**.
+
+Release type:
+NEW CAPABILITY / ARCHITECTURAL FOUNDATION
+
+Risk tier:
+HIGH
+
+Status:
+IMPLEMENTATION, AUTOMATED VERIFICATION, AND LOCALHOST RUNTIME ACCEPTANCE
+COMPLETE
+
+Release marker:
+ANNOTATED `v1.6.0` TAG
+
+Evidence scope:
+v1.6 localhost runtime acceptance was completed in a dedicated clean browser
+profile against the release candidate derived from governance baseline
+`3849b7a`, using the user's own local NinjaTrader exports for NQ 03-16,
+ES 03-16 and NQ 06-16. Those files were never copied into the repository. Git
+history is the canonical identity for the commit that carries this
+implementation.
+
+Summary:
+The application can now ingest historical 1-minute futures bars, normalize them
+into a provider-neutral canonical form, and store them in their own IndexedDB
+database that is completely separate from journal storage. This is foundation
+only: there is no Backtest UI, no chart, no replay, and no simulated trading in
+this release, and nothing in the deployed application reaches this code yet.
+
+## Why this is a new data domain
+
+The existing feature named Backtest is filter-based analytics over trades the
+user already journalled. It holds no market data, no time axis and no order
+model, so historical bars had nowhere to live.
+
+They also do not behave like journal data. A trade is authored by the user and
+losing it is harm. A historical bar is an external market fact the application
+keeps a copy of; losing it costs a re-import. AD-023 records that distinction as
+a third data class — a reconstructable cache — and is the reason this release
+adds a separate database rather than a store inside the journal's.
+
+## What was built
+
+- **A NinjaTrader historical adapter.** One module owns every provider-specific
+  detail: the semicolon grammar, the `yyyyMMdd HHmmss` stamp, the absent header,
+  the `MM-YY` expiry notation, and the End-of-Bar convention. Nothing downstream
+  knows any of it. The existing trade-import CSV parser was not reused and not
+  modified.
+- **Deterministic timestamp normalization.** NinjaTrader exports UTC End-of-Bar
+  stamps, so a 1-minute bar's canonical start is the source stamp minus exactly
+  60,000 ms, covering `[start, start + 60000)`. The adapter refuses any other
+  timeframe/convention pair rather than guessing.
+- **Provider-neutral series identity.** A series is root, expiry year, expiry
+  month and timeframe — `NQ|2016|03|1m`. No provider token appears in that
+  identity, in a chunk id, in a bar, or in any read request. Provider lives only
+  in import provenance.
+- **Individual contracts as the stored truth.** `NQ 03-16` and `NQ 06-16` are
+  separate series. Continuous and back-adjusted views are derivable later and are
+  never the stored form, because that derivation only runs one way.
+- **Observation-faithful storage.** A minute with no source bar has no bar.
+  Nothing is filled with previous-close or zero-volume candles, and two
+  instruments are never aligned by inventing a bar in one of them.
+- **Atomic visibility.** Days are stored as immutable revision-bearing chunks; a
+  changed day is written at the next revision, never over the committed one, and
+  a single manifest write is the only operation that changes what a reader can
+  see. A failed import leaves the previous state exactly as it was.
+- **Serialized mutation.** On the default production path, each import, delete
+  and cache clear holds one origin-wide exclusive Web Lock and re-reads state
+  inside it. Without that, two concurrent imports would both target the same
+  next revision and one would overwrite the other's bytes while committing its
+  own provenance. The mutation APIs also expose an optional runner seam, used by
+  the Node-only test harness to reach this logic, which a controlled caller can
+  substitute.
+- **Integrity failures fail closed.** If a manifest references a chunk that is
+  proven missing, an import is rejected rather than silently rewriting that day
+  with only the incoming bars — which would drop the lost data and leave a bar
+  count that still counted it.
+- **Fail-safe destruction.** Deleting a series writes a tombstone that hides it
+  while preserving the map needed to finish cleanup after an interruption;
+  clearing the cache removes manifests before payload, so a failure between the
+  two leaves nothing visible and nothing reachable.
+- **Failure is never mistaken for absence.** The storage layer distinguishes a
+  value, a proven absence, and an operational failure, so a database error is
+  reported as a read failure rather than as "this series is not here". Claiming
+  absence a failed read never established would mislead the replay engine that
+  will consume this data.
+- **Zero-bar imports are refused outright.** An empty export cannot create a
+  series with no observations, and cannot append provenance for an import that
+  contributed nothing.
+
+## What this release deliberately does not contain
+
+No Backtest tab, chart, replay clock, layout, link system, timezone selector,
+drawing tool, simulated order, or backtest-journal persistence. No chart
+library. No cloud service, remote fetch, or Supabase change. No continuous
+contracts, rollover engine, session calendar or holiday calendar. No tick,
+one-second or bid/ask data. No NinjaTrader AddOn.
+
+The historical modules are reachable only from source. Nothing in the deployed
+application imports them, so this release adds capability without adding any
+user-facing behaviour.
+
+## Verification
+
+TypeScript 0 errors. ESLint 0 errors and exactly 7 pre-existing warnings. Tests
+**594 passing across 29 files** — the full 460-test v1.5 baseline preserved
+unchanged, plus 134 new B1 tests. Production build passed. `git diff --check`
+clean. No dependency, test-framework or test-configuration change.
+
+Fourteen targeted mutation proofs were run before acceptance: each deliberately
+broke one invariant — the timestamp shift, expiry in series identity, conflict
+rejection, gap preservation, commit ordering, database separation, read
+ordering, manifest-gated reads, revision allocation, provider absence from the
+read request, reading state before acquiring the lock, tombstone map
+preservation, clear ordering, and the deleting-state check — and each turned the
+corresponding test red before being reverted.
+
+Runtime acceptance ran in a real browser against the real exports and passed
+every check: 2700, 2729 and 2557 bars ingested; canonical first bars at
+`2016-03-01T05:00:00Z` and `2016-06-01T04:00:00Z`, the one-hour difference being
+real EST/EDT evidence that no fixed offset exists in the path; absent-minute
+counts of 180 and 151 over the March windows with zero fabricated bars; NQ and
+ES intersecting at 2700 with 29 ES-only minutes and no invented NQ bars;
+everything surviving a full page reload; an identical re-import writing no chunk
+and bumping no revision; a conflicting bar rejected with zero writes; cross-tab
+lock exclusion demonstrated with a second real browser tab; a tombstoned
+deletion resumed after a reload; and the journal database never created,
+touched, or inspected.
+
+## Known limitation
+
+A failed import can leave a chunk for a day that was never committed. It is
+never reader-visible, cannot affect committed state, is reused by a retry, and
+is removed by clearing the cache. No orphan index, staging store or background
+collector was added to eliminate residue that nothing can observe.
+
+---
+
 # v1.5 — Restore Integrity
 
 Package semantic version: **1.5.0**.

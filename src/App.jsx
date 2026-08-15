@@ -39,6 +39,7 @@ import { CalendarPage } from '@pages/Calendar.js';
 import { StrategyPage } from '@pages/Strategy.js';
 import { InsightsPage } from '@pages/Insights.js';
 import { BacktestPage } from '@pages/Backtest.js';
+import { ReplayPage } from '@pages/Replay.js';
 import { ImportWizard } from '@components/import/ImportWizard.js';
 import { AccManager } from '@components/account/AccManager.js';
 import { SettingsModal } from '@components/settings/SettingsModal.js';
@@ -55,6 +56,7 @@ import { useAdvancedFilters } from '@hooks/useAdvancedFilters.js';
 import { useTradeReview } from '@hooks/useTradeReview.js';
 import { useRecoveryBin } from '@hooks/useRecoveryBin.js';
 import { useRestorePoints } from '@hooks/useRestorePoints.js';
+import { useReplayRuntime } from '@hooks/useReplayRuntime.js';
 import { formatTradeRecoveryLabel } from '@calculations/recoveryBin.js';
 
 // ─── Tabs — matches the pages actually built ───────────────────
@@ -66,9 +68,11 @@ const TABS = [
   { id: 'strategy',  label: '🧠 Strategy' },
   { id: 'insights',  label: '🤖 Insights' },
   { id: 'backtest',  label: '🧪 Backtest' },
+  { id: 'replay',    label: '⏯ Replay' },
 ];
 
 export default function App() {
+  const replay = useReplayRuntime();
   // ── Core hooks — each owns exactly one LocalStorage-backed concern ──
   const { accounts, addAccount, editAccount, deleteAccount, hydrated: accountsHydrated } = useAccounts();
   const {
@@ -372,6 +376,8 @@ export default function App() {
       {/* Receives UNFILTERED allTrades, not the globally-filtered
           `trades` every other page takes — see pages/Backtest.tsx */}
       {tab === 'backtest' && <BacktestPage allTrades={allTrades} accounts={accounts} />}
+
+      {tab === 'replay' && <ReplayPage snapshot={replay.snapshot} actions={replay.actions} />}
     </AppShell>
   );
 }

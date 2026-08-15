@@ -1,3 +1,183 @@
+# v1.7 — B2a Single-Chart Historical Replay Core
+
+Package semantic version: **1.7.0**.
+
+Release type:
+NEW USER-FACING CAPABILITY
+
+Risk tier:
+HIGH
+
+Status:
+IMPLEMENTATION, AUTOMATED VERIFICATION, RUNTIME ACCEPTANCE, DOCUMENTATION AND
+VERSION PREPARATION COMPLETE
+
+Release marker definition:
+ANNOTATED `v1.7.0` TAG
+
+The Git tag reference is authoritative for the canonical release marker. This
+record describes the locally prepared release candidate and does not claim a
+deployment, live acceptance result or marker that Git does not carry.
+
+## Summary
+
+v1.7 delivers B2a: the first user-facing historical Replay core. A separate
+Replay tab reads the provider-neutral local historical data introduced in v1.6
+and renders one deterministic Lightweight Charts candlestick pane. Replay is
+driven by a canonical UTC cursor, reveals only closed bars, derives higher
+timeframes only from revealed 1-minute observations, and remains independent of
+the existing Backtest feature.
+
+## Delivered scope
+
+- Separate Replay tab with one Lightweight Charts 5.2.1 candlestick pane.
+- Local NQ and ES series selection and NinjaTrader historical import UI.
+- Play, Pause, Step Forward and exact UTC Go To controls.
+- Speeds: 1×, 2×, 5×, 10×, 30×, 60× and 300×.
+- Timeframes: 1m, 5m, 15m and 1h.
+- Deterministic UTC cursor with America/New_York display formatting, explicit
+  UTC offset and ISO-UTC identity.
+- DST-safe repeated-hour handling without shifting chart timestamps.
+- No-look-ahead reveal, no partial 1-minute candle and no future autoscale or
+  HTF contamination.
+- HTF OHLCV folding from revealed 1-minute bars only; market gaps stay absent.
+- Windowed initial loading, buffer-only forward prefetch, authoritative
+  coverage extension and cursor-driven retention.
+- IndexedDB reader pruning to the canonical requested UTC-day range.
+- Same-App import barrier and stale asynchronous authority protection.
+- StrictMode-safe App-lifetime runtime ownership with one frame loop and one
+  visibility listener.
+- Page Visibility suspension and automatic valid-intent resumption from a fresh
+  monotonic anchor, with no hidden-duration catch-up.
+- Explicit `read_failed`, `series_unavailable` and successful-empty-window
+  semantics.
+- Local production and `/Trading-Journal-AI-v22/` base-path compatibility,
+  including the manually split Lightweight Charts chunk.
+
+## Correctness and lifecycle
+
+A canonical 1-minute bar beginning at `t` is not visible until
+`t + 60,000 <= cursor`. Buffered future bars are excluded before data reaches
+Lightweight Charts, so neither rendering, crosshair data, autoscale nor derived
+timeframes can observe the future. Missing source minutes produce no candle.
+
+Visibility suspension is not permanent user Pause. If active playback owns the
+state at hide time, Replay records resumable intent, suspends at the preserved
+cursor, and re-anchors before resuming when visible. Pause, import, operational
+error, unavailable series, ended state, authoritative replacement and detached
+ownership invalidate stale visibility intent.
+
+Imports executed during the same App lifetime enter a barrier that pauses
+Replay, clears the visible buffer, blocks stale read publication and performs
+one fresh paused re-establishment after settlement. External/cross-tab mutation
+detection is deliberately not claimed.
+
+## Runtime Acceptance
+
+Runtime Acceptance closed RA-1 through RA-21 using real React, Lightweight
+Charts, IndexedDB, Web Locks, Web Crypto, NinjaTrader exports and browser
+lifecycle behaviour.
+
+- NQ 03-16: 2700 canonical bars,
+  `2016-03-01T05:00:00.000Z` → `2016-03-03T04:59:00.000Z`.
+- ES 03-16: 2729 canonical bars; shared-window intersection 2700, NQ-only 0,
+  ES-only 29.
+- NQ 06-16: `2016-06-01T04:00:00.000Z` →
+  `2016-06-03T03:55:00.000Z`.
+- Source End-of-Bar `2016-03-01T05:01:00Z` normalized exactly to canonical
+  start `2016-03-01T05:00:00.000Z`.
+- Future-sentinel checks proved no partial candle, future autoscale influence or
+  future HTF input.
+- Repeated New York 01:30 across the 2024 fall-back remained two separate UTC
+  coordinates, differentiated by GMT-4/GMT-5 and ISO-UTC.
+- A genuine Microsoft Edge `document.hidden` false → true → false transition
+  proved suspension, no hidden catch-up, automatic resumption and correct
+  Play/Pause controls.
+- A reversible read-only IndexedDB transaction failure scoped to
+  `trading-journal-ai-marketdata` proved `read_failed` preserves the old cursor
+  and chart, reports availability unknown, remains paused, and recovers after
+  native API restoration without touching Journal storage.
+- Production base-path and asset smoke passed with no chart-chunk 404 or fatal
+  console error.
+
+BLOCKER: none. MATERIAL: none.
+
+## Automated verification
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors and exactly 7 pre-existing warnings.
+- Tests: **675 passing across 38 files**.
+- Focused Replay runtime suite: 30 passing tests.
+- Production build: passed; **1030 modules transformed**.
+- `git diff --check`: clean apart from line-ending conversion notices.
+- Dependencies: B2a intentionally adds `lightweight-charts@5.2.1` and its
+  `fancy-canvas@2.1.0` transitive dependency. Existing dependency entries remain
+  unchanged; no unrelated dependency upgrade or integrity/resolved churn occurred.
+
+## Preserved and separate
+
+The existing Backtest feature remains unchanged and separate. It still analyzes
+journalled trades and is not a Replay workspace, market-data chart, execution
+engine or renamed surface.
+
+Unchanged: journal IndexedDB and LocalStorage contracts; storage resolver;
+authenticated-user namespace; Backup, Restore and Recovery Bin; account/trade
+models; Supabase; sync; historical storage schema; atomic import, delete and
+clear behaviour; and all v1.6 market-data identities and persistence contracts.
+
+No journal-storage migration, destructive market-data migration, backup-format
+change, sync change or Supabase change was introduced.
+
+## Explicit non-scope
+
+v1.7 does not include B2b; multiple panes; simultaneous multi-symbol Replay; a
+TradingView replacement; drawings; simulated orders, fills or execution;
+broker integration; a cloud historical-data service; multi-device Replay sync;
+Replay analytics; AI Replay; a complete Backtest platform; continuous-contract
+construction; session/holiday calendars; remote market-data fetch; paid-provider
+integration; or Replay-to-journal persistence.
+
+B2b remains unimplemented. No next phase starts automatically.
+
+## Known limitations
+
+Non-blocking. None is a release blocker.
+
+1. A running Replay does not detect market-data mutation by another tab or
+   external actor. Supported imports cannot contradict an existing canonical
+   1-minute OHLCV bar, but newly added missing observations can leave the
+   running snapshot and derived HTF stale until reset or reload.
+2. Sign-out or user switch during a pending import can degrade to the accepted
+   L-5 external snapshot-staleness class. No persistence/auth coupling was
+   added.
+3. Chart coordinates remain UTC epoch seconds and labels use
+   America/New_York. Lightweight Charts tick weighting remains UTC-oriented and
+   can produce a minor cosmetic mismatch near local date boundaries.
+4. Missing minutes remain absent. Candles are ordinally adjacent on the chart
+   time axis while the exact Replay cursor may sit inside a real gap.
+5. The latest import success message can remain visible after another series is
+   loaded. The message is informational; selected series, availability, cursor
+   and chart data remain correct.
+
+The v1.6 historical-cache limitations continue to apply to the underlying data
+foundation and remain recorded in the v1.6 section below.
+
+## Versioning and migration
+
+- Package semantic version: **1.6.0 → 1.7.0** in `package.json` and the
+  root-project metadata of `package-lock.json`.
+- B2a intentionally adds `lightweight-charts@5.2.1` and its
+  `fancy-canvas@2.1.0` transitive dependency, increasing lockfile package entries
+  from 458 to 460. Existing non-root dependency entries remain unchanged. The
+  root dependency record changed only for the application version and approved
+  `lightweight-charts` direct dependency; no unrelated dependency upgrade or
+  integrity/resolved churn occurred.
+- Architecture Decision: none required; B2a consumes AD-023 without changing
+  its authority.
+- Migration impact: none.
+
+---
+
 # v1.6 — Free Historical Data Foundation
 
 Package semantic version: **1.6.0**.
@@ -130,12 +310,26 @@ lock exclusion demonstrated with a second real browser tab; a tombstoned
 deletion resumed after a reload; and the journal database never created,
 touched, or inspected.
 
-## Known limitation
+## Known limitations
 
-A failed import can leave a chunk for a day that was never committed. It is
-never reader-visible, cannot affect committed state, is reused by a retry, and
-is removed by clearing the cache. No orphan index, staging store or background
-collector was added to eliminate residue that nothing can observe.
+These v1.6 Historical Data Foundation limitations remain part of the durable
+historical record:
+
+1. A failed import can leave a chunk for a day that was never committed. It is
+   never reader-visible, cannot affect committed state, is reused by a retry,
+   and is removed by clearing the cache. No orphan index, staging store or
+   background collector was added to eliminate residue that nothing can observe.
+2. Superseded chunk revisions remain stored until the affected series is deleted
+   or the historical cache is cleared.
+3. Multi-year ingestion was not browser-measured during v1.6 acceptance.
+4. Storage quota exhaustion was not reached during acceptance.
+5. IndexedDB blocked and version-change paths were not exercised.
+6. `mutation_lock_unavailable` behavior was proven by controlled injection, not
+   by a naturally occurring lock failure.
+7. Cross-tab evidence was one-directional rather than a full symmetric multi-tab
+   concurrency proof.
+8. Absence-count conclusions are limited when the original source-export window
+   is unknown.
 
 ---
 

@@ -169,6 +169,7 @@ export default defineConfig({
         manualChunks: {
           react: ['react', 'react-dom'],
           recharts: ['recharts'],
+          lightweightCharts: ['lightweight-charts'],
           xlsx: ['xlsx'],
         },
       },

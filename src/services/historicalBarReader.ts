@@ -114,6 +114,43 @@ function chunkBarsInRange(
   return bars;
 }
 
+const CANONICAL_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export function isCanonicalUtcDay(day: string): boolean {
+  const match = CANONICAL_DAY.exec(day);
+  if (match === null) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const date = Number(match[3]);
+  const utcMs = Date.UTC(year, month - 1, date);
+  const roundTrip = new Date(utcMs);
+  return roundTrip.getUTCFullYear() === year
+    && roundTrip.getUTCMonth() === month - 1
+    && roundTrip.getUTCDate() === date;
+}
+
+function prunedCommittedDays(
+  days: string[],
+  fromUtcMs: number,
+  toUtcMs: number,
+): string[] {
+  const safeRange = Number.isSafeInteger(fromUtcMs)
+    && Number.isSafeInteger(toUtcMs)
+    && toUtcMs > fromUtcMs;
+  if (!safeRange || !days.every(isCanonicalUtcDay)) return days;
+  const fromDate = new Date(fromUtcMs);
+  const lastDate = new Date(toUtcMs - 1);
+  const fromYear = fromDate.getUTCFullYear();
+  const lastYear = lastDate.getUTCFullYear();
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(lastDate.getTime())
+    || fromYear < 0 || fromYear > 9999 || lastYear < 0 || lastYear > 9999) return days;
+  const formatDay = (date: Date) => `${String(date.getUTCFullYear()).padStart(4, '0')}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+  const first = formatDay(fromDate);
+  // Exclusive upper bound: midnight belongs to the preceding requested day.
+  const last = formatDay(lastDate);
+  return days.filter((day) => day >= first && day <= last);
+}
+
 export function createHistoricalBarReader(chunkSource: HistoricalChunkSource): HistoricalBarReader {
   /**
    * `{ ok: false }` means the lookup FAILED and established nothing.
@@ -153,7 +190,8 @@ export function createHistoricalBarReader(chunkSource: HistoricalChunkSource): H
       // Iterate the COMMITTED day set, not a derived calendar range —
       // bounded by what exists, and impossible to point at an
       // unreferenced chunk.
-      const days = Object.keys(record.committed.activeChunks).sort();
+      const committedDays = Object.keys(record.committed.activeChunks).sort();
+      const days = prunedCommittedDays(committedDays, request.fromUtcMs, request.toUtcMs);
       const bars: HistoricalBar[] = [];
 
       for (const day of days) {

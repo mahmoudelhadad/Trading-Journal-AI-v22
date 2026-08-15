@@ -4,11 +4,11 @@
 
 ## Phase
 
-v1.6 — Free Historical Data Foundation
+v1.7 — B2a Single-Chart Historical Replay Core
 
 Release type:
 
-NEW CAPABILITY / ARCHITECTURAL FOUNDATION
+NEW USER-FACING CAPABILITY
 
 Risk tier:
 
@@ -18,514 +18,249 @@ Status:
 
 IMPLEMENTATION COMPLETE
 AUTOMATED VERIFICATION COMPLETE
-LOCAL RUNTIME ACCEPTANCE COMPLETE (RA-1 through RA-14, RA-C1 through RA-C5)
+RUNTIME ACCEPTANCE COMPLETE (RA-1 THROUGH RA-21)
 DOCUMENTATION + VERSION CLOSURE COMPLETE
 
-Package semantic version: **1.6.0**.
+Package semantic version: **1.7.0**.
 
-- Base release: **v1.5.0** (annotated tag) — the historical baseline this work
-  departed from.
-- Target release: **v1.6.0**.
+- Base release: **v1.6.0** (annotated tag) — the historical-data foundation
+  this work extends.
+- Target release: **v1.7.0**.
 
 ---
 
 ## Release Marker
 
-The canonical release marker for this version is the annotated tag **`v1.6.0`**.
-
-The Git repository's tag reference is authoritative for which commit carries
-that marker. It is deliberately not restated as mutable prose here.
-
----
-
-## Evidence Scope
-
-v1.6 localhost runtime acceptance was completed in a dedicated clean browser
-profile against the release candidate derived from governance baseline
-`3849b7a13944d8ee5016b6c860f344e0c594fb76`, with the implementation surface
-limited to the ten paths listed under Exact Implementation Manifest.
-
-Acceptance used the user's own local NinjaTrader exports for NQ 03-16, ES 03-16
-and NQ 06-16. Those files were selected through a browser file input and were
-never copied into the repository, into fixtures, or into Git.
-
-That baseline is the governance commit this work departed from. It is **not**
-the v1.6 implementation commit. Git history is the canonical identity for the
-commit that carries the v1.6 implementation, and for the commit that carries the
-release marker.
+The canonical release marker for this version is the annotated tag **`v1.7.0`**.
+The Git tag reference is authoritative for which commit carries that marker.
+This document prepares the local release candidate; it does not assert a
+deployment, live acceptance result, or release marker that Git does not carry.
 
 ---
 
 ## Objective
 
-Establish a provider-independent historical market-data foundation that a later
-Backtest replay engine can read, without touching journal storage authority and
-without acquiring a paid data dependency.
-
-v1.6 adds the ability to ingest, normalize, store and read historical bars. It
-adds no user-facing behaviour.
-
----
-
-## Frozen Invariant
-
-A NinjaTrader 1-minute historical export is ingested into a canonical,
-contract-identified, UTC start-of-bar representation stored in a **separate**
-IndexedDB database, readable through a **provider-independent** range reader,
-with **zero** effect on journal storage, and **fully removable** without
-touching journal data.
-
----
-
-## Why This Is a New Data Domain
-
-The feature currently named Backtest is filter-based analytics over already
-journalled trades. It contains no market data, no time axis and no order model,
-so historical bars had no existing home.
-
-They also do not behave like journal data. A trade is user-authored and losing
-it is harm; a historical bar is an external market fact the application caches,
-and losing it costs a re-import. AD-023 records that as a third data class — a
-reconstructable cache — distinct from AD-014's Class A synced business data and
-Class B unsynced local data, both of which are user-owned.
+Deliver the first user-facing historical Replay surface on top of v1.6's
+provider-neutral local market-data foundation: one deterministic candlestick
+chart driven by a canonical UTC cursor, with no look-ahead and no coupling to
+the existing journal Backtest feature.
 
 ---
 
 ## Delivered Scope
 
-1. **NinjaTrader historical adapter.** One module owns the semicolon grammar,
-   the `yyyyMMdd HHmmss` stamp, the absent header row, the `MM-YY` expiry
-   notation, and the End-of-Bar convention. Nothing downstream knows any of it.
-   The existing trade-import CSV parser was neither reused nor modified.
+### Replay surface
 
-2. **Deterministic timestamp normalization.** Source is UTC End-of-Bar, so a
-   1-minute bar's canonical start is `sourceEnd − 60000` and the bar covers
-   `[start, start + 60000)`. Any other timeframe/convention pair is refused
-   rather than guessed at.
+- A separate **Replay** application tab.
+- One Lightweight Charts 5.2.1 candlestick pane.
+- Local NQ and ES contract-series selection by root and `MM-YY` expiry.
+- NinjaTrader historical-file import through the Replay UI.
+- Play and Pause.
+- Replay speeds: **1×, 2×, 5×, 10×, 30×, 60×, and 300×**.
+- Step Forward to the earliest actual 1-minute bar close after the cursor.
+- Go To an exact UTC instant, including an instant inside a market gap.
+- **1m, 5m, 15m, and 1h** display timeframes.
+- A persistent cursor readout containing America/New_York wall time, its UTC
+  offset, and the unambiguous ISO-UTC instant.
 
-3. **Provider-neutral series identity.** `{ root, expiryYear, expiryMonth,
-   timeframe }`, rendered as `NQ|2016|03|1m`. No provider token appears in the
-   identity, a chunk id, a bar, or a read request; provider lives only in import
-   provenance.
+### Replay correctness
 
-4. **Individual contracts as stored truth.** `NQ 03-16` and `NQ 06-16` are
-   separate series. Continuous and back-adjusted views remain derivable and are
-   never the stored form.
+- The Replay cursor is deterministic UTC epoch time.
+- Chart coordinates remain real UTC epoch seconds; timestamps are never shifted
+  to imitate local time.
+- America/New_York formatting distinguishes repeated DST fall-back wall times by
+  offset and ISO-UTC identity.
+- A canonical 1-minute bar is revealed only after its close. No partial
+  1-minute candle is displayed.
+- Chart autoscale, tooltips and derived timeframes receive only revealed bars;
+  buffered future OHLCV cannot leak into the display.
+- 5m, 15m and 1h bars fold only already-revealed canonical 1-minute bars,
+  including volume, and never synthesize missing minutes.
+- Real market gaps remain absent while the cursor may occupy an exact instant
+  inside a gap.
 
-5. **Observation-faithful storage.** Absent minutes stay absent. No
-   previous-close filling, no zero-volume padding, no cross-instrument alignment
-   candles.
+### Runtime and storage boundaries
 
-6. **Atomic visibility.** Immutable revision-bearing chunks plus a single
-   manifest write as the only visibility-changing operation. A changed day is
-   written at `activeRevision + 1`, never over the committed chunk, and the
-   reader resolves the manifest before reading anything.
-
-7. **Serialized mutation.** On the default production path — the path every
-   production caller uses — each import, delete and cache clear runs inside one
-   origin-wide exclusive Web Lock, and committed state is re-read inside it. The
-   mutation APIs also expose an optional `runExclusive` seam, described under
-   Automated Verification, which a controlled caller can supply to substitute a
-   different runner; that seam is how the Node-only harness reaches this logic.
-
-8. **Fail-safe destruction.** `deleteSeries` tombstones with the cleanup map
-   preserved, so an interrupted deletion resumes deterministically;
-   `clearHistoricalCache` clears manifests before payload.
-
-9. **Observed availability, never completeness.** A source file records the bars
-   it contains, not the export window requested, so no API claims coverage and
-   no universal absence count is stored.
-
-10. **Storage failure is never reported as absence.** The chunk source
-    distinguishes a value, a proven absence, and an operational failure. The
-    reader emits `read_failed` whenever storage prevented it from establishing
-    absence, and reserves `series_unavailable` for absence or a deleting state
-    it actually observed.
-
-11. **A zero-bar import is rejected unconditionally,** before any read or write
-    and regardless of whether the series exists, so no series can hold an
-    active manifest with no observations.
-
----
-
-## Exact Implementation Manifest
-
-Production (6):
-- src/types/marketData.ts
-- src/services/ninjaTraderHistoricalAdapter.ts
-- src/services/marketDataIngestion.ts
-- src/services/marketDataDb.ts
-- src/services/marketDataStore.ts
-- src/services/historicalBarReader.ts
-
-Tests (4):
-- src/services/ninjaTraderHistoricalAdapter.test.ts
-- src/services/marketDataIngestion.test.ts
-- src/services/marketDataStore.test.ts
-- src/services/historicalBarReader.test.ts
-
-Documentation + version (5):
-- docs/ARCHITECTURE_DECISIONS.md.txt
-- docs/CHANGELOG.md.txt
-- docs/CURRENT_PHASE.md.txt
-- package.json
-- package-lock.json
-
-The implementation manifest is exactly 10 paths, all new files. The
-documentation/version gate wrote 5 further paths and touched no implementation
-path, for a release-preparation total of **15 paths**.
-
-`package-lock.json` was edited only in its root-project `version` metadata: 458
-lockfile package entries before and after, with no dependency version, resolved
-URL or integrity hash changed.
-
-No fixture file was added. Repository tests use inline synthetic strings only.
-
-Deliberately **not** modified: `src/services/indexedDb.ts`,
-`src/services/indexedDbStores.ts`, `src/services/localDatabase.ts`,
-`src/services/storageCutover.ts`, `src/services/storage.js`,
-`src/services/storageNamespace.ts`, `src/services/localPersistenceEvents.ts`,
-`src/services/backupService.ts`, `src/services/importService.ts`,
-`src/services/ninjaTraderAdapter.ts`, `src/services/supabaseClient.ts`,
-`src/services/index.js`, `src/types/index.js`, `src/types/trade.ts`,
-`src/types/backtest.ts`, `src/constants/pipValues.js`, `vitest.config.ts`,
-`vite.config.js`, `tsconfig.json`, `.eslintrc.cjs`, `.github/workflows`, and all
-of `src/sync`, `src/calculations`, `src/hooks`, `src/contexts`,
-`src/components`, and `src/pages`.
+- Initial reads are windowed rather than full-history loads.
+- Forward prefetch is buffer-only and does not advance cursor or authoritative
+  coverage.
+- Coverage advances only through successful authoritative extension.
+- Cursor-driven retention bounds the in-memory history window.
+- The IndexedDB historical reader prunes committed UTC days to the requested
+  canonical range.
+- Same-App imports enter an explicit barrier: playback pauses, the old buffer is
+  hidden, stale reads cannot commit, and settlement establishes a fresh paused
+  session.
+- Authority tokens prevent stale asynchronous reads, prefetches, imports and
+  detached owners from publishing over newer state.
+- One App-lifetime Replay runtime owns the cursor and lifecycle; React
+  StrictMode attach/detach remains symmetric with one animation-frame loop and
+  one visibility listener.
+- Page Visibility temporarily suspends active playback. Restoration re-anchors
+  the monotonic clock and automatically resumes only valid prior play intent,
+  excluding hidden elapsed time and respecting Pause, import, error, ended and
+  detached-owner state.
+- Operational storage failures surface as `read_failed`; proven absence
+  surfaces as `series_unavailable`; a valid empty window remains successful
+  empty data.
+- The production bundle and manual Lightweight Charts chunk load correctly
+  beneath the GitHub Pages base `/Trading-Journal-AI-v22/`.
 
 ---
 
-## Storage Architecture
+## Runtime Acceptance Evidence
 
-A separate IndexedDB database, `trading-journal-ai-marketdata` version 1, with
-exactly two object stores and **no indexes**:
+Runtime Acceptance closed RA-1 through RA-21 in real Chromium environments.
+Normal interaction used real React, Lightweight Charts, IndexedDB, Web Locks,
+Web Crypto and local NinjaTrader exports.
 
-- `series`, keyed by `seriesId` — the committed manifest, its lifecycle state,
-  and import provenance.
-- `bar_chunks`, keyed by `chunkId` — one UTC calendar day of column-oriented
-  bars per record.
+- NQ 03-16 imported as **2700** canonical bars from
+  `2016-03-01T05:00:00.000Z` through `2016-03-03T04:59:00.000Z`.
+- ES 03-16 imported as **2729** canonical bars. In the shared March window,
+  intersection was 2700, NQ-only was 0 and ES-only was 29.
+- NQ 06-16 imported from `2016-06-01T04:00:00.000Z` through
+  `2016-06-03T03:55:00.000Z`.
+- End-of-Bar source `2016-03-01T05:01:00Z` normalized to canonical start
+  `2016-03-01T05:00:00.000Z`.
+- Boundary and future-sentinel checks proved no partial candle, future autoscale
+  influence or future HTF contribution.
+- Controlled DST fall-back bars at `2024-11-03T05:30:00Z` and
+  `2024-11-03T06:30:00Z` remained separate UTC coordinates while formatting as
+  repeated New York 01:30 with GMT-4 and GMT-5 respectively.
+- A genuine Microsoft Edge `document.hidden` false → true → false transition
+  proved playback suspension, no hidden-duration catch-up, automatic playback
+  restoration, and correct Play/Pause controls after return.
+- A reversible browser-level failure scoped to read-only transactions on
+  `trading-journal-ai-marketdata` proved `read_failed` preserves the prior
+  cursor/chart, pauses, reports availability unknown, and recovers after the
+  native API is restored. Journal storage was not intercepted or modified.
+- Local production preview at `/Trading-Journal-AI-v22/` loaded Replay and the
+  Lightweight Charts chunk without an asset or base-path failure.
 
-The generic `services/indexedDb.ts` primitive is reused **unmodified**; the
-market-data database is a new caller of it, not a new primitive. Every access
-path is a primary-key `get`, which is why the absent cursor and index support is
-not a constraint.
-
-The journal database keeps its name, its version, and its six object stores.
+No BLOCKER or MATERIAL finding remains.
 
 ---
 
-## Preserved Historical Contracts
+## Preserved Contracts
 
-Nothing in the journal domain was modified. Unchanged: the journal IndexedDB
-schema and version; the storage resolver; LocalStorage keys and the
-authenticated user namespace; Backup and Restore behaviour and format; the
-Recovery Bin; the sync architecture and `SYNC_ARCHITECTURE_SPEC.md`; the
-Supabase-auth-only architecture; `RawTrade` and `TradeLeg`; `scaleLegs` and
-`tradeCalc`; `PIP_TABLE`; the existing `BacktestResult` type, its calculations,
-its hook, and its LocalStorage key; Phase 29 Delete ALL; Phase 30 account
-deletion safety; Phase 31 permanent Recovery deletion safety; Phase 32 user
-isolation; Phase 32C data-integrity contracts; the v1.4 `ConfirmDialog`
-contract; and the v1.5 restore-integrity contracts.
+The existing **Backtest** feature remains separate and unchanged. It continues
+to be filter-based analytics over journalled trades; it was not renamed,
+reimplemented or connected to Replay.
+
+Also unchanged: journal IndexedDB schema and version; LocalStorage journal
+keys; authenticated-user namespace; storage resolver and cutover; Backup and
+Restore formats and behaviour; Recovery Bin; account and trade models;
+Supabase integration; synchronization architecture; historical market-data
+schema; import atomicity and Web Lock serialization; deletion/clear semantics;
+and all v1.6 canonical storage contracts.
+
+No journal-storage migration, destructive market-data migration, backup-format
+change, sync change or Supabase change exists in v1.7.
 
 ---
 
 ## Automated Verification
 
-- TypeScript: 0 errors.
-- ESLint: 0 errors and exactly 7 pre-existing warnings; no new warning.
-- Tests: **594 passing across 29 files** — the full 460-test v1.5 baseline
-  preserved unchanged across its 25 files, plus 134 new tests across 4 new
-  files. No existing test was weakened, renamed or removed.
-- Production build: passed.
-- `git diff --check`: clean.
-- Dependency, test-framework, and test-configuration changes: none.
+- TypeScript: **0 errors**.
+- ESLint: **0 errors and exactly 7 pre-existing warnings**; no new warning.
+- Tests: **675 passing across 38 files**.
+- Focused Replay runtime suite: **30 passing tests**, including visibility
+  resume, 300× no-catch-up, Pause, import barrier, operational error, ended
+  state, detach/reattach and repeated-cycle ownership.
+- Production build: passed; **1030 modules transformed**.
+- `git diff --check`: clean apart from line-ending conversion notices.
+- `lightweight-charts@5.2.1` and its pinned transitive
+  `fancy-canvas@2.1.0` are installed.
 
-**Mutation proof.** Fourteen invariants were each deliberately broken before
-acceptance and each turned the corresponding test red before being reverted:
-the `−60000` timestamp shift; expiry in series identity; conflict rejection;
-gap preservation; chunk-before-manifest commit ordering; market-database
-separation from the journal database; reader ordering; manifest-gated chunk
-reads; `activeRevision + 1` allocation; provider absence from the read request
-(a compile-time proof); reading committed state before acquiring the mutation
-lock; tombstone map preservation; manifest-before-payload clear ordering; and
-the deleting-state visibility check.
-
-**Test-harness boundary, recorded rather than concealed.** `vitest.config.ts`
-sets `environment: 'node'` with no DOM and no IndexedDB. Decision and ordering
-logic is therefore proven in Node against injected fakes, and real host
-behaviour — IndexedDB, structured clone, Web Crypto, cross-tab Web Locks — is
-proven at runtime acceptance. No jsdom and no fake-IndexedDB dependency was
-added.
-
-**One production seam exists purely to make that split testable, and it is
-disclosed rather than hidden.** The three storage mutation APIs
-(`commitImport`, `deleteSeries`, `clearHistoricalCache`) accept an optional
-`runExclusive` runner; when it is omitted — as it is on every production call
-path — the origin-wide Web Lock is used. It exists because the real Web Locks
-API is host behaviour a Node-only harness cannot reach, and it is confined to
-`services/marketDataStore.ts`: it appears in no Replay-facing type, and
-`HistoricalBarReader` has no locking concept at all. The consequence is that
-the unconditional "every mutation holds the lock" guarantee holds for callers
-that do not override the runner; a caller that deliberately injects a
-passthrough can bypass it. Runtime acceptance exercised the default path,
-including cross-tab exclusion against a second real browser tab.
-
-One deviation from the frozen test plan is recorded: the planned source-text
-scan asserting that market-data modules never import `pipValues` required
-`node:fs` type declarations this project does not carry, and adding `@types/node`
-would have been a dependency change. The property is instead proven
-behaviourally — roots that exist in `PIP_TABLE` but not in the market-data
-domain are rejected — with `pipValues` imported by the test only, as evidence.
-
----
-
-## Runtime Evidence
-
-Localhost Runtime Acceptance **PASSED** — RA-1 through RA-14 plus RA-C1 through
-RA-C5. A dedicated clean browser profile was used; the primary journal account
-was never used, opened or inspected, and no journal database existed in that
-profile at any point.
-
-- Real exports ingested at **2700**, **2729** and **2557** bars, matching source
-  row counts exactly, into three provider-neutral series with no id collision.
-- End-of-Bar normalization exact on every file. Canonical first bars at
-  `2016-03-01T05:00:00Z` for March and `2016-06-01T04:00:00Z` for June — the
-  one-hour difference is real EST/EDT evidence that no fixed UTC offset exists
-  anywhere in the path.
-- Browser SHA-256 produced three distinct 64-hex digests, all stored in
-  provenance, and reproduced exactly on re-reading the same file.
-- Gap preservation held on all three series: reader observations identical to
-  source observations, zero fabricated bars, zero bars at absent minutes, no
-  flat zero-volume candle anywhere. March absent-minute counts were **180** and
-  **151** over 2880-slot windows.
-- NQ and ES intersected at **2700** with **29** ES-only minutes and **0**
-  NQ-only minutes; no NQ bar was invented at any ES-only minute, and alignment
-  is by timestamp rather than array index.
-- A full page reload preserved every series, count, revision, provenance entry
-  and checksum, with column arrays surviving structured clone intact.
-- An identical re-import wrote **no chunk**, bumped **no revision**, left the
-  committed block unchanged, and recorded 2700 idempotent duplicates.
-- A conflicting bar was rejected with zero writes — no chunk, no revision, and
-  no provenance entry — and the stored bar was unchanged.
-- Reader range behaviour was correct across a day boundary: strictly ascending,
-  half-open at both ends, one-minute range returning one bar, empty range
-  returning none, unknown series reported unavailable.
-- Cross-tab exclusion was demonstrated with a second real browser tab holding
-  the production lock; the committing tab blocked and then succeeded. Two
-  competing commits produced the exact union with no lost update.
-- Deleting one series removed its record and chunks while leaving the other two
-  intact. A tombstoned deletion survived a real page reload with its cleanup map
-  preserved, stayed invisible throughout, and resumed to completion.
-- Import versus clear serialized with no partial mixture and no manifest
-  referencing missing payload. The fail-safe clear window left nothing visible
-  and nothing reachable, and re-running completed cleanup.
-- Journal isolation held: the only database created was
-  `trading-journal-ai-marketdata`, no journal database was ever created, and
-  LocalStorage was unchanged from the pre-acceptance snapshot.
-
-Two unplanned negative tests also passed. A mislabelled file selected during
-acceptance — ES content declared as NQ — was rejected as a conflict with zero
-writes, exercising the hazard that contract identity appears in no source row.
-A repeated commit was absorbed idempotently, confirmed by its provenance entry
-recording 600 accepted bars and 600 idempotent duplicates.
-
----
-
-## Defect Findings
-
-- P0: none.
-- P1: none.
-- No implementation or test correction was required during runtime acceptance.
+The Node test harness proves deterministic runtime decisions through injected
+clock, animation-frame, visibility and reader ports. Real host behaviour remains
+covered by Runtime Acceptance; automated results alone are not the evidence for
+the Microsoft Edge visibility transition or browser IndexedDB failure injection.
 
 ---
 
 ## Versioning
 
-- Package semantic version: **1.5.0 → 1.6.0**, written during the
-  documentation/version gate in `package.json` and in the root-project version
-  metadata of `package-lock.json`. No dependency, lockfile structure, or
-  configuration change accompanied it.
-- Release: **v1.6.0**, title `Free Historical Data Foundation`.
-- Build identity is resolved at build time from the Git commit. Semantic version
-  and build SHA are independent identifiers: the former comes from
-  `package.json`, the latter from Git. A pre-commit local build therefore
-  reports the then-current fallback SHA, and CI bakes the SHA of whichever
-  commit it builds. Repository application content being unchanged is never a
-  claim that a generated production artifact is byte-identical.
+- Package semantic version: **1.6.0 → 1.7.0** in `package.json` and the two
+  root-project version fields in `package-lock.json`.
+- Existing dependency entries remain unchanged. B2a intentionally adds
+  `lightweight-charts@5.2.1` and its `fancy-canvas@2.1.0` transitive dependency,
+  increasing lockfile package entries from 458 to 460. No unrelated dependency
+  upgrade or integrity/resolved churn occurred.
+- Release title: **B2a Single-Chart Historical Replay Core**.
+
+Semantic version and build SHA remain independent. A local pre-commit build is
+not a claim about the identity of a future deployed artifact.
 
 ---
 
 ## Explicit Non-Scope
 
-v1.6 does not include:
+v1.7 does not include:
 
-- any Backtest UI, tab, chart, or import screen;
-- a chart library;
-- the Replay workspace, replay clock, layout system, or link system;
-- a timezone selector;
-- drawing tools, Fibonacci, position tools, or a ruler;
-- simulated orders, stop/target handling, or scale in/out simulation;
-- backtest-journal persistence, backtest analytics, or real-versus-backtest
-  comparison;
-- a rename of the existing Backtest feature;
-- continuous contracts, a rollover engine, a session calendar, or a holiday
-  calendar;
-- tick, one-second, or bid/ask data;
-- a NinjaTrader AddOn, or any broker integration;
-- a shared historical service, remote fetch, cloud market-data distribution, or
-  any Supabase change;
-- any paid data provider;
-- any journal storage, resolver, backup, Recovery Bin, or sync change.
+- B2b or any later Replay phase;
+- multiple chart panes or simultaneous multi-symbol Replay;
+- a TradingView replacement;
+- drawings, Fibonacci tools, position tools or rulers;
+- simulated trading, orders, fills, stops, targets or broker execution;
+- broker integration or a NinjaTrader AddOn;
+- a cloud/shared historical-data service or multi-device Replay sync;
+- Replay analytics, AI Replay or a complete Backtest platform;
+- continuous-contract construction, rollover logic, session calendars or
+  holiday calendars;
+- remote market-data fetch or paid-provider integration;
+- journal/backtest persistence for Replay activity.
 
-Historical market data is deliberately excluded from Backup and Restore, for the
-same reason the Recovery Bin is: it is regenerable derived state rather than
-source data.
-
----
-
-## Exit Criteria
-
-- [x] A real NinjaTrader 1-minute export parses into canonical bars, with every
-      structurally invalid row rejecting the whole import rather than being
-      repaired.
-- [x] End-of-Bar source stamps normalize to start-of-bar UTC by exactly
-      60,000 ms, with provenance recording both conventions.
-- [x] Series identity is provider-neutral and carries an unambiguous numeric
-      expiry; no provider token appears in any key, bar, or read request.
-- [x] Individual contracts are stored separately and do not collide.
-- [x] Absent minutes remain absent; no synthetic, alignment, or padded bar is
-      ever created.
-- [x] NQ and ES grids remain independent, aligned by timestamp rather than
-      index.
-- [x] A changed day is written at the next revision and never over a committed
-      chunk; the reader reads only manifest-referenced chunks.
-- [x] A failed import leaves previously committed state unchanged, and its
-      chunks are unreachable.
-- [x] An identical re-import writes no chunk and bumps no revision; a
-      conflicting bar is rejected with zero writes.
-- [x] On the default production path every mutation holds the origin-wide lock
-      and re-reads state inside it; concurrent mutations serialize with no lost
-      update, proven across two browser tabs. The optional `runExclusive` seam
-      is the sole documented way to substitute that runner.
-- [x] A manifest referencing a chunk proven missing fails the import closed,
-      with no silent repair.
-- [x] A large import does not throw: bounds are computed in a linear pass, with
-      no argument-spread ceiling.
-- [x] Deletion hides the series before removing payload and resumes
-      deterministically after an interruption; clearing removes manifests before
-      payload.
-- [x] Data survives a full page reload unchanged.
-- [x] The journal database, its version, its stores, and LocalStorage are
-      untouched, and the market-data database is separate and independently
-      removable.
-- [x] Typecheck, lint, full tests, diff check, and production build passed
-      (594/594 across 29 files; exactly 7 pre-existing warnings).
-- [x] Fourteen mutation proofs turned red and were reverted.
-- [x] An operational storage failure is reported as `read_failed`, never as
-      established absence.
-- [x] A zero-bar import is rejected unconditionally with no read, no write, and
-      no provenance entry.
-- [x] No real market data entered the repository, fixtures, or Git.
-- [x] Documentation, version metadata, and one Architecture Decision closed
-      without widening scope.
-
-The annotated `v1.6.0` tag is the release-control marker and is authoritative in
-Git rather than duplicated as mutable checklist state.
-
----
-
-## Architecture Decision
-
-**AD-023 was recorded**: historical market data is a reconstructable cache
-domain in its own IndexedDB database, behind a provider-independent reader.
-
-This is a genuine new architectural authority — a third data class alongside
-AD-014's Class A and Class B, a second database, and a new module boundary that
-later phases will read through. AD-014 is unaffected: backtest *results* remain
-Class B in their existing LocalStorage key, and nothing was reclassified.
-
-Exactly one Architecture Decision was recorded. Continuous-contract strategy,
-cloud synchronization, and a shared market-data service are explicitly not
-decided here.
-
----
-
-## Migration Impact
-
-None. No journal IndexedDB version or object-store change, no LocalStorage key
-migration, no trade or account migration, no backup-format change, no sync
-change, and no Supabase schema change.
-
-v1.6 introduces a **new** storage domain in its own database. That is not a
-migration of existing storage.
-
-Rollback is exact: revert the implementation and delete the market-data
-database. Journal data is unaffected, and no journal backup is required to undo
-this release.
+No next phase starts automatically. B2b remains unimplemented and requires a
+separate user decision and approval.
 
 ---
 
 ## Known Limitations
 
-Non-blocking. None of these is a release blocker.
+Non-blocking. None is a release blocker.
 
-P2:
-- A failed import can leave a chunk for a UTC day that never entered a committed
-  manifest. Such a chunk is not enumerable from the manifest and is therefore
-  not removed by deleting that series. It is never reader-visible, cannot affect
-  committed state, is reused by a retry of the same day, and is removed by
-  clearing the cache or deleting the database. No staging store, orphan index,
-  background collector, or chunk-store scan was added to eliminate residue that
-  nothing can observe.
-- Superseded chunk revisions are retained until the series is deleted or the
-  cache cleared, deliberately, so that commit stays purely additive and a reader
-  holding an older manifest can finish reading consistently.
-- Ingestion has been exercised at three-day scale. Multi-year ingestion, and the
-  record counts that come with it, have not been measured in a browser.
-- Quota exhaustion is classified distinctly by the reused IndexedDB primitive but
-  was not reached during acceptance.
-- The database's blocked and version-change paths are wired through the reused
-  primitive but cannot be exercised while only one schema version exists.
+1. **Cross-tab/external market-data mutation.** A running Replay session does
+   not detect market-data changes made by another tab or external actor.
+   Supported imports cannot contradict an existing canonical 1-minute OHLCV
+   bar, but newly added missing observations can leave the running snapshot and
+   derived HTF stale until reset or reload.
 
-P3:
-- The `mutation_lock_unavailable` path is unreachable on supported hosts, where
-  the Web Locks API is available; it is proven by injection in unit tests rather
-  than at runtime.
-- Cross-tab evidence is one-directional: lock exclusion was proven with two real
-  tabs, while the no-lost-update case was proven within one tab and in the Node
-  harness.
-- Absence counts for an export whose original window is not independently known
-  cannot be derived from the file, and are therefore recorded as observations
-  rather than stored as provenance.
+2. **L-5 App identity destruction.** Sign-out or user switch during a pending
+   import can degrade to the accepted external snapshot-staleness class. Replay
+   adds no persistence or authentication coupling to eliminate that case.
+
+3. **Lightweight Charts UTC tick weighting.** Coordinates remain real UTC epoch
+   seconds and labels are America/New_York formatted. Lightweight Charts still
+   selects tick weights on UTC boundaries, which can produce a minor cosmetic
+   label-placement mismatch around local date boundaries.
+
+4. **Market gaps.** Missing minutes remain absent. Candles are ordinally
+   adjacent on the Lightweight Charts time axis while the Replay cursor can sit
+   inside the real missing interval.
+
+5. **Import-status message.** The latest import success message can remain
+   visible after another series is loaded. It is informational only: selected
+   series, availability, Replay cursor and chart data remain correct.
+
+All eight v1.6 historical-cache limitations remain applicable to the underlying
+data foundation and are preserved in the v1.6 changelog record.
 
 ---
 
-## Repository State
+## Architecture and Migration
 
-Durable release lineage:
+No new Architecture Decision is required. B2a consumes AD-023's existing
+provider-independent historical reader and reconstructable-cache domain without
+changing their authority.
 
-- Released v1.2 baseline:
-  `de734061dafe8f1db78f044a28d1f85c78741ffe`
-- v1.3.0 release baseline (annotated tag `v1.3.0`):
-  `aa03a04b82129028a6ad7f8b4e5486ff23bad05f`
-- v1.4 functionally accepted application commit:
-  `790f7eea242aaf64600adfd9067a582f34a00b1a`
-- v1.4.0 release baseline (annotated tag `v1.4.0`):
-  `426cbbba806e65231cc51ebc8fac64b571a1753b`
-- v1.5.0 release baseline (annotated tag `v1.5.0`):
-  `3849b7a13944d8ee5016b6c860f344e0c594fb76`
-- Governance baseline this release departed from:
-  `3849b7a13944d8ee5016b6c860f344e0c594fb76`
-
-Release history is kept linear and single-parent. Git history and the annotated
-tag reference are authoritative for release identity; that identity is
-deliberately not duplicated here as mutable prose.
+Migration impact: none. There is no schema, object-store, LocalStorage key,
+journal, account, trade, backup, sync or Supabase migration.
 
 ---
 
 ## Next Phase
 
-**USER DECISION.** The Backtest roadmap beyond this foundation — replay
-workspace, drawing tools, simulated trading, and backtest-journal persistence —
-was ranked during Discovery and Scope Decision but no phase has been selected,
-and none is proposed here.
+**USER DECISION.** B2b is not implemented or started. Any next Replay phase,
+including drawings, simulated trading, multi-pane layout or analytics, requires
+its own scope decision and authorization.

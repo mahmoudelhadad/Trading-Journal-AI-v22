@@ -59,6 +59,24 @@ module.exports = {
   },
   overrides: [
     {
+      files: ['src/pages/Replay.tsx', 'src/components/replay/**/*.{ts,tsx}'],
+      rules: {
+        'no-restricted-imports': ['error', {
+          patterns: [
+            '@hooks/useReplayRuntime*',
+            '@services/replayRuntime*',
+            '@services/replayComposition*',
+            '../hooks/useReplayRuntime*',
+            '../../hooks/useReplayRuntime*',
+            '../services/replayRuntime*',
+            '../../services/replayRuntime*',
+            '../services/replayComposition*',
+            '../../services/replayComposition*',
+          ],
+        }],
+      },
+    },
+    {
       // Legacy JS/JSX files predate the TypeScript migration and are
       // not parsed by @typescript-eslint (no TS syntax to parse), but
       // share the same JSX/React rule set.

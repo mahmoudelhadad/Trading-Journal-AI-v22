@@ -18,3 +18,4 @@ export * from './Calendar.js';
 export * from './Strategy.js';
 export * from './Insights.js';
 export * from './Backtest.js';
+export * from './Replay.js';

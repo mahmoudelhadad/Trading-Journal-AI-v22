@@ -1,3 +1,139 @@
+# v1.8 — B2b Simulated Trading & Replay Session Foundation
+
+Package semantic version: **1.8.0**.
+
+Release type:
+NEW USER-FACING CAPABILITY
+
+Risk tier:
+HIGH
+
+Status:
+IMPLEMENTATION, AUTOMATED VERIFICATION, RUNTIME ACCEPTANCE, DOCUMENTATION AND
+VERSION PREPARATION COMPLETE
+
+Release marker definition:
+ANNOTATED `v1.8.0` TAG
+
+The Git tag reference is authoritative for the canonical release marker. This
+record describes the locally prepared release candidate and does not claim a
+deployment, live acceptance result or marker that Git does not carry.
+
+## Summary
+
+v1.8 delivers B2b: a durable simulated-trading and Replay-session foundation
+on top of B2a's canonical historical Replay runtime. Users can explicitly
+create an owner-scoped session, submit manual Long or Short entries from a
+fresh revealed 1-minute close, close the full position manually, navigate and
+resume durable progress, and complete Flat sessions as immutable history.
+
+## Delivered scope
+
+- Explicit creation of durable owner-scoped Replay sessions with schema-v1
+  persistence and immutable historical-series binding.
+- UUID identities for sessions, trades and actions.
+- One resumable active session model and terminal immutable completed sessions.
+- Manual Long and Short Entry with positive safe whole-contract quantity.
+- One open position maximum and manual full Close Position only.
+- Optional immutable initial stop recorded as a risk anchor only.
+- Canonical execution from the latest fresh revealed 1-minute close, owned by
+  ReplayRuntime and identified by unambiguous UTC cursor and bar facts.
+- NQ and ES points, ticks, gross P/L, risk and R projection from stored fills.
+- Rewind projection that hides future actions and results without truncating
+  canonical history, plus high-water mutation protection.
+- Revisioned persistence serialized by the owner-scoped Web Lock, with
+  deterministic stale-revision handling.
+- Idempotent canonical action retry, action-ID collision protection and stable
+  action/trade identity across conflict and recovery.
+- Outcome-unknown recovery that neither retries an uncertain write nor
+  fabricates a historical action when hydration proves it absent.
+- Checkpoint/action/completion arbitration, including pending and in-flight
+  checkpoint ordering and captured-context precedence.
+- Runtime safety barriers and paused last-verified authority after persistence
+  failures.
+- Owner-scoped user isolation and suppression of stale previous-owner async
+  publication.
+- Byte-preserving isolation from Journal data and the legacy Backtest domain.
+- Read-only isolation from historical market-data manifests and bar chunks.
+
+## Correctness and persistence
+
+Execution authority remains in ReplayRuntime. `beginExecutionCommand`
+synchronously settles the monotonic Replay clock before capturing the action
+context; rendered DOM clock text can lag that authoritative cursor between
+frames, especially at 300×. Entry and Exit retain their captured cursor, source
+bar and fill while any older checkpoint supplies only its newly verified
+persistence revision.
+
+Every durable mutation re-reads under the scoped Web Lock and verifies the
+result. Identical canonical retries are byte-identical no-ops. A reused action
+ID with different canonical content fails as an ID collision before stale
+revision handling. Definite failures do not publish speculative state, while
+outcome-unknown writes remain safety-blocked until explicit hydration resolves
+their persisted outcome.
+
+## Runtime Acceptance
+
+Runtime Acceptance is closed: **RA-1 through RA-45 passed (45/45)** and
+**RA-PERF passed**, with **0 FAIL** and **0 OPEN / NOT RUN**.
+
+- Final RA-27 used a real browser page-hidden transition. Replay settled while
+  hidden, performed no hidden-time catch-up and resumed from the same canonical
+  cursor after visibility returned.
+- Final corrected RA-31 proved that execution context is captured before any
+  persistence/checkpoint wait; ReplayRuntime's settled monotonic cursor is the
+  authority rather than potentially lagging rendered clock text.
+- RA-PERF ran in Chromium 151 on Windows with Web Locks, exactly 10 sessions and
+  2,000 baseline canonical actions in an 866,590-byte envelope.
+- Against the 100 ms verified-mutation threshold, the maximum measured mutation
+  was 26.4 ms with zero threshold breaches, zero measured-operation long tasks
+  and zero measured-operation event-loop stalls. One 939 ms long task occurred
+  outside measured mutation windows and was not a threshold breach.
+
+Disposable acceptance data and the temporary performance harness were removed.
+Journal, legacy Backtest, historical market data and the manual acceptance
+session were not modified by RA-PERF.
+
+## Automated verification
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors and exactly 7 pre-existing warnings.
+- Tests: **764 passing across 41 files**.
+- Focused B2b suites: **389 passing across 18 files**.
+- Production build: passed; **1036 modules transformed**.
+- `git diff --check` and `git diff --cached --check`: passed.
+- No dependency version or package-integrity change was introduced by B2b.
+
+## Preserved and separate
+
+Journal trades, accounts and storage remain separate from B2b sessions. The
+existing feature named Backtest remains filter-based analytics over journalled
+trades and is not renamed or used as the Replay execution domain. Historical
+market data remains a read-only reconstructable cache for simulated trading.
+
+Unchanged: Journal IndexedDB schema and LocalStorage contracts; Backup, Restore
+and Recovery Bin formats and behavior; account/trade models; Supabase and sync;
+historical market-data schema and import/delete/clear behavior; and B2a Replay
+reveal, chart and lifecycle contracts.
+
+## Explicit deferred scope
+
+v1.8 does not include automatic stop-loss execution; take-profit execution;
+pending orders; scaling in or out; partial exits; order routing; broker
+execution; B2b broker integration; or cloud/multi-device B2b session sync.
+The optional initial stop is a fixed risk anchor only.
+
+## Versioning and migration
+
+- Package semantic version: **1.7.0 → 1.8.0** in `package.json` and the two
+  root-project version fields in `package-lock.json`.
+- Dependency declarations, resolved versions and integrity metadata are
+  unchanged.
+- No Journal, historical-market-data, backup, sync, Supabase or cloud migration
+  is introduced.
+
+---
+
 # v1.7 — B2a Single-Chart Historical Replay Core
 
 Package semantic version: **1.7.0**.

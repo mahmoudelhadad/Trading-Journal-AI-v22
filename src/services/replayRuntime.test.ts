@@ -43,6 +43,24 @@ function fireVisibility(h: ReturnType<typeof harness>): void {
 }
 
 describe('production replay runtime authority and lifecycle', () => {
+  it('returns authoritative commit booleans for racing session resumes', async () => {
+    const first = deferred<HistoricalAvailability>(); const second = deferred<HistoricalAvailability>();
+    const getLocalAvailability = vi.fn()
+      .mockResolvedValueOnce(availability)
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const reader: HistoricalBarReader = { getLocalAvailability, readBars: vi.fn(async () => ok([bar(T0)])) };
+    const h = harness(reader); h.runtime.attach(); await flush();
+    const seriesB = { ...SERIES, root: 'ES' as const };
+    const resumeA = h.runtime.resumeSession(SERIES, T0 + 60_000); await flush();
+    const resumeB = h.runtime.resumeSession(seriesB, T0 + 120_000); await flush();
+    second.resolve(availability); await flush();
+    expect(await resumeB).toBe(true);
+    first.resolve(availability); await flush();
+    expect(await resumeA).toBe(false);
+    expect(h.runtime.getSnapshot()).toMatchObject({ series: seriesB, nowUtcMs: T0 + 120_000 });
+  });
+
   it('construction is inert and independent across two runtimes', () => {
     const reader = { getLocalAvailability: vi.fn(), readBars: vi.fn() } as unknown as HistoricalBarReader;
     const a = harness(reader); const b = harness(reader);
@@ -379,5 +397,121 @@ describe('production replay runtime authority and lifecycle', () => {
     expect(result).toMatchObject({ ok: false, reason: 'write_failed' });
     expect(h.runtime.getSnapshot().importing).toBe(false);
     expect(reader.getLocalAvailability).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('B2b private 1m execution authority and canonical barriers', () => {
+  it.each(['1m', '5m', '15m', '1h'] as const)('fills from the latest revealed canonical 1m close while displaying %s', async (timeframe) => {
+    const reader: HistoricalBarReader = {
+      getLocalAvailability: vi.fn(async () => availability),
+      readBars: vi.fn(async () => ok([bar(T0, 101.125), bar(T0 + 60_000, 999)])),
+    };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000); h.runtime.setTimeframe(timeframe);
+    const result = h.runtime.beginExecutionCommand(SERIES);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.fill).toEqual({ decisionUtcMs: T0 + 60_000, sourceBarStartUtcMs: T0,
+      sourceBarCloseUtcMs: T0 + 60_000, price: 101.125, basis: 'revealed_1m_close' });
+    expect(result.fill.price).not.toBe(999);
+  });
+
+  it('keeps HTF aggregation out of execution bar identity', async () => {
+    const bars = [bar(T0, 1), bar(T0 + 60_000, 2), bar(T0 + 120_000, 3)];
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok(bars)) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 180_000); h.runtime.setTimeframe('5m');
+    expect(h.runtime.getSnapshot().bars).toHaveLength(1);
+    const result = h.runtime.beginExecutionCommand(SERIES);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.fill).toMatchObject({ sourceBarStartUtcMs: T0 + 120_000, sourceBarCloseUtcMs: T0 + 180_000, price: 3 });
+  });
+
+  it('rejects before the first close and excludes prefetched/future bars', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => availability), readBars: vi.fn(async () => ok([bar(T0), bar(T0 + 60_000, 999)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0);
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'no_closed_bar' });
+    await h.runtime.goTo(T0 + 60_000);
+    const result = h.runtime.beginExecutionCommand(SERIES);
+    expect(result.ok && result.fill.price).toBe(1);
+  });
+
+  it('accepts freshness age 0 and 59,999 but rejects exactly 60,000 and market gaps', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok([bar(T0, 7)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000);
+    expect(h.runtime.beginExecutionCommand(SERIES).ok).toBe(true); h.runtime.releaseCanonicalCommand();
+    await h.runtime.goTo(T0 + 60_000 + 59_999);
+    expect(h.runtime.beginExecutionCommand(SERIES).ok).toBe(true); h.runtime.releaseCanonicalCommand();
+    await h.runtime.goTo(T0 + 120_000);
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'stale_quote' });
+  });
+
+  it('settles playing cursor and captures fill/progress once before persistence waiting', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok([bar(T0, 12.3456789)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000); h.runtime.setSpeed(5); h.runtime.play(); h.setPerf(1_000);
+    const result = h.runtime.beginExecutionCommand(SERIES);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.progress).toEqual({ cursorUtcMs: T0 + 65_000, displayTimeframe: '1m', speed: 5 });
+    expect(result.fill.price).toBe(12.3456789);
+    expect(h.runtime.getSnapshot().playState).toBe('paused');
+  });
+
+  it('rejects series mismatch, loading, operational error, and detached capture', async () => {
+    const waiting = deferred<HistoricalAvailability>();
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(() => waiting.promise), readBars: vi.fn(async () => ok([bar(T0)])) };
+    const h = harness(reader);
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'not_ready' });
+    h.runtime.attach(); await flush();
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'not_ready' });
+    waiting.resolve(availability); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000);
+    expect(h.runtime.beginExecutionCommand({ ...SERIES, root: 'ES' })).toEqual({ ok: false, reason: 'series_mismatch' });
+    h.runtime.detach();
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'not_ready' });
+  });
+
+  it('action barrier rejects direct movement, series/import replacement, another action, and Complete', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok([bar(T0)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000);
+    expect(h.runtime.beginExecutionCommand(SERIES).ok).toBe(true);
+    const cursor = h.runtime.getSnapshot().nowUtcMs;
+    h.runtime.play(); await h.runtime.stepForward(); await h.runtime.goTo(T0 + DAY_MS);
+    h.runtime.selectSeries({ ...SERIES, root: 'ES' });
+    expect(await h.runtime.runImport(SERIES, async () => commitOk)).toMatchObject({ ok: false, reason: 'command_pending' });
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'command_pending' });
+    expect(h.runtime.beginCompletionCommand(SERIES)).toEqual({ ok: false, reason: 'command_pending' });
+    expect(h.runtime.getSnapshot().nowUtcMs).toBe(cursor);
+    expect(h.runtime.getSnapshot().series).toEqual(SERIES);
+  });
+
+  it('completion barrier captures once, blocks commands, and releases explicitly', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok([bar(T0)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000); h.runtime.setTimeframe('15m'); h.runtime.setSpeed(30);
+    const complete = h.runtime.beginCompletionCommand(SERIES);
+    expect(complete).toEqual({ ok: true, progress: { cursorUtcMs: T0 + 60_000, displayTimeframe: '15m', speed: 30 } });
+    h.runtime.setTimeframe('1h'); h.runtime.setSpeed(300); h.runtime.play(); await h.runtime.goTo(T0 + DAY_MS);
+    expect(h.runtime.getSnapshot()).toMatchObject({ nowUtcMs: T0 + 60_000, timeframe: '15m', speed: 30, playState: 'paused', canonicalBarrier: 'completion' });
+    h.runtime.releaseCanonicalCommand(); h.runtime.setTimeframe('1h');
+    expect(h.runtime.getSnapshot().timeframe).toBe('1h');
+  });
+
+  it('enforces the active session immutable-series lock below React', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok([bar(T0)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000); h.runtime.setSessionSeriesLock(SERIES);
+    h.runtime.selectSeries({ ...SERIES, root: 'ES' }); await flush();
+    expect(h.runtime.getSnapshot().series).toEqual(SERIES);
+    expect(await h.runtime.runImport({ ...SERIES, root: 'ES' }, async () => commitOk)).toMatchObject({ ok: false });
+    h.runtime.setSessionSeriesLock(null); h.runtime.selectSeries({ ...SERIES, root: 'ES' }); await flush();
+    expect(h.runtime.getSnapshot().series.root).toBe('ES');
+  });
+
+  it('blocks durable execution while rewound and blocks playback after a safety failure', async () => {
+    const reader: HistoricalBarReader = { getLocalAvailability: vi.fn(async () => wideAvailability), readBars: vi.fn(async () => ok([bar(T0)])) };
+    const h = harness(reader); h.runtime.attach(); await flush(); await h.runtime.resumeSession(SERIES, T0 + 60_000);
+    h.runtime.setSessionMutationBlocked(true);
+    expect(h.runtime.beginExecutionCommand(SERIES)).toEqual({ ok: false, reason: 'not_ready' });
+    await h.runtime.goTo(T0 + 120_000); // navigation remains available while rewound
+    h.runtime.setSessionMutationBlocked(false); h.runtime.setSessionSafetyBlock(true); h.runtime.play();
+    expect(h.runtime.getSnapshot().playState).toBe('paused');
+    expect(h.runtime.beginCompletionCommand(SERIES)).toEqual({ ok: false, reason: 'not_ready' });
   });
 });

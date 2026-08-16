@@ -12,6 +12,7 @@ export const USER_STORAGE_LOGICAL_KEYS = [
   'fxj_v4_recovery_bin',
   'fxj_v4_restore_points',
   'fxj_v4_sync_cursors',
+  'fxj_v4_backtest_sessions',
   'fxj_v4_backtest_results',
 ] as const;
 

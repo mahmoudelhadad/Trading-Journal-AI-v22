@@ -4,7 +4,7 @@
 
 ## Phase
 
-v1.7 — B2a Single-Chart Historical Replay Core
+v1.8 — B2b Simulated Trading & Replay Session Foundation
 
 Release type:
 
@@ -18,249 +18,130 @@ Status:
 
 IMPLEMENTATION COMPLETE
 AUTOMATED VERIFICATION COMPLETE
-RUNTIME ACCEPTANCE COMPLETE (RA-1 THROUGH RA-21)
-DOCUMENTATION + VERSION CLOSURE COMPLETE
+RUNTIME ACCEPTANCE CLOSED (RA-1 THROUGH RA-45 + RA-PERF)
+DOCUMENTATION + VERSION PRE-GATE-B WORK COMPLETE
+GATE B NOT CROSSED
 
-Package semantic version: **1.7.0**.
+Package semantic version: **1.8.0**.
 
-- Base release: **v1.6.0** (annotated tag) — the historical-data foundation
-  this work extends.
-- Target release: **v1.7.0**.
-
----
+- Base release: **v1.7.0** — B2a Single-Chart Historical Replay Core.
+- Target release: **v1.8.0**.
+- Local Git closure has not been performed.
+- No push, deployment or release tag has been performed for v1.8.0.
 
 ## Release Marker
 
-The canonical release marker for this version is the annotated tag **`v1.7.0`**.
+The canonical release marker for this version is the annotated tag **`v1.8.0`**.
 The Git tag reference is authoritative for which commit carries that marker.
 This document prepares the local release candidate; it does not assert a
-deployment, live acceptance result, or release marker that Git does not carry.
-
----
+deployment, live acceptance result or release marker that Git does not carry.
 
 ## Objective
 
-Deliver the first user-facing historical Replay surface on top of v1.6's
-provider-neutral local market-data foundation: one deterministic candlestick
-chart driven by a canonical UTC cursor, with no look-ahead and no coupling to
-the existing journal Backtest feature.
-
----
+Deliver the first durable simulated-trading foundation for historical Replay:
+owner-scoped resumable sessions, canonical manual Entry and full Exit, durable
+progress and action history, deterministic concurrency and recovery, and strict
+isolation from Journal, legacy Backtest and historical market-data storage.
 
 ## Delivered Scope
 
-### Replay surface
+### Session and execution model
 
-- A separate **Replay** application tab.
-- One Lightweight Charts 5.2.1 candlestick pane.
-- Local NQ and ES contract-series selection by root and `MM-YY` expiry.
-- NinjaTrader historical-file import through the Replay UI.
-- Play and Pause.
-- Replay speeds: **1×, 2×, 5×, 10×, 30×, 60×, and 300×**.
-- Step Forward to the earliest actual 1-minute bar close after the cursor.
-- Go To an exact UTC instant, including an instant inside a market gap.
-- **1m, 5m, 15m, and 1h** display timeframes.
-- A persistent cursor readout containing America/New_York wall time, its UTC
-  offset, and the unambiguous ISO-UTC instant.
+- Explicit owner-scoped schema-v1 session creation; ordinary Replay rendering
+  never eagerly creates storage.
+- UUID session, trade and action identity with immutable historical-series
+  binding.
+- One resumable active session model; explicitly completed Flat sessions are
+  terminal immutable history.
+- Manual Long and Short Entry, positive safe whole-contract quantity, one open
+  position maximum and manual full Close Position.
+- Optional immutable initial stop as a risk anchor only.
+- ReplayRuntime-owned canonical execution from the latest fresh revealed
+  1-minute close, with UTC decision, source-bar and fill identity.
+- Rewind projection hides future history without deleting it, and mutations
+  reject below the canonical action high-water mark.
 
-### Replay correctness
+### Persistence, concurrency and recovery
 
-- The Replay cursor is deterministic UTC epoch time.
-- Chart coordinates remain real UTC epoch seconds; timestamps are never shifted
-  to imitate local time.
-- America/New_York formatting distinguishes repeated DST fall-back wall times by
-  offset and ISO-UTC identity.
-- A canonical 1-minute bar is revealed only after its close. No partial
-  1-minute candle is displayed.
-- Chart autoscale, tooltips and derived timeframes receive only revealed bars;
-  buffered future OHLCV cannot leak into the display.
-- 5m, 15m and 1h bars fold only already-revealed canonical 1-minute bars,
-  including volume, and never synthesize missing minutes.
-- Real market gaps remain absent while the cursor may occupy an exact instant
-  inside a gap.
+- Revisioned owner-scoped LocalStorage persistence serialized by Web Locks.
+- Deterministic stale-revision conflicts, idempotent identical retries and
+  same-ID/different-content collision protection.
+- Outcome-unknown safety and explicit hydration recovery for committed and
+  absent writes without automatic retry or fabricated actions.
+- Pending and in-flight checkpoint ordering before Entry, Exit and Complete.
+- Unresolved action/completion barriers block Replay movement, replacement,
+  import and competing execution commands.
+- Definite mutation and background-checkpoint failures preserve the last
+  verified session, pause Replay and block unsafe progress.
+- Previous-owner async results cannot publish after owner replacement.
 
-### Runtime and storage boundaries
+### Isolation
 
-- Initial reads are windowed rather than full-history loads.
-- Forward prefetch is buffer-only and does not advance cursor or authoritative
-  coverage.
-- Coverage advances only through successful authoritative extension.
-- Cursor-driven retention bounds the in-memory history window.
-- The IndexedDB historical reader prunes committed UTC days to the requested
-  canonical range.
-- Same-App imports enter an explicit barrier: playback pauses, the old buffer is
-  hidden, stale reads cannot commit, and settlement establishes a fresh paused
-  session.
-- Authority tokens prevent stale asynchronous reads, prefetches, imports and
-  detached owners from publishing over newer state.
-- One App-lifetime Replay runtime owns the cursor and lifecycle; React
-  StrictMode attach/detach remains symmetric with one animation-frame loop and
-  one visibility listener.
-- Page Visibility temporarily suspends active playback. Restoration re-anchors
-  the monotonic clock and automatically resumes only valid prior play intent,
-  excluding hidden elapsed time and respecting Pause, import, error, ended and
-  detached-owner state.
-- Operational storage failures surface as `read_failed`; proven absence
-  surfaces as `series_unavailable`; a valid empty window remains successful
-  empty data.
-- The production bundle and manual Lightweight Charts chunk load correctly
-  beneath the GitHub Pages base `/Trading-Journal-AI-v22/`.
+- B2b sessions use authenticated owner-scoped physical storage.
+- Journal and legacy Backtest raw storage remain unchanged by B2b operations.
+- Historical market-data manifests and canonical bar chunks remain read-only.
+- Existing B2a chart, reveal, import and browser-lifecycle contracts are
+  preserved.
 
----
+## Runtime Acceptance
 
-## Runtime Acceptance Evidence
+Runtime Acceptance is **CLOSED**.
 
-Runtime Acceptance closed RA-1 through RA-21 in real Chromium environments.
-Normal interaction used real React, Lightweight Charts, IndexedDB, Web Locks,
-Web Crypto and local NinjaTrader exports.
+- Numbered acceptance: **RA-1 through RA-45 — 45/45 PASS**.
+- RA-PERF: **PASS**.
+- FAIL: **0**.
+- OPEN / NOT RUN: **0**.
 
-- NQ 03-16 imported as **2700** canonical bars from
-  `2016-03-01T05:00:00.000Z` through `2016-03-03T04:59:00.000Z`.
-- ES 03-16 imported as **2729** canonical bars. In the shared March window,
-  intersection was 2700, NQ-only was 0 and ES-only was 29.
-- NQ 06-16 imported from `2016-06-01T04:00:00.000Z` through
-  `2016-06-03T03:55:00.000Z`.
-- End-of-Bar source `2016-03-01T05:01:00Z` normalized to canonical start
-  `2016-03-01T05:00:00.000Z`.
-- Boundary and future-sentinel checks proved no partial candle, future autoscale
-  influence or future HTF contribution.
-- Controlled DST fall-back bars at `2024-11-03T05:30:00Z` and
-  `2024-11-03T06:30:00Z` remained separate UTC coordinates while formatting as
-  repeated New York 01:30 with GMT-4 and GMT-5 respectively.
-- A genuine Microsoft Edge `document.hidden` false → true → false transition
-  proved playback suspension, no hidden-duration catch-up, automatic playback
-  restoration, and correct Play/Pause controls after return.
-- A reversible browser-level failure scoped to read-only transactions on
-  `trading-journal-ai-marketdata` proved `read_failed` preserves the prior
-  cursor/chart, pauses, reports availability unknown, and recovers after the
-  native API is restored. Journal storage was not intercepted or modified.
-- Local production preview at `/Trading-Journal-AI-v22/` loaded Replay and the
-  Lightweight Charts chunk without an asset or base-path failure.
+Final RA-27 used a real page-hidden browser transition while Replay was
+genuinely playing. Replay settled when hidden, accumulated no hidden-time
+catch-up, and resumed from the exact same canonical cursor after visibility
+returned.
 
-No BLOCKER or MATERIAL finding remains.
+Final corrected RA-31 confirmed that ReplayRuntime remains authoritative.
+`beginExecutionCommand` synchronously settles the monotonic replay clock and
+captures execution context before checkpoint/persistence awaiting. Rendered DOM
+clock text can lag that cursor between animation frames, particularly at 300×;
+that rendering lag is not a delayed action-context capture defect.
 
----
-
-## Preserved Contracts
-
-The existing **Backtest** feature remains separate and unchanged. It continues
-to be filter-based analytics over journalled trades; it was not renamed,
-reimplemented or connected to Replay.
-
-Also unchanged: journal IndexedDB schema and version; LocalStorage journal
-keys; authenticated-user namespace; storage resolver and cutover; Backup and
-Restore formats and behaviour; Recovery Bin; account and trade models;
-Supabase integration; synchronization architecture; historical market-data
-schema; import atomicity and Web Lock serialization; deletion/clear semantics;
-and all v1.6 canonical storage contracts.
-
-No journal-storage migration, destructive market-data migration, backup-format
-change, sync change or Supabase change exists in v1.7.
-
----
+RA-PERF ran in Chromium 151 on Windows with Web Locks using exactly 10 sessions
+and 2,000 baseline canonical actions. The baseline envelope was 866,590 bytes.
+The maximum verified mutation was 26.4 ms against a 100 ms threshold, with zero
+threshold breaches, zero measured-operation long tasks and zero
+measured-operation event-loop stalls. One 939 ms long task occurred outside the
+measured mutation windows and was not a threshold breach.
 
 ## Automated Verification
 
 - TypeScript: **0 errors**.
-- ESLint: **0 errors and exactly 7 pre-existing warnings**; no new warning.
-- Tests: **675 passing across 38 files**.
-- Focused Replay runtime suite: **30 passing tests**, including visibility
-  resume, 300× no-catch-up, Pause, import barrier, operational error, ended
-  state, detach/reattach and repeated-cycle ownership.
-- Production build: passed; **1030 modules transformed**.
-- `git diff --check`: clean apart from line-ending conversion notices.
-- `lightweight-charts@5.2.1` and its pinned transitive
-  `fancy-canvas@2.1.0` are installed.
+- ESLint: **0 errors and exactly 7 pre-existing warnings**.
+- Tests: **764 passing across 41 files**.
+- Focused B2b suites: **389 passing across 18 files**.
+- Production build: passed; **1036 modules transformed**.
+- `git diff --check` and `git diff --cached --check`: passed.
 
-The Node test harness proves deterministic runtime decisions through injected
-clock, animation-frame, visibility and reader ports. Real host behaviour remains
-covered by Runtime Acceptance; automated results alone are not the evidence for
-the Microsoft Edge visibility transition or browser IndexedDB failure injection.
+## Preserved Contracts
 
----
+The existing Journal and legacy Backtest feature remain separate from B2b.
+Unchanged: Journal IndexedDB schema and LocalStorage contracts; storage
+resolver; Backup, Restore and Recovery Bin behavior; account/trade models;
+Supabase and sync; historical market-data schema and mutation contracts; and
+B2a's canonical Replay reveal, chart, import and visibility behavior.
 
-## Versioning
+No automatic stop-loss or take-profit execution, pending orders, scaling,
+partial exits, order routing, broker execution, B2b broker integration, or
+cloud/multi-device B2b session sync is included.
 
-- Package semantic version: **1.6.0 → 1.7.0** in `package.json` and the two
+## Versioning and Migration
+
+- Package semantic version: **1.7.0 → 1.8.0** in `package.json` and the two
   root-project version fields in `package-lock.json`.
-- Existing dependency entries remain unchanged. B2a intentionally adds
-  `lightweight-charts@5.2.1` and its `fancy-canvas@2.1.0` transitive dependency,
-  increasing lockfile package entries from 458 to 460. No unrelated dependency
-  upgrade or integrity/resolved churn occurred.
-- Release title: **B2a Single-Chart Historical Replay Core**.
+- Dependency declarations and lockfile package metadata remain unchanged.
+- No Journal, historical-market-data, backup, synchronization, Supabase or
+  cloud migration exists in B2b.
 
-Semantic version and build SHA remain independent. A local pre-commit build is
-not a claim about the identity of a future deployed artifact.
+## Next Pending Decision
 
----
+**Gate B review / authorization for Local Git Closure.**
 
-## Explicit Non-Scope
-
-v1.7 does not include:
-
-- B2b or any later Replay phase;
-- multiple chart panes or simultaneous multi-symbol Replay;
-- a TradingView replacement;
-- drawings, Fibonacci tools, position tools or rulers;
-- simulated trading, orders, fills, stops, targets or broker execution;
-- broker integration or a NinjaTrader AddOn;
-- a cloud/shared historical-data service or multi-device Replay sync;
-- Replay analytics, AI Replay or a complete Backtest platform;
-- continuous-contract construction, rollover logic, session calendars or
-  holiday calendars;
-- remote market-data fetch or paid-provider integration;
-- journal/backtest persistence for Replay activity.
-
-No next phase starts automatically. B2b remains unimplemented and requires a
-separate user decision and approval.
-
----
-
-## Known Limitations
-
-Non-blocking. None is a release blocker.
-
-1. **Cross-tab/external market-data mutation.** A running Replay session does
-   not detect market-data changes made by another tab or external actor.
-   Supported imports cannot contradict an existing canonical 1-minute OHLCV
-   bar, but newly added missing observations can leave the running snapshot and
-   derived HTF stale until reset or reload.
-
-2. **L-5 App identity destruction.** Sign-out or user switch during a pending
-   import can degrade to the accepted external snapshot-staleness class. Replay
-   adds no persistence or authentication coupling to eliminate that case.
-
-3. **Lightweight Charts UTC tick weighting.** Coordinates remain real UTC epoch
-   seconds and labels are America/New_York formatted. Lightweight Charts still
-   selects tick weights on UTC boundaries, which can produce a minor cosmetic
-   label-placement mismatch around local date boundaries.
-
-4. **Market gaps.** Missing minutes remain absent. Candles are ordinally
-   adjacent on the Lightweight Charts time axis while the Replay cursor can sit
-   inside the real missing interval.
-
-5. **Import-status message.** The latest import success message can remain
-   visible after another series is loaded. It is informational only: selected
-   series, availability, Replay cursor and chart data remain correct.
-
-All eight v1.6 historical-cache limitations remain applicable to the underlying
-data foundation and are preserved in the v1.6 changelog record.
-
----
-
-## Architecture and Migration
-
-No new Architecture Decision is required. B2a consumes AD-023's existing
-provider-independent historical reader and reconstructable-cache domain without
-changing their authority.
-
-Migration impact: none. There is no schema, object-store, LocalStorage key,
-journal, account, trade, backup, sync or Supabase migration.
-
----
-
-## Next Phase
-
-**USER DECISION.** B2b is not implemented or started. Any next Replay phase,
-including drawings, simulated trading, multi-pane layout or analytics, requires
-its own scope decision and authorization.
+Gate B remains closed until Mahmoud explicitly authorizes that action. Do not
+stage, commit, push, tag or deploy automatically.

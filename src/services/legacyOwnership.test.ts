@@ -79,7 +79,7 @@ describe('legacy detection and canonical digest', () => {
     const { storage } = setup();
     storage.setItem('fxj_v4_trades', '[1]');
     const first = readLegacySnapshot(storage);
-    expect(first.tuples).toHaveLength(14);
+    expect(first.tuples).toHaveLength(15);
     expect(first.tuples[0]).toEqual(['fxj_v4_trades', true, '[1]']);
     const digestA = await digestLegacySnapshot(first);
     expect(digestA).toMatch(/^[0-9a-f]{64}$/);

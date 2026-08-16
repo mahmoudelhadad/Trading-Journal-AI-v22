@@ -40,9 +40,13 @@ import {
   type HistoricalSeriesIdentity,
   type ImportWarningCounts,
 } from '@apptypes/marketData.js';
+import { getFuturesInstrument } from '@constants/futuresInstruments.js';
 
-/** Tick sizes used ONLY for a warning. Local to this adapter on purpose: PIP_TABLE is Journal calculation config, not market-data authority. */
-const TICK_SIZE: Record<string, number> = { NQ: 0.25, ES: 0.25 };
+/** Neutral futures metadata supplies warning-only tick validation without coupling this adapter to Journal configuration. */
+const TICK_SIZE: Record<string, number> = {
+  NQ: getFuturesInstrument('NQ').tickSize,
+  ES: getFuturesInstrument('ES').tickSize,
+};
 
 const EXPIRY_PATTERN = /^(0[1-9]|1[0-2])-(\d{2})$/;
 const TIMESTAMP_PATTERN = /^(\d{4})(\d{2})(\d{2}) (\d{2})(\d{2})(\d{2})$/;

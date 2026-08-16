@@ -60,6 +60,7 @@ export const STORAGE_KEYS = {
   // Added — Backtesting Foundation (AD-014: Class B, unsynced) — new
   // key, no existing user data affected
   BACKTEST_RESULTS: 'fxj_v4_backtest_results', // Array of BacktestResult
+  BACKTEST_SESSIONS: 'fxj_v4_backtest_sessions', // BacktestSessionsEnvelope (B2b, separate from BacktestResult)
 };
 
 export { USER_STORAGE_LOGICAL_KEYS };

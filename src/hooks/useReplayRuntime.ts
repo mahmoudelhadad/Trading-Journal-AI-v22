@@ -13,11 +13,13 @@ export function useReplayRuntime() {
     snapshot,
     actions: {
       selectSeries: (series: HistoricalSeriesIdentity) => runtime.selectSeries(series),
+      resumeSession: (series: HistoricalSeriesIdentity, cursorUtcMs: number) => runtime.resumeSession(series, cursorUtcMs),
       setTimeframe: (timeframe: ReplayTimeframe) => runtime.setTimeframe(timeframe),
       setSpeed: (speed: ReplaySpeed) => runtime.setSpeed(speed),
       play: () => runtime.play(), pause: () => runtime.pause(),
       goTo: (utcMs: number) => runtime.goTo(utcMs), stepForward: () => runtime.stepForward(),
       importNinjaTrader,
     },
+    runtime,
   };
 }

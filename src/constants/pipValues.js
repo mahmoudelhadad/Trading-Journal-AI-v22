@@ -14,6 +14,8 @@
  * Any change here would break existing trade results.
  */
 
+import { getFuturesInstrument } from '@constants/futuresInstruments.js';
+
 export const PIP_TABLE = {
   // ── Forex / Indices (treated as forex in original app) ──
   'US100':   { f: 1,     pv: 1,    t: 'forex' },
@@ -38,9 +40,9 @@ export const PIP_TABLE = {
   'GBP/CAD': { f: 10000, pv: 10,   t: 'forex' },
 
   // ── Equity Index Futures ─────────────────────────────────
-  'NQ':  { f: 1, pv: 20,   t: 'futures' },
+  'NQ':  { f: 1, pv: getFuturesInstrument('NQ').pointValue, t: 'futures' },
   'MNQ': { f: 1, pv: 2,    t: 'futures' },
-  'ES':  { f: 1, pv: 50,   t: 'futures' },
+  'ES':  { f: 1, pv: getFuturesInstrument('ES').pointValue, t: 'futures' },
   'MES': { f: 1, pv: 5,    t: 'futures' },
   'YM':  { f: 1, pv: 5,    t: 'futures' },
   'MYM': { f: 1, pv: 0.5,  t: 'futures' },

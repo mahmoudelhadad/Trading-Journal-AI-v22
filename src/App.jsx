@@ -57,6 +57,7 @@ import { useTradeReview } from '@hooks/useTradeReview.js';
 import { useRecoveryBin } from '@hooks/useRecoveryBin.js';
 import { useRestorePoints } from '@hooks/useRestorePoints.js';
 import { useReplayRuntime } from '@hooks/useReplayRuntime.js';
+import { useReplaySessions } from '@hooks/useReplaySessions.js';
 import { formatTradeRecoveryLabel } from '@calculations/recoveryBin.js';
 
 // ─── Tabs — matches the pages actually built ───────────────────
@@ -73,6 +74,7 @@ const TABS = [
 
 export default function App() {
   const replay = useReplayRuntime();
+  const replaySessions = useReplaySessions(replay.runtime, replay.snapshot);
   // ── Core hooks — each owns exactly one LocalStorage-backed concern ──
   const { accounts, addAccount, editAccount, deleteAccount, hydrated: accountsHydrated } = useAccounts();
   const {
@@ -377,7 +379,7 @@ export default function App() {
           `trades` every other page takes — see pages/Backtest.tsx */}
       {tab === 'backtest' && <BacktestPage allTrades={allTrades} accounts={accounts} />}
 
-      {tab === 'replay' && <ReplayPage snapshot={replay.snapshot} actions={replay.actions} />}
+      {tab === 'replay' && <ReplayPage snapshot={replay.snapshot} actions={replay.actions} sessions={replaySessions} />}
     </AppShell>
   );
 }

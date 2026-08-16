@@ -34,6 +34,24 @@ import {
 } from './tradeCalc.js';
 import type { Account } from '@apptypes/account.js';
 import type { RawTradeContent } from '@apptypes/trade.js';
+import { PIP_TABLE } from '@constants/pipValues.js';
+
+describe('shared Journal instrument metadata characterization', () => {
+  it('pins the public PIP_TABLE shape and NQ/ES Journal values', () => {
+    expect(Object.keys(PIP_TABLE.NQ).sort()).toEqual(['f', 'pv', 't']);
+    expect(Object.keys(PIP_TABLE.ES).sort()).toEqual(['f', 'pv', 't']);
+    expect(PIP_TABLE.NQ).toEqual({ f: 1, pv: 20, t: 'futures' });
+    expect(PIP_TABLE.ES).toEqual({ f: 1, pv: 50, t: 'futures' });
+    expect(calcPL({ symbol: 'NQ', direction: 'Long', entryPrice: '18000', exitPrice: '18002.5', positionSize: '2' })).toBe(100);
+    expect(calcPL({ symbol: 'ES', direction: 'Short', entryPrice: '5500', exitPrice: '5498.5', positionSize: '3' })).toBe(225);
+  });
+
+  it('pins representative non-NQ/ES entries unchanged', () => {
+    expect(PIP_TABLE.MNQ).toEqual({ f: 1, pv: 2, t: 'futures' });
+    expect(PIP_TABLE['EUR/USD']).toEqual({ f: 10000, pv: 10, t: 'forex' });
+    expect(PIP_TABLE.GC).toEqual({ f: 1, pv: 100, t: 'futures' });
+  });
+});
 
 describe('finite parsing boundary', () => {
   it.each([

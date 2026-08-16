@@ -18,12 +18,13 @@ class MemoryStorage implements RawStorage {
 }
 
 describe('authenticated user storage namespace', () => {
-  it('freezes exactly the fourteen recognized logical keys', () => {
-    expect(USER_STORAGE_LOGICAL_KEYS).toHaveLength(14);
-    expect(new Set(USER_STORAGE_LOGICAL_KEYS).size).toBe(14);
+  it('freezes exactly the fifteen recognized logical keys', () => {
+    expect(USER_STORAGE_LOGICAL_KEYS).toHaveLength(15);
+    expect(new Set(USER_STORAGE_LOGICAL_KEYS).size).toBe(15);
+    expect(USER_STORAGE_LOGICAL_KEYS).toContain('fxj_v4_backtest_sessions');
   });
 
-  it('maps all fourteen keys deterministically', () => {
+  it('maps all fifteen keys deterministically', () => {
     for (const key of USER_STORAGE_LOGICAL_KEYS) {
       expect(scopedPhysicalKey(A, key)).toBe(`fxj:user:v1:${encodeURIComponent(A)}:${key}`);
       expect(scopedPhysicalKey(A, key)).toBe(scopedPhysicalKey(A, key));

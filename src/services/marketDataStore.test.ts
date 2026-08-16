@@ -40,6 +40,11 @@ import {
   type HistoricalSeriesRecord,
 } from '@apptypes/marketData.js';
 import type { IndexedDbHandle, IndexedDbResult } from './indexedDb.js';
+import { createHistoricalBarReader } from './historicalBarReader.js';
+import { createReplayRuntime } from './replayRuntime.js';
+import { createBacktestSessionRepository } from './backtestSessionRepository.js';
+import { createUserStorageScope, type RawStorage } from './storageNamespace.js';
+import { createBacktestSession } from '@calculations/backtestSession.js';
 
 const MAR01_0500 = 1_456_808_400_000;
 const MINUTE = 60_000;
@@ -154,6 +159,13 @@ const noLock: ExclusiveRunner = async () => ({ acquired: false });
 
 const SERIES_STORE = MARKET_DATA_STORE_NAMES.SERIES;
 const CHUNK_STORE = MARKET_DATA_STORE_NAMES.BAR_CHUNKS;
+
+function serializeHistoricalRecords(handle: FakeHandle): string {
+  return JSON.stringify(MARKET_DATA_STORES.map(({ name }) => [
+    name,
+    [...(handle.records.get(name)?.entries() ?? [])].sort(([a], [b]) => a.localeCompare(b)),
+  ]));
+}
 
 function activeRecord(activeChunks: Record<string, number>, barCount: number): HistoricalSeriesRecord {
   return {
@@ -639,5 +651,96 @@ describe('createIndexedDbChunkSource', () => {
     const handle2 = seeded();
     handle2.failOn('get', CHUNK_STORE);
     expect(await createIndexedDbChunkSource(handle2).getChunk(chunkId)).toEqual({ ok: false });
+  });
+});
+
+describe('B2b historical persistence isolation', () => {
+  it('keeps manifest and canonical chunk bytes unchanged across Replay session and trading activity', async () => {
+    const handle = createFakeHandle();
+    const seededBars = [bar(MAR01_0500, 4197.25), bar(MAR01_0500 + MINUTE, 4198.5)];
+    expect((await commitImport(handle, importInput(seededBars), { runExclusive: runNow })).ok).toBe(true);
+    const historicalBefore = serializeHistoricalRecords(handle);
+    const manifestBefore = structuredClone(handle.records.get(SERIES_STORE)?.get(NQ_ID));
+    const chunkId = chunkIdOf(NQ_ID, '2016-03-01', 1);
+    const chunkBefore = structuredClone(handle.records.get(CHUNK_STORE)?.get(chunkId));
+    handle.ops.length = 0;
+
+    const source = createIndexedDbChunkSource(handle);
+    const reader = createHistoricalBarReader(source);
+    expect(await reader.getLocalAvailability(NQ_SERIES)).toMatchObject({
+      available: true, observedFirstUtcMs: MAR01_0500, observedLastUtcMs: MAR01_0500 + MINUTE,
+    });
+    const runtime = createReplayRuntime({
+      openReader: async () => reader, monotonicNow: () => 0,
+      requestFrame: () => 1, cancelFrame: () => {},
+      visibility: { isHidden: () => false, add: () => {}, remove: () => {} },
+    });
+    runtime.attach();
+
+    const values = new Map<string, string>();
+    const localStorage: RawStorage = {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => { values.set(key, value); },
+      removeItem: (key) => { values.delete(key); },
+    };
+    const scope = createUserStorageScope('a1234567-89ab-4cde-8fab-0123456789ab', localStorage);
+    const repository = createBacktestSessionRepository(scope, { runExclusive: async (_name, task) => task() });
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const tradeId = '33333333-3333-4333-8333-333333333333';
+    const createdAt = '2026-08-15T12:00:00.000Z';
+    const initialProgress = { cursorUtcMs: MAR01_0500 + MINUTE, displayTimeframe: '1m' as const, speed: 1 as const };
+    const replaySession = createBacktestSession({ sessionId, series: NQ_SERIES, progress: initialProgress, createdAt });
+
+    try {
+      expect(await runtime.resumeSession(NQ_SERIES, initialProgress.cursorUtcMs)).toBe(true);
+      expect((await repository.createSession(replaySession)).ok).toBe(true);
+      expect((await repository.saveProgress(sessionId, 1, initialProgress, '2026-08-15T12:00:00.500Z')).ok).toBe(true);
+      const entryCapture = runtime.beginExecutionCommand(NQ_SERIES);
+      expect(entryCapture.ok).toBe(true);
+      if (!entryCapture.ok) return;
+      expect((await repository.appendAction(sessionId, 2, {
+        actionVersion: 1, actionId: '22222222-2222-4222-8222-222222222222', tradeId,
+        sessionId, sequence: 1, kind: 'entry', side: 'long', quantity: 2, initialStopPrice: 4196.25,
+        fill: entryCapture.fill, clientCreatedAt: '2026-08-15T12:00:01.000Z',
+      }, entryCapture.progress, '2026-08-15T12:00:01.000Z')).ok).toBe(true);
+      runtime.releaseCanonicalCommand();
+
+      await runtime.goTo(MAR01_0500 + 2 * MINUTE);
+      const exitCapture = runtime.beginExecutionCommand(NQ_SERIES);
+      expect(exitCapture.ok).toBe(true);
+      if (!exitCapture.ok) return;
+      expect((await repository.appendAction(sessionId, 3, {
+        actionVersion: 1, actionId: '44444444-4444-4444-8444-444444444444', tradeId,
+        sessionId, sequence: 2, kind: 'exit', quantity: 2,
+        fill: exitCapture.fill, clientCreatedAt: '2026-08-15T12:01:00.000Z',
+      }, exitCapture.progress, '2026-08-15T12:01:00.000Z')).ok).toBe(true);
+      runtime.releaseCanonicalCommand();
+
+      const completion = runtime.beginCompletionCommand(NQ_SERIES);
+      expect(completion.ok).toBe(true);
+      if (!completion.ok) return;
+      expect((await repository.completeSession(sessionId, 4,
+        completion.progress, '2026-08-15T12:01:01.000Z')).ok).toBe(true);
+      runtime.releaseCanonicalCommand();
+
+      const reread = await reader.readBars({
+        series: NQ_SERIES, fromUtcMs: MAR01_0500, toUtcMs: MAR01_0500 + 2 * MINUTE,
+      });
+      expect(reread).toMatchObject({ ok: true, bars: seededBars });
+      expect(serializeHistoricalRecords(handle)).toBe(historicalBefore);
+      expect(handle.records.get(SERIES_STORE)?.get(NQ_ID)).toEqual(manifestBefore);
+      expect(handle.records.get(CHUNK_STORE)?.get(chunkId)).toEqual(chunkBefore);
+      expect(handle.records.get(CHUNK_STORE)?.get(chunkId)).toMatchObject({
+        chunkId, seriesId: NQ_ID, revision: 1,
+        t: seededBars.map(({ t }) => t), o: seededBars.map(({ o }) => o),
+        h: seededBars.map(({ h }) => h), l: seededBars.map(({ l }) => l),
+        c: seededBars.map(({ c }) => c), v: seededBars.map(({ v }) => v),
+      });
+      expect(handle.ops.filter(({ kind }) => ['put', 'putAll', 'delete', 'clear'].includes(kind))).toEqual([]);
+      expect([...handle.records.get(SERIES_STORE)!.keys()]).toEqual([NQ_ID]);
+      expect([...handle.records.get(CHUNK_STORE)!.keys()]).toEqual([chunkId]);
+    } finally {
+      runtime.detach();
+    }
   });
 });

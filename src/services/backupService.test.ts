@@ -186,6 +186,8 @@ describe('backup v2 coverage', () => {
     ]);
     expect(result.data).not.toHaveProperty('restorePoints');
     expect(result.data).not.toHaveProperty('syncCursors');
+    expect(result.data).not.toHaveProperty('backtestSessions');
+    expect(JSON.stringify(result)).not.toContain('fxj_v4_backtest_sessions');
   });
 
   it('makes Restore Points inherit both new sections without recursion', async () => {

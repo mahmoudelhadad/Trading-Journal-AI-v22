@@ -6,11 +6,10 @@
 // etc. resolve identically in tests and in the app; there is exactly
 // one place that decides what those aliases mean.
 //
-// Scope: `environment: 'node'` — the calculation layer under test
-// (src/calculations/) is pure, dependency-free, DOM-free (verified in
-// the gap analysis: zero imports from services/, hooks/, components/,
-// pages/, contexts/, or sync/). A jsdom environment is unnecessary
-// until component tests are added, which is not part of this change.
+// Scope: the global `environment: 'node'` stays, because the calculation,
+// service, and hook suites are DOM-free. Component tests opt into jsdom
+// per file with a `// @vitest-environment jsdom` docblock, so no suite pays
+// for a DOM it does not need. Both `.test.ts` and `.test.tsx` are collected.
 import { defineConfig, mergeConfig } from 'vitest/config';
 import viteConfig from './vite.config.js';
 
@@ -19,7 +18,10 @@ export default mergeConfig(
   defineConfig({
     test: {
       environment: 'node',
-      include: ['src/**/*.test.ts'],
+      include: [
+        'src/**/*.test.ts',
+        'src/**/*.test.tsx',
+      ],
     },
   }),
 );

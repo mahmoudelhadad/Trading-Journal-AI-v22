@@ -61,12 +61,39 @@ export interface BacktestSession extends SessionProgress {
   actions: BacktestAction[];
 }
 
+/**
+ * Derived-only B2c aggregates. These are projected from canonical Entry/Exit
+ * actions on every read and are never persisted: schemaVersion stays 1,
+ * actionVersion stays 1, and the persisted action shapes above are unchanged.
+ */
+export interface BacktestOpenPosition {
+  tradeId: string;
+  side: 'long' | 'short';
+  entries: BacktestEntryAction[];
+  exits: BacktestExitAction[];
+  totalEntryQuantity: number;
+  totalExitedQuantity: number;
+  remainingQuantity: number;
+  /** Moving weighted-average basis of the currently remaining inventory only. */
+  weightedAverageEntryPrice: number;
+  realizedGrossPL: number;
+  /** Common stop anchored by the first Entry of the episode. */
+  initialStopPrice: number | null;
+  anchoredRisk: number | null;
+}
+
 export interface BacktestClosedTrade {
   tradeId: string;
   side: 'long' | 'short';
-  quantity: number;
+  entries: BacktestEntryAction[];
+  exits: BacktestExitAction[];
+  /** Legacy v1.8.0 compatibility view: the opening Entry (`entries[0]`). */
   entry: BacktestEntryAction;
+  /** Legacy v1.8.0 compatibility view: the closing Exit (last of `exits`). */
   exit: BacktestExitAction;
+  quantity: number;
+  weightedEntryPrice: number;
+  weightedExitPrice: number;
   points: number;
   ticks: number;
   grossPL: number;
@@ -76,7 +103,13 @@ export interface BacktestClosedTrade {
 
 export interface BacktestSessionProjection {
   visibleActions: BacktestAction[];
+  /**
+   * Legacy v1.8.0 compatibility view of the open episode: its first Entry
+   * action. Retained so released consumers keep compiling; `openAggregate` is
+   * the B2c-complete view.
+   */
   openPosition: BacktestEntryAction | null;
+  openAggregate: BacktestOpenPosition | null;
   closedTrades: BacktestClosedTrade[];
   highWaterMarkUtcMs: number | null;
   rewound: boolean;

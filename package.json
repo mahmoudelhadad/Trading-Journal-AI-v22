@@ -1,6 +1,6 @@
 {
   "name": "trading-journal-ai",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "description": "Professional AI-Powered Trading Journal",
   "scripts": {
@@ -30,6 +30,7 @@
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.0",
     "eslint-plugin-react-hooks": "^4.6.0",
+    "jsdom": "^30.0.1",
     "typescript": "^5.4.0",
     "vite": "^5.2.0",
     "vitest": "^4.1.10"

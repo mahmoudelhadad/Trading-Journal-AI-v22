@@ -348,8 +348,8 @@ describe('Replay session controller decisions', () => {
     const open = appendBacktestAction(session(), action(), { cursorUtcMs: T0, displayTimeframe: '1m', speed: 1 }, ISO);
     const fill = { decisionUtcMs: T0 + 60_000, sourceBarStartUtcMs: T0, sourceBarCloseUtcMs: T0 + 60_000, price: 101.25, basis: 'revealed_1m_close' as const };
     const identity = { actionId: '44444444-4444-4444-8444-444444444444', tradeId: TID, clientCreatedAt: '2026-08-14T12:01:00.000Z' };
-    const first = buildCanonicalReplayAction(open, fill, identity, { kind: 'exit' });
-    const retry = buildCanonicalReplayAction(open, fill, identity, { kind: 'exit' });
+    const first = buildCanonicalReplayAction(open, fill, identity, { kind: 'exit', quantity: 1 });
+    const retry = buildCanonicalReplayAction(open, fill, identity, { kind: 'exit', quantity: 1 });
     expect(first).toEqual(retry);
     expect(first).toMatchObject({ sequence: 2, quantity: 1, fill, ...identity });
   });
@@ -1233,6 +1233,671 @@ describe('mounted Replay session controller owner isolation', () => {
     await finish(pending, () => recovery.resolve({ ok: true, value: [session()] }));
     expect(h.state().sessions.map((item) => item.sessionId)).toEqual([SID_B]);
     expect(h.state().activeSession).toBeNull();
+    await h.unmount();
+  });
+});
+
+const P3_EXIT_A = '8a000000-0000-4000-8000-000000000001';
+const P3_SCALE_A = '8a000000-0000-4000-8000-000000000002';
+const p3Entry = (quantity: number, initialStopPrice: number | null): BacktestEntryAction =>
+  ({ ...action(quantity), initialStopPrice });
+const p3Open = (quantity = 2, initialStopPrice: number | null = null): BacktestSession =>
+  appendBacktestAction(session(), p3Entry(quantity, initialStopPrice),
+    { cursorUtcMs: T0, displayTimeframe: '1m', speed: 1 }, ISO);
+const p3ExitAction = (actionId: string, sequence: number, quantity: number, decisionUtcMs: number): BacktestAction => ({
+  actionVersion: 1, actionId, tradeId: TID, sessionId: SID, sequence, kind: 'exit', quantity,
+  fill: {
+    decisionUtcMs, sourceBarStartUtcMs: decisionUtcMs - 60_000, sourceBarCloseUtcMs: decisionUtcMs,
+    price: 100, basis: 'revealed_1m_close',
+  },
+  clientCreatedAt: ISO,
+});
+const p3ScaleAction = (actionId: string, sequence: number, quantity: number, decisionUtcMs: number): BacktestAction => ({
+  actionVersion: 1, actionId, tradeId: TID, sessionId: SID, sequence, kind: 'entry', side: 'long',
+  quantity, initialStopPrice: null,
+  fill: {
+    decisionUtcMs, sourceBarStartUtcMs: decisionUtcMs - 60_000, sourceBarCloseUtcMs: decisionUtcMs,
+    price: 100, basis: 'revealed_1m_close',
+  },
+  clientCreatedAt: ISO,
+});
+const p3Progress = (cursorUtcMs: number) => ({ cursorUtcMs, displayTimeframe: '1m' as const, speed: 1 as const });
+const p3Mount = async (initial: BacktestSession) => {
+  const h = await mountController([initial]);
+  await select(h);
+  return h;
+};
+const p3Aggregate = (h: MountedHarness) => h.state().projection?.openAggregate ?? null;
+
+describe('B2c Phase 3 — controller Entry and Scale In', () => {
+  it('creates a new tradeId for the first Entry while flat', async () => {
+    const h = await p3Mount(session());
+    await act(async () => { await h.state().enter('long', 2, null); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    const submitted = h.repository.appendCalls[0].action;
+    expect(submitted).toMatchObject({ kind: 'entry', side: 'long', quantity: 2, sequence: 1 });
+    expect(submitted.tradeId).not.toBe(TID);
+    expect(p3Aggregate(h)).toMatchObject({ tradeId: submitted.tradeId, remainingQuantity: 2 });
+    await h.unmount();
+  });
+
+  it('scales in on the same tradeId with a new actionId and explicit quantity', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().enter('long', 3, null); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    const submitted = h.repository.appendCalls[0].action;
+    expect(submitted).toMatchObject({
+      kind: 'entry', side: 'long', quantity: 3, tradeId: TID, sequence: 2,
+      fill: { decisionUtcMs: T0, price: 100, basis: 'revealed_1m_close' },
+    });
+    expect(submitted.actionId).not.toBe(AID);
+    expect(p3Aggregate(h)).toMatchObject({
+      tradeId: TID, side: 'long', totalEntryQuantity: 5, totalExitedQuantity: 0, remainingQuantity: 5,
+    });
+    await h.unmount();
+  });
+
+  it('scales in twice with distinct action identities on one tradeId', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().enter('long', 1, null); });
+    await act(async () => { await h.state().enter('long', 4, null); });
+    expect(h.repository.appendCalls).toHaveLength(2);
+    const [first, second] = h.repository.appendCalls.map((call) => call.action);
+    expect(first.tradeId).toBe(TID);
+    expect(second.tradeId).toBe(TID);
+    expect(first.actionId).not.toBe(second.actionId);
+    expect(p3Aggregate(h)).toMatchObject({ totalEntryQuantity: 7, remainingQuantity: 7 });
+    await h.unmount();
+  });
+
+  it('scales in after a partial Exit against the aggregate remaining quantity', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().exit(1); });
+    expect(p3Aggregate(h)).toMatchObject({ remainingQuantity: 1 });
+    await act(async () => { await h.state().enter('long', 3, null); });
+    expect(h.repository.appendCalls).toHaveLength(2);
+    expect(h.repository.appendCalls[1].action).toMatchObject({ kind: 'entry', tradeId: TID, quantity: 3 });
+    expect(p3Aggregate(h)).toMatchObject({
+      tradeId: TID, totalEntryQuantity: 5, totalExitedQuantity: 1, remainingQuantity: 4,
+    });
+    await h.unmount();
+  });
+
+  it('rejects an opposite-side Entry while open without appending', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().enter('short', 1, null); });
+    expect(h.repository.appendCalls).toHaveLength(0);
+    expect(h.runtime.executionCaptures).toBe(0);
+    expect(p3Aggregate(h)).toMatchObject({ side: 'long', remainingQuantity: 2 });
+    await h.unmount();
+  });
+
+  it('inherits the exact immutable stop on Scale In', async () => {
+    const h = await p3Mount(p3Open(2, 99));
+    await act(async () => { await h.state().enter('long', 1, null); });
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'entry', initialStopPrice: 99 });
+    expect(p3Aggregate(h)).toMatchObject({ initialStopPrice: 99, remainingQuantity: 3 });
+    await h.unmount();
+  });
+
+  it('keeps a null stop null on Scale In', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().enter('long', 1, 99); });
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'entry', initialStopPrice: null });
+    expect(p3Aggregate(h)).toMatchObject({ initialStopPrice: null });
+    await h.unmount();
+  });
+
+  it('ignores a caller-supplied stop while open and persists the inherited contract', async () => {
+    const h = await p3Mount(p3Open(2, 99));
+    await act(async () => { await h.state().enter('long', 1, 98.5); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toMatchObject({ initialStopPrice: 99 });
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 3 — controller Exit quantity', () => {
+  it('persists an explicit partial Exit quantity and stays open', async () => {
+    const h = await p3Mount(p3Open(3, null));
+    await act(async () => { await h.state().exit(1); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'exit', quantity: 1, tradeId: TID, sequence: 2 });
+    expect(p3Aggregate(h)).toMatchObject({ totalExitedQuantity: 1, remainingQuantity: 2 });
+    expect(h.state().projection?.closedTrades).toEqual([]);
+    await h.unmount();
+  });
+
+  it('accepts repeated partial Exits', async () => {
+    const h = await p3Mount(p3Open(4, null));
+    await act(async () => { await h.state().exit(1); });
+    await act(async () => { await h.state().exit(2); });
+    expect(h.repository.appendCalls.map((call) => call.action.quantity)).toEqual([1, 2]);
+    expect(p3Aggregate(h)).toMatchObject({ totalExitedQuantity: 3, remainingQuantity: 1 });
+    await h.unmount();
+  });
+
+  it('closes to Flat when the Exit quantity equals remaining', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().exit(2); });
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'exit', quantity: 2 });
+    expect(p3Aggregate(h)).toBeNull();
+    expect(h.state().projection?.closedTrades).toHaveLength(1);
+    await h.unmount();
+  });
+
+  it('rejects an over-Exit without clamping or appending', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    await act(async () => { await h.state().exit(3); });
+    expect(h.repository.appendCalls).toHaveLength(0);
+    expect(h.runtime.executionCaptures).toBe(0);
+    expect(p3Aggregate(h)).toMatchObject({ remainingQuantity: 2 });
+    for (const invalid of [0, -1, 1.5]) {
+      await act(async () => { await h.state().exit(invalid); });
+    }
+    expect(h.repository.appendCalls).toHaveLength(0);
+    await h.unmount();
+  });
+
+  it('derives Exit eligibility from aggregate remaining, not the first Entry quantity', async () => {
+    const built = appendBacktestAction(
+      appendBacktestAction(p3Open(2, null), p3ExitAction(P3_EXIT_A, 2, 1, T0 + 60_000), p3Progress(T0 + 60_000), ISO),
+      p3ScaleAction(P3_SCALE_A, 3, 3, T0 + 120_000), p3Progress(T0 + 120_000), ISO,
+    );
+    const h = await p3Mount(built);
+    expect(p3Aggregate(h)).toMatchObject({ totalEntryQuantity: 5, totalExitedQuantity: 1, remainingQuantity: 4 });
+    await act(async () => { await h.state().exit(5); });
+    expect(h.repository.appendCalls).toHaveLength(0);
+    await act(async () => { await h.state().exit(4); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'exit', quantity: 4 });
+    expect(p3Aggregate(h)).toBeNull();
+    await h.unmount();
+  });
+
+  it('exits the capture-time remaining quantity when no quantity is supplied', async () => {
+    const built = appendBacktestAction(p3Open(2, null),
+      p3ScaleAction(P3_SCALE_A, 2, 3, T0 + 60_000), p3Progress(T0 + 60_000), ISO);
+    const h = await p3Mount(built);
+    expect(p3Aggregate(h)).toMatchObject({ remainingQuantity: 5 });
+    await act(async () => { await h.state().exit(); });
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'exit', quantity: 5 });
+    expect(p3Aggregate(h)).toBeNull();
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 3 — Complete barrier uses aggregate state', () => {
+  it('rejects Complete while aggregate remaining is above zero', async () => {
+    const h = await p3Mount(p3Open(3, null));
+    await act(async () => { await h.state().exit(1); });
+    expect(p3Aggregate(h)).toMatchObject({ remainingQuantity: 2 });
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(0);
+    expect(h.runtime.completionCaptures).toBe(0);
+    expect(h.state().activeSession?.status).toBe('active');
+    await h.unmount();
+  });
+
+  it('allows Complete only after the verified final Exit', async () => {
+    const h = await p3Mount(p3Open(3, null));
+    await act(async () => { await h.state().exit(1); });
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(0);
+    await act(async () => { await h.state().exit(2); });
+    expect(p3Aggregate(h)).toBeNull();
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(1);
+    expect(h.state().activeSession?.status).toBe('completed');
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 3 — candidate immutability and command barrier', () => {
+  it('freezes the Scale-In candidate across an in-flight checkpoint', async () => {
+    const initial = p3Open(2, 99);
+    const h = await mountController([initial]);
+    await select(h);
+    const save = deferred<BacktestRepositoryResult<BacktestSession>>();
+    await h.setSnapshot({ timeframe: '5m', speed: 2 });
+    await startCheckpoint(h, T0 + 60_000, save);
+    h.runtime.fillPrice = 101.25;
+    await h.setSnapshot({ nowUtcMs: T0 + 120_000, timeframe: '15m', speed: 30 });
+    const { pending } = await begin(() => h.state().enter('long', 3, null));
+    expect(h.runtime.beginExecutionCommand).toHaveBeenCalledTimes(1);
+
+    h.runtime.fillPrice = 999;
+    const checkpoint = { ...initial, cursorUtcMs: T0 + 60_000, displayTimeframe: '5m' as const,
+      speed: 2 as const, revision: 3, updatedAt: '2026-08-14T12:01:00.000Z' };
+    h.repository.replace(checkpoint);
+    await finish(pending, () => save.resolve({ ok: true, value: checkpoint }));
+
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toMatchObject({
+      kind: 'entry', side: 'long', quantity: 3, tradeId: TID, initialStopPrice: 99, sequence: 2,
+      fill: {
+        decisionUtcMs: T0 + 120_000, sourceBarStartUtcMs: T0 + 60_000,
+        sourceBarCloseUtcMs: T0 + 120_000, price: 101.25, basis: 'revealed_1m_close',
+      },
+    });
+    await h.unmount();
+  });
+
+  it('freezes a partial-Exit candidate across an in-flight checkpoint', async () => {
+    const initial = p3Open(3, null);
+    const h = await mountController([initial]);
+    await select(h);
+    const save = deferred<BacktestRepositoryResult<BacktestSession>>();
+    await startCheckpoint(h, T0 + 60_000, save);
+    h.runtime.fillPrice = 97.25;
+    await h.setSnapshot({ nowUtcMs: T0 + 120_000 });
+    const { pending } = await begin(() => h.state().exit(2));
+    h.runtime.fillPrice = 55;
+    const checkpoint = { ...initial, cursorUtcMs: T0 + 60_000, revision: 3, updatedAt: '2026-08-14T12:01:00.000Z' };
+    h.repository.replace(checkpoint);
+    await finish(pending, () => save.resolve({ ok: true, value: checkpoint }));
+
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toMatchObject({
+      kind: 'exit', quantity: 2, tradeId: TID, sequence: 2,
+      fill: { decisionUtcMs: T0 + 120_000, price: 97.25 },
+    });
+    await h.unmount();
+  });
+
+  it('keeps a captured Exit quantity when durable state later makes it invalid', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(2));
+    expect(h.repository.appendCalls).toHaveLength(1);
+    const submitted = clone(h.repository.appendCalls[0].action);
+    expect(submitted).toMatchObject({ kind: 'exit', quantity: 2 });
+
+    await finish(pending, () => append.resolve({ ok: false, code: 'stale_revision', message: 'stale' }));
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toEqual(submitted);
+    expect(h.state().safetyBlocked).toBe(true);
+    await act(async () => { await h.state().exit(1); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    await h.unmount();
+  });
+
+  it('keeps the captured tradeId when a competing final Exit closes the trade', async () => {
+    const initial = p3Open(2, null);
+    const h = await p3Mount(initial);
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().enter('long', 3, null));
+    const submitted = clone(h.repository.appendCalls[0].action);
+    expect(submitted).toMatchObject({ kind: 'entry', tradeId: TID, quantity: 3 });
+
+    const closed = appendBacktestAction(initial, p3ExitAction(P3_EXIT_A, 2, 2, T0), p3Progress(T0), ISO);
+    h.repository.replace(closed);
+    await finish(pending, () => append.resolve({ ok: false, code: 'stale_revision', message: 'stale' }));
+
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toEqual(submitted);
+    expect(h.repository.appendCalls[0].action.tradeId).toBe(TID);
+    expect(h.state().safetyBlocked).toBe(true);
+    await h.unmount();
+  });
+
+  it('admits at most one canonical command from rapid mixed Scale-In and Exit clicks', async () => {
+    for (const second of ['scale', 'exit'] as const) {
+      const h = await p3Mount(p3Open(4, null));
+      const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+      h.repository.appendQueue.push(append.promise);
+      const { pending } = await begin(() => h.state().enter('long', 1, null));
+      await act(async () => {
+        await (second === 'scale' ? h.state().enter('long', 1, null) : h.state().exit(1));
+      });
+      expect(h.repository.appendCalls).toHaveLength(1);
+      expect(h.runtime.executionCaptures).toBe(1);
+      const committed = appendBacktestAction(p3Open(4, null), h.repository.appendCalls[0].action,
+        h.repository.appendCalls[0].progress, ISO);
+      h.repository.replace(committed);
+      await finish(pending, () => append.resolve({ ok: true, value: committed }));
+      expect(h.repository.appendCalls).toHaveLength(1);
+      await h.unmount();
+    }
+  });
+
+  it('admits at most one canonical command from rapid Exit clicks', async () => {
+    const h = await p3Mount(p3Open(4, null));
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(1));
+    await act(async () => { await h.state().exit(1); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.runtime.executionCaptures).toBe(1);
+    const committed = appendBacktestAction(p3Open(4, null), h.repository.appendCalls[0].action,
+      h.repository.appendCalls[0].progress, ISO);
+    h.repository.replace(committed);
+    await finish(pending, () => append.resolve({ ok: true, value: committed }));
+    await h.unmount();
+  });
+
+  it('prevents Complete from bypassing an unresolved action barrier', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(2));
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(0);
+    expect(h.runtime.completionCaptures).toBe(0);
+    const committed = appendBacktestAction(p3Open(2, null), h.repository.appendCalls[0].action,
+      h.repository.appendCalls[0].progress, ISO);
+    h.repository.replace(committed);
+    await finish(pending, () => append.resolve({ ok: true, value: committed }));
+    expect(h.state().projection?.openAggregate).toBeNull();
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 3 — outcome_unknown recovery keeps candidate identity', () => {
+  it('adopts the exact committed Scale-In candidate without a new identity', async () => {
+    const initial = p3Open(2, 99);
+    const h = await p3Mount(initial);
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().enter('long', 3, null));
+    const submitted = clone(h.repository.appendCalls[0].action);
+    await finish(pending, () => append.resolve({ ok: false, code: 'outcome_unknown', message: 'unknown' }));
+    expect(h.state().safetyBlocked).toBe(true);
+
+    const committed = appendBacktestAction(initial, submitted, h.repository.appendCalls[0].progress, ISO);
+    h.repository.replace(committed);
+    await act(async () => { await h.state().recover(); });
+
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.state().safetyBlocked).toBe(false);
+    expect(h.state().activeSession?.actions).toHaveLength(2);
+    expect(h.state().activeSession?.actions[1]).toEqual(submitted);
+    expect(h.state().projection?.openAggregate).toMatchObject({ tradeId: TID, remainingQuantity: 5 });
+    await h.unmount();
+  });
+
+  it('releases an absent partial-Exit candidate and requires fresh intent', async () => {
+    const initial = p3Open(3, null);
+    const h = await p3Mount(initial);
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(1));
+    const submitted = clone(h.repository.appendCalls[0].action);
+    await finish(pending, () => append.resolve({ ok: false, code: 'outcome_unknown', message: 'unknown' }));
+    expect(h.state().safetyBlocked).toBe(true);
+
+    await act(async () => { await h.state().recover(); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.state().safetyBlocked).toBe(false);
+    expect(h.state().activeSession?.actions).toHaveLength(1);
+    expect(h.state().activeSession?.actions.some((item) => item.actionId === submitted.actionId)).toBe(false);
+
+    await act(async () => { await h.state().exit(1); });
+    expect(h.repository.appendCalls).toHaveLength(2);
+    expect(h.repository.appendCalls[1].action.actionId).not.toBe(submitted.actionId);
+    await h.unmount();
+  });
+});
+
+/** Durable scaled history: Entry 2 @T0 → Scale In 1 @T0+60s → Partial Exit 1 @T0+120s. */
+function p5Scaled(): BacktestSession {
+  return appendBacktestAction(
+    appendBacktestAction(p3Open(2, null), p3ScaleAction(P3_SCALE_A, 2, 1, T0 + 60_000), p3Progress(T0 + 60_000), ISO),
+    p3ExitAction(P3_EXIT_A, 3, 1, T0 + 120_000), p3Progress(T0 + 120_000), ISO,
+  );
+}
+
+describe('B2c Phase 5 — checkpoint failure abandons a captured candidate', () => {
+  for (const kind of ['scale', 'exit'] as const) {
+    it(`abandons a captured ${kind} candidate when the preceding checkpoint fails`, async () => {
+      const initial = p3Open(3, null);
+      const h = await mountController([initial]);
+      await select(h);
+      const save = deferred<BacktestRepositoryResult<BacktestSession>>();
+      await startCheckpoint(h, T0 + 60_000, save);
+      h.runtime.fillPrice = 101.25;
+      await h.setSnapshot({ nowUtcMs: T0 + 120_000 });
+
+      const { pending } = await begin(() => (kind === 'scale'
+        ? h.state().enter('long', 2, null) : h.state().exit(2)));
+      expect(h.runtime.beginExecutionCommand).toHaveBeenCalledTimes(1);
+
+      await finish(pending, () => save.resolve({ ok: false, code: 'write_failed', message: 'w' }));
+
+      expect(h.repository.appendCalls).toHaveLength(0);
+      expect(h.state().safetyBlocked).toBe(true);
+      expect(h.state().activeSession).toEqual(initial);
+      expect(h.runtime.pause).toHaveBeenCalled();
+
+      // No automatic retry, and the captured fill is never reused.
+      await act(async () => {
+        await (kind === 'scale' ? h.state().enter('long', 2, null) : h.state().exit(2));
+      });
+      expect(h.repository.appendCalls).toHaveLength(0);
+      expect(h.runtime.beginExecutionCommand).toHaveBeenCalledTimes(1);
+      await h.unmount();
+    });
+  }
+});
+
+describe('B2c Phase 5 — definite persistence failures never publish a candidate', () => {
+  for (const code of ['write_failed', 'quota_exceeded', 'verification_failed'] as const) {
+    it(`retains the last verified session when a Scale In fails with ${code}`, async () => {
+      const initial = p3Open(2, 99);
+      const h = await p3Mount(initial);
+      const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+      h.repository.appendQueue.push(append.promise);
+      const { pending } = await begin(() => h.state().enter('long', 3, null));
+      const submitted = clone(h.repository.appendCalls[0].action);
+
+      await finish(pending, () => append.resolve({ ok: false, code, message: code }));
+
+      expect(h.state().safetyBlocked).toBe(true);
+      expect(h.state().activeSession).toEqual(initial);
+      expect(h.state().projection?.openAggregate?.remainingQuantity).toBe(2);
+      expect(h.repository.appendCalls).toHaveLength(1);
+      expect(h.repository.appendCalls[0].action).toEqual(submitted);
+      expect(h.runtime.setSessionSafetyBlock).toHaveBeenCalledWith(true);
+      await h.unmount();
+    });
+  }
+
+  it('retains the last verified session when a Partial Exit fails definitively', async () => {
+    const initial = p3Open(3, null);
+    const h = await p3Mount(initial);
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(1));
+    await finish(pending, () => append.resolve({ ok: false, code: 'write_failed', message: 'w' }));
+
+    expect(h.state().safetyBlocked).toBe(true);
+    expect(h.state().activeSession).toEqual(initial);
+    expect(h.repository.appendCalls).toHaveLength(1);
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 5 — outcome_unknown collision stays safety-blocked', () => {
+  for (const kind of ['scale', 'exit'] as const) {
+    it(`keeps the ${kind} candidate blocked when hydration finds a conflicting identity`, async () => {
+      const initial = p3Open(3, null);
+      const h = await p3Mount(initial);
+      const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+      h.repository.appendQueue.push(append.promise);
+      const { pending } = await begin(() => (kind === 'scale'
+        ? h.state().enter('long', 2, null) : h.state().exit(2)));
+      const submitted = clone(h.repository.appendCalls[0].action);
+      await finish(pending, () => append.resolve({ ok: false, code: 'outcome_unknown', message: 'unknown' }));
+      expect(h.state().safetyBlocked).toBe(true);
+
+      // Same actionId committed with different canonical content.
+      const conflicting = kind === 'scale'
+        ? { ...submitted, quantity: 1 } as BacktestAction
+        : { ...submitted, quantity: 1 } as BacktestAction;
+      const committed = appendBacktestAction(initial, conflicting,
+        h.repository.appendCalls[0].progress, ISO);
+      h.repository.replace(committed);
+
+      await act(async () => { await h.state().recover(); });
+
+      expect(h.state().safetyBlocked).toBe(true);
+      expect(h.state().error).toContain('conflicts');
+      expect(h.repository.appendCalls).toHaveLength(1);
+      await h.unmount();
+    });
+  }
+});
+
+describe('B2c Phase 5 — competing scale changes never reshape a captured Exit', () => {
+  it('keeps the captured Exit exact when a competing Scale In changes remaining first', async () => {
+    const initial = p3Open(2, null);
+    const h = await p3Mount(initial);
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(2));
+    const submitted = clone(h.repository.appendCalls[0].action);
+    expect(submitted).toMatchObject({ kind: 'exit', quantity: 2, tradeId: TID });
+
+    // Competing Scale In lands first, so remaining becomes 5.
+    const competing = appendBacktestAction(initial, p3ScaleAction(P3_SCALE_A, 2, 3, T0), p3Progress(T0), ISO);
+    h.repository.replace(competing);
+    await finish(pending, () => append.resolve({ ok: false, code: 'stale_revision', message: 'stale' }));
+
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toEqual(submitted);
+    expect(h.repository.appendCalls[0].action.quantity).toBe(2);
+    expect(h.state().safetyBlocked).toBe(true);
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 5 — rewind blocks every scaled command', () => {
+  it('blocks Scale In, Partial Exit, final Exit, and Complete below the high-water mark', async () => {
+    const durable = p5Scaled();
+    const h = await mountController([durable]);
+    await select(h);
+    await h.setSnapshot({ nowUtcMs: T0 + 60_000 });
+    expect(h.state().projection?.rewound).toBe(true);
+    const bytesBefore = clone(h.repository.sessions);
+
+    await act(async () => {
+      await h.state().enter('long', 1, null);
+      await h.state().exit(1);
+      await h.state().exit(2);
+      await h.state().complete();
+    });
+
+    expect(h.repository.appendCalls).toHaveLength(0);
+    expect(h.repository.completeCalls).toHaveLength(0);
+    expect(h.runtime.executionCaptures).toBe(0);
+    expect(h.runtime.completionCaptures).toBe(0);
+    expect(h.repository.sessions).toEqual(bytesBefore);
+    expect(h.state().activeSession?.actions).toHaveLength(3);
+
+    // At the exact high-water mark, eligibility returns through the normal pipeline.
+    await h.setSnapshot({ nowUtcMs: T0 + 120_000 });
+    expect(h.state().projection?.rewound).toBe(false);
+    await act(async () => { await h.state().exit(2); });
+    expect(h.repository.appendCalls).toHaveLength(1);
+    expect(h.repository.appendCalls[0].action).toMatchObject({ kind: 'exit', quantity: 2, tradeId: TID });
+    expect(h.state().projection?.openAggregate).toBeNull();
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 5 — owner switch suppresses stale publication', () => {
+  for (const kind of ['scale', 'exit'] as const) {
+    it(`never publishes a resolved ${kind} result into a new owner's state`, async () => {
+      const initial = p3Open(3, null);
+      const h = await mountController([initial]);
+      await select(h);
+      const priorRepository = h.repository;
+      const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+      priorRepository.appendQueue.push(append.promise);
+      const { pending } = await begin(() => (kind === 'scale'
+        ? h.state().enter('long', 2, null) : h.state().exit(1)));
+      expect(priorRepository.appendCalls).toHaveLength(1);
+      const submitted = clone(priorRepository.appendCalls[0].action);
+
+      await h.render(OWNER_B, new RepositoryStub([]));
+      expect(h.state().activeSession).toBeNull();
+      expect(h.state().sessions).toEqual([]);
+
+      const committed = appendBacktestAction(initial, submitted,
+        priorRepository.appendCalls[0].progress, ISO);
+      await finish(pending, () => append.resolve({ ok: true, value: committed }));
+
+      expect(h.state().activeSession).toBeNull();
+      expect(h.state().sessions).toEqual([]);
+      expect(h.state().safetyBlocked).toBe(false);
+      expect(h.repository.appendCalls).toHaveLength(0);
+      expect(priorRepository.appendCalls).toHaveLength(1);
+      await h.unmount();
+    });
+  }
+
+  it('does not let a stale recovery overwrite the new owner state', async () => {
+    const initial = p3Open(2, null);
+    const h = await mountController([initial]);
+    await select(h);
+    const priorRepository = h.repository;
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    priorRepository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(1));
+    await finish(pending, () => append.resolve({ ok: false, code: 'outcome_unknown', message: 'unknown' }));
+    expect(h.state().safetyBlocked).toBe(true);
+
+    await h.render(OWNER_B, new RepositoryStub([]));
+    expect(h.state().safetyBlocked).toBe(false);
+    expect(h.state().activeSession).toBeNull();
+
+    await act(async () => { await h.state().recover(); });
+    expect(h.state().activeSession).toBeNull();
+    expect(h.state().sessions).toEqual([]);
+    expect(priorRepository.appendCalls).toHaveLength(1);
+    await h.unmount();
+  });
+});
+
+describe('B2c Phase 5 — Complete never bypasses or manufactures an Exit', () => {
+  it('rejects Complete while open, then succeeds only after the verified final Exit', async () => {
+    const h = await p3Mount(p3Open(3, null));
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(0);
+    expect(h.repository.appendCalls).toHaveLength(0);
+
+    await act(async () => { await h.state().exit(1); });
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(0);
+    expect(h.state().projection?.openAggregate?.remainingQuantity).toBe(2);
+
+    await act(async () => { await h.state().exit(2); });
+    expect(h.state().projection?.openAggregate).toBeNull();
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(1);
+    expect(h.repository.appendCalls).toHaveLength(2);
+    expect(h.state().activeSession?.status).toBe('completed');
+    await h.unmount();
+  });
+
+  it('holds Complete behind an unresolved final Exit without capturing completion', async () => {
+    const h = await p3Mount(p3Open(2, null));
+    const append = deferred<BacktestRepositoryResult<BacktestSession>>();
+    h.repository.appendQueue.push(append.promise);
+    const { pending } = await begin(() => h.state().exit(2));
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(0);
+    expect(h.runtime.completionCaptures).toBe(0);
+
+    const committed = appendBacktestAction(p3Open(2, null), h.repository.appendCalls[0].action,
+      h.repository.appendCalls[0].progress, ISO);
+    h.repository.replace(committed);
+    await finish(pending, () => append.resolve({ ok: true, value: committed }));
+
+    await act(async () => { await h.state().complete(); });
+    expect(h.repository.completeCalls).toHaveLength(1);
     await h.unmount();
   });
 });

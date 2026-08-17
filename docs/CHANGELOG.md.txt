@@ -1,3 +1,184 @@
+# v1.9 — B2c Manual Position Scaling
+
+Package semantic version: **1.9.0**.
+
+Release type:
+NEW USER-FACING CAPABILITY
+
+Risk tier:
+HIGH
+
+Status:
+IMPLEMENTATION, AUTOMATED VERIFICATION, RUNTIME ACCEPTANCE, DOCUMENTATION AND
+VERSION PREPARATION COMPLETE
+
+Release marker definition:
+ANNOTATED `v1.9.0` TAG
+
+The Git tag reference is authoritative for the canonical release marker. This
+record describes the locally prepared release candidate and does not claim a
+deployment, live acceptance result or marker that Git does not carry.
+
+## Summary
+
+v1.9 delivers B2c: manual position scaling inside a B2b Replay session. A
+simulated position can now be built and unwound as the sequence of executions
+it actually was — same-side Scale In, partial Scale Out, repeated partial
+exits, Scale In again after a partial exit, and a final Exit — while remaining
+one flat-to-flat trade with one moving cost basis, one immutable stop anchor
+and one final R.
+
+## Delivered scope
+
+- Manual same-side Scale In on an open episode, with positive safe-integer
+  whole-contract quantities.
+- Partial Exit / Scale Out, repeated partial exits, and Scale In after a
+  partial exit, up to but never beyond the remaining quantity.
+- Final Exit that returns the episode to Flat and closes the trade.
+- One `tradeId` per flat-to-flat episode, reused by every Entry and Exit in
+  that episode and never reopened; one unique `actionId` per execution.
+- Aggregate open-position projection (`openAggregate`) carrying side, entered,
+  exited and remaining quantity, basis, realized gross P/L, stop anchor and
+  anchored risk.
+- Moving weighted-average cost basis over the currently remaining inventory
+  only; exited contracts never re-enter the average.
+- Intermediate realized gross P/L recognized at each partial exit against the
+  basis as it stood immediately before that exit.
+- Exact scaled arithmetic through private rational internals, with released
+  IEEE-754 Number behavior preserved for structurally legacy one-Entry /
+  full-Exit histories.
+- Weighted final Entry and Exit aggregates for closed scaled trades, with
+  points, ticks and gross P/L conserved against the sum of the partial
+  realizations before any Number conversion.
+- Immutable common stop anchored by the episode's first Entry: every later
+  Entry of the episode carries that exact stop, a stopless episode stays
+  stopless, and a partial exit never reduces the risk denominator.
+- Cumulative anchored risk summed per Entry, and final R derived from gross
+  P/L over that cumulative anchored risk.
+- Scaling-aware Replay rewind: projection hides future scaled actions without
+  truncating canonical history, and mutations remain blocked below the action
+  high-water mark.
+- Canonical sequence ordering for executions that share one decision time.
+- Minimal scaling UI: Scale Quantity with same-side Scale In, Exit Quantity
+  with Exit and Exit All, immutable stop display, and an aggregate summary of
+  side, entered, exited, remaining, average entry, realized P/L, stop anchor
+  and anchored risk. No reversal control, no stop editing, no unrealized P/L.
+
+## Correctness and persistence
+
+`schemaVersion` remains **1**, `actionVersion` remains **1**, and no migration
+is introduced. The persisted action shapes remain the released Entry and Exit
+v1 records: no `legId`, no cached aggregate, no persisted rational or BigInt
+value, and no persistence redesign. Rational arithmetic is internal only and is
+converted back to Number at the derived-projection boundary.
+
+`openAggregate` is the canonical B2c open-position projection and the sole
+authority for transition validation and the Complete barrier. `openPosition` is
+retained only as a compatibility projection of the episode's first Entry and
+carries no B2c semantic authority.
+
+Every durable mutation keeps the released repository contract: the candidate is
+captured once, validated against the latest verified history under the
+owner-scoped Web Lock, written, read back and re-verified. A stale competing
+history invalidates the candidate instead of reshaping it — no quantity clamp,
+no candidate rebuild, no regenerated action identity, no automatic retry and no
+recaptured fill. Recovery requires explicit hydration and fresh user intent.
+
+## Runtime Acceptance
+
+Pre-Gate-B Runtime Acceptance is closed: **RA-1 through RA-32 passed** and
+**RA-PERF passed**, with **0 FAIL** and **0 OPEN / NOT RUN** in that range.
+
+- Long and Short scaled episodes were built through rendered controls, with
+  Scale In, partial exits, Scale In after a partial exit and final Exit, and
+  survived a hard reload with byte-identical action history.
+- Scaling-aware rewind hid future actions and disabled mutation below the
+  high-water mark without altering durable history, and an execution recorded
+  at the exact high-water mark produced same-decision-time sequence evidence.
+- With the historical series removed, an attempted execution advanced no
+  cursor, wrote no action and surfaced an unavailable-series message.
+- A real two-tab, same-owner, same-origin race with competing quantities
+  produced exactly one durable winner; the losing tab's stale whole-position
+  Exit created no action, no clamped substitute and no duplicate identity, and
+  required the application's own reload-and-recover path before a fresh
+  explicit Exit continued the episode.
+- A final Exit reached Flat with the session still active; Complete stayed
+  unavailable while a position was open and only then became a separate
+  explicit command, adding a status transition and no trading action.
+- A completed session was terminal and read-only: no trading control was
+  actionable, replay navigation was non-persisted, and a hard reload rehydrated
+  the same terminal history.
+- The scaled workflow was re-verified against a local production build served
+  from `dist`, with no dev-server module graph and no HMR client.
+
+RA-33 remains a post-Gate-C live acceptance requirement, and RA-34 remains a
+pre-Gate-D live cleanup and identity requirement.
+
+RA-PERF ran in real Chromium against real LocalStorage and real Web Locks
+through the frozen repository implementation, on an isolated disposable
+performance owner. The dataset was exactly **10 sessions** and exactly
+**2,000 canonical Entry/Exit actions** of mixed scaled histories, in an
+866,758-byte envelope, with **zero integrity mismatch**. Against the frozen
+**100 ms per verified mutation** threshold, the maxima were: progress
+checkpoint **20.1 ms**, Scale-In append **21.0 ms**, Partial-Exit append
+**22.2 ms**, final-Exit append **19.0 ms** — zero breaches in any category.
+List/hydration and projection/fold were measured and reported separately as
+reads. Diagnostics recorded **0 long tasks** during the run alongside an
+event-loop probe; those diagnostics are observations, not a release threshold.
+The disposable performance owner's storage and the temporary harness were
+removed exactly, leaving pre-existing storage byte-identical.
+
+## Automated verification
+
+- TypeScript: 0 errors.
+- ESLint: 0 errors and exactly 7 pre-existing warnings.
+- Tests: **888 passing across 42 files**.
+- Focused B2c suites: **196 passing across 4 files**.
+- Production build: passed; **1036 modules transformed**.
+- `git diff --check` and `git diff --cached --check`: passed.
+
+## Preserved and separate
+
+Journal trades, accounts and storage remain isolated from Replay sessions, and
+B2c introduces no Journal promotion or trade provenance path. The historical
+market-data domain remains a separate read-only reconstructable cache. The
+read-only broker-integration policy is unchanged and no broker execution is
+introduced.
+
+Sessions written by released v1.8 remain readable without migration. A released
+v1.8 client handed B2c-shaped schema-v1 history fails closed on those bytes
+rather than rewriting them.
+
+Unchanged: Journal IndexedDB schema and LocalStorage contracts; Backup, Restore
+and Recovery Bin formats and behavior; account/trade models; Supabase and sync;
+historical market-data schema and import/delete/clear behavior; and B2a Replay
+reveal, chart and lifecycle contracts.
+
+## Explicit deferred scope
+
+v1.9 does not include Journal promotion or trade provenance promotion into the
+Journal; cloud or multi-device Backtest session sync; broker execution or order
+routing; pending orders; brackets or OCO; automatic stop execution; automatic
+take-profit lifecycle; trailing or otherwise modifiable stops; reversal;
+hedging; multiple independent simultaneous positions; fractional contracts;
+commission or slippage modeling; configurable fills; durable unrealized P/L or
+market marks; persistence redesign; or cached aggregate persistence.
+
+## Versioning and migration
+
+- Package semantic version: **1.8.0 → 1.9.0** in `package.json` and the two
+  root-project version fields in `package-lock.json`.
+- B2c added **`jsdom ^30.0.1` as a dev dependency** for real DOM component
+  testing. It is test infrastructure only; no production runtime dependency was
+  introduced, and `package-lock.json` carries that already-authorized dev
+  dependency graph. No other dependency declaration, resolved version or
+  integrity value changed.
+- `schemaVersion` stays 1 and `actionVersion` stays 1: no session schema, action,
+  Journal, historical-market-data, backup, synchronization, Supabase or cloud
+  migration is introduced.
+
+---
+
 # v1.8 — B2b Simulated Trading & Replay Session Foundation
 
 Package semantic version: **1.8.0**.

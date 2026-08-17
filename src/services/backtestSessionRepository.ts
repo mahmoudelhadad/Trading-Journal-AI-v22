@@ -174,7 +174,7 @@ export function createBacktestSessionRepository(
     completeSession(sessionId: string, expectedRevision: number, progress: SessionProgress, updatedAt: string): Promise<BacktestRepositoryResult<BacktestSession>> {
       return updateSession(sessionId, expectedRevision, (session) => {
         const projection = projectBacktestSession(session, Number.MAX_SAFE_INTEGER);
-        if (session.status !== 'active' || projection.openPosition !== null
+        if (session.status !== 'active' || projection.openAggregate !== null
           || (projection.highWaterMarkUtcMs !== null && progress.cursorUtcMs < projection.highWaterMarkUtcMs)) return fail('invalid_session');
         const next: BacktestSession = { ...session, ...progress, status: 'completed', updatedAt, revision: session.revision + 1 };
         return validateBacktestSession(next) ? { ok: true, value: next } : fail('invalid_session');

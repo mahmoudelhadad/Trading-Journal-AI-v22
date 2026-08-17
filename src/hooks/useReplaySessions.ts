@@ -25,8 +25,19 @@ export interface ReplaySessionsState {
   createCurrentSession(): Promise<void>;
   selectSession(sessionId: string): Promise<void>;
   leaveSession(): Promise<void>;
+  /**
+   * Flat: opens a new trade with a new tradeId and the supplied stop.
+   * Open: same-side Scale In on the existing aggregate tradeId. The side must
+   * match the open aggregate, and `initialStopPrice` is ignored because the
+   * episode's stop contract is immutable and inherited from the first Entry.
+   */
   enter(side: 'long' | 'short', quantity: number, initialStopPrice: number | null): Promise<void>;
-  exit(): Promise<void>;
+  /**
+   * Exits `quantity` contracts. Omitting it means "exit all": the remaining
+   * quantity verified at intent-capture time is frozen into the candidate and
+   * never recomputed afterwards.
+   */
+  exit(quantity?: number): Promise<void>;
   complete(): Promise<void>;
   recover(): Promise<void>;
 }
@@ -75,16 +86,21 @@ export function resolvePendingActionRecovery(fresh: BacktestSession, pendingActi
   return canonicalActionEqual(found, pendingAction) ? 'committed' : 'collision';
 }
 
+/** A fully resolved canonical intent. Every quantity here is already explicit. */
+export type ReplayActionIntent =
+  | { kind: 'entry'; side: 'long' | 'short'; quantity: number; initialStopPrice: number | null }
+  | { kind: 'exit'; quantity: number };
+
 export function buildCanonicalReplayAction(
   latest: BacktestSession,
   fill: ExecutionFill,
   identity: { actionId: string; tradeId: string; clientCreatedAt: string },
-  intent: { kind: 'entry'; side: 'long' | 'short'; quantity: number; initialStopPrice: number | null } | { kind: 'exit' },
+  intent: ReplayActionIntent,
 ): BacktestAction {
   const base = {
     actionVersion: 1 as const, ...identity, sessionId: latest.sessionId,
     sequence: latest.actions.length + 1,
-    quantity: intent.kind === 'entry' ? intent.quantity : projectBacktestSession(latest, Number.MAX_SAFE_INTEGER).openPosition!.quantity,
+    quantity: intent.quantity,
     fill,
   };
   return intent.kind === 'entry'
@@ -251,11 +267,41 @@ export function useReplaySessions(
     setSafetyBlocked(false); setError(null); recovery.current = null;
   }, [hardFail, pending, runtime, snapshot.canonicalBarrier]);
 
-  const execute = useCallback((intent: { kind: 'entry'; side: 'long' | 'short'; quantity: number; initialStopPrice: number | null } | { kind: 'exit' }): Promise<void> => {
+  const execute = useCallback((request:
+    | { kind: 'entry'; side: 'long' | 'short'; quantity: number; initialStopPrice: number | null }
+    | { kind: 'exit'; quantity: number | undefined },
+  ): Promise<void> => {
     const sessionAtClick = activeRef.current;
     if (sessionAtClick === null || sessionAtClick.status !== 'active' || pending || safetyBlocked) return Promise.resolve();
     const atClickProjection = projectBacktestSession(sessionAtClick, snapshot.nowUtcMs);
-    if (atClickProjection.rewound || (intent.kind === 'entry' ? atClickProjection.openPosition !== null : atClickProjection.openPosition === null)) return Promise.resolve();
+    if (atClickProjection.rewound) return Promise.resolve();
+    // Canonical B2c open state. The legacy `openPosition` view is never
+    // consulted for any command decision.
+    const aggregate = atClickProjection.openAggregate;
+    if (request.kind === 'entry') {
+      // Open → Scale In must stay on the aggregate side. An opposite-side Entry
+      // is rejected outright and never reinterpreted as a Close.
+      if (aggregate !== null && request.side !== aggregate.side) return Promise.resolve();
+    } else if (aggregate === null) return Promise.resolve();
+
+    // The intent is resolved once, here, against the verified aggregate at
+    // capture time; nothing below is recomputed from later state.
+    let intent: ReplayActionIntent;
+    if (request.kind === 'entry') {
+      intent = {
+        kind: 'entry', side: request.side, quantity: request.quantity,
+        // A Scale In inherits the episode's immutable stop contract; the caller
+        // cannot introduce, change, or remove it.
+        initialStopPrice: aggregate === null ? request.initialStopPrice : aggregate.initialStopPrice,
+      };
+    } else {
+      const remaining = aggregate === null ? 0 : aggregate.remainingQuantity;
+      // Omitted quantity means "exit all" as verified right now. Over-Exit is
+      // rejected outright and never clamped.
+      const quantity = request.quantity ?? remaining;
+      if (!(Number.isSafeInteger(quantity) && quantity > 0 && quantity <= remaining)) return Promise.resolve();
+      intent = { kind: 'exit', quantity };
+    }
     const capture = runtime.beginExecutionCommand(sessionAtClick.series);
     if (!capture.ok) { setError(`Execution unavailable: ${capture.reason}.`); return Promise.resolve(); }
     if (intent.kind === 'entry' && !validateInitialStop(
@@ -270,7 +316,8 @@ export function useReplaySessions(
     cancelPendingCheckpoint(); setPending(true); setError(null);
     const commandGeneration = ownerGeneration.current;
     const identity = { actionId: crypto.randomUUID(), clientCreatedAt: new Date().toISOString() };
-    const entryTradeId = intent.kind === 'entry' ? crypto.randomUUID() : atClickProjection.openPosition!.tradeId;
+    // Flat Entry mints a tradeId; Scale In and Exit reuse the aggregate's.
+    const tradeId = aggregate === null ? crypto.randomUUID() : aggregate.tradeId;
     return (async () => {
       const priorOk = await mutationTail.current;
       if (commandGeneration !== ownerGeneration.current) return;
@@ -278,7 +325,7 @@ export function useReplaySessions(
       const latest = activeRef.current;
       if (latest === null) { setPending(false); hardFail('not_found'); return; }
       const action = buildCanonicalReplayAction(latest, capturedFill,
-        { ...identity, tradeId: entryTradeId }, intent);
+        { ...identity, tradeId }, intent);
       const operation = repository.appendAction(latest.sessionId, latest.revision, action, capturedProgress, new Date().toISOString());
       mutationTail.current = operation.then((result) => result.ok, () => false);
       const result = await operation;
@@ -290,13 +337,14 @@ export function useReplaySessions(
   }, [adopt, hardFail, pending, repository, runtime, safetyBlocked, snapshot.nowUtcMs]);
 
   const enter = useCallback((side: 'long' | 'short', quantity: number, initialStopPrice: number | null) => execute({ kind: 'entry', side, quantity, initialStopPrice }), [execute]);
-  const exit = useCallback(() => execute({ kind: 'exit' }), [execute]);
+  const exit = useCallback((quantity?: number) => execute({ kind: 'exit', quantity }), [execute]);
 
   const complete = useCallback(async () => {
     const sessionAtClick = activeRef.current;
     if (sessionAtClick === null || sessionAtClick.status !== 'active' || pending || safetyBlocked) return;
     const projected = projectBacktestSession(sessionAtClick, snapshot.nowUtcMs);
-    if (projected.rewound || projected.openPosition !== null || !sameSessionSeries(sessionAtClick.series, snapshot.series)) return;
+    // Flat is decided by the aggregate: a partial Exit still leaves it open.
+    if (projected.rewound || projected.openAggregate !== null || !sameSessionSeries(sessionAtClick.series, snapshot.series)) return;
     const capture = runtime.beginCompletionCommand(sessionAtClick.series);
     if (!capture.ok) { setError(`Completion unavailable: ${capture.reason}.`); return; }
     cancelPendingCheckpoint(); setPending(true); setError(null);
@@ -305,7 +353,7 @@ export function useReplaySessions(
     if (commandGeneration !== ownerGeneration.current) return;
     if (!priorOk) { setPending(false); hardFail('write_failed'); return; }
     const latest = activeRef.current;
-    if (latest === null || projectBacktestSession(latest, Number.MAX_SAFE_INTEGER).openPosition !== null) {
+    if (latest === null || projectBacktestSession(latest, Number.MAX_SAFE_INTEGER).openAggregate !== null) {
       setPending(false); hardFail('invalid_session'); return;
     }
     const operation = repository.completeSession(latest.sessionId, latest.revision, capture.progress, new Date().toISOString());

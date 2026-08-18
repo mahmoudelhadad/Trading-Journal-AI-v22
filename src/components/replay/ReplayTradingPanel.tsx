@@ -2,18 +2,18 @@ import { Fragment, useState } from 'react';
 import { Button } from '@components/ui/Button.js';
 import { Input } from '@components/ui/Input.js';
 import { Select } from '@components/ui/Select.js';
+import { isTradingMutationDisabled, parseEntryIntent, parseOrderQuantity } from '@calculations/replayWorkspace.js';
 import { COLORS as C } from '@constants/lists.js';
 import type { ReplaySessionsState } from '@hooks/useReplaySessions.js';
 
 function money(value: number): string { return value.toLocaleString(undefined, { style: 'currency', currency: 'USD' }); }
 
-/** Parses a positive whole-contract quantity, or null when the text is not one. */
-function wholeContracts(text: string): number | null {
-  if (text.trim() === '') return null;
-  const value = Number(text);
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
-}
-
+/**
+ * The single Entry call site for every Replay trading surface — the detailed
+ * panel, the chart Quick Trade controls and the chart context menu all route
+ * here, so no surface can invent its own command construction. Execution
+ * semantics stay entirely inside the released `sessions` controller.
+ */
 export function submitReplayEntryIntent(
   sessions: ReplaySessionsState,
   side: 'long' | 'short',
@@ -23,23 +23,54 @@ export function submitReplayEntryIntent(
   return sessions.enter(side, quantity, initialStopPrice);
 }
 
-export function ReplayTradingPanel({ sessions }: { sessions: ReplaySessionsState }) {
-  const [quantityText, setQuantityText] = useState('1');
-  const [stopText, setStopText] = useState('');
-  const [scaleText, setScaleText] = useState('1');
+/** The single Exit-All call site. `remainingQuantity` is the verified aggregate. */
+export function submitReplayExitAllIntent(
+  sessions: ReplaySessionsState,
+  remainingQuantity: number,
+): Promise<void> {
+  return sessions.exit(remainingQuantity);
+}
+
+export interface ReplayTradingPanelProps {
+  sessions: ReplaySessionsState;
+  /**
+   * Shared workspace Order Quantity text — ONE value for the initial Entry and
+   * for Scale In (B2d Phase 4 consolidation). Phase 5's chart Quick Trade reads
+   * the same value, so the two surfaces cannot disagree.
+   */
+  orderQuantityText: string;
+  onOrderQuantityTextChange: (text: string) => void;
+  /**
+   * Shared workspace Initial Stop text. Used ONLY for a FLAT entry: an open
+   * episode's stop is immutable and inherited from `openAggregate`, never from
+   * this text.
+   */
+  initialStopText: string;
+  onInitialStopTextChange: (text: string) => void;
+}
+
+export function ReplayTradingPanel({
+  sessions, orderQuantityText, onOrderQuantityTextChange, initialStopText, onInitialStopTextChange,
+}: ReplayTradingPanelProps) {
+  // Partial-exit quantity stays panel-local: reducing a position is a different
+  // intention from opening or adding to one.
   const [exitText, setExitText] = useState('1');
   const active = sessions.activeSession;
   const projection = sessions.projection;
   // Canonical B2c open state. The legacy `openPosition` compatibility view is
   // never consulted for any panel decision or display.
   const open = projection?.openAggregate ?? null;
-  const mutationDisabled = sessions.pending || sessions.safetyBlocked || active?.status !== 'active' || projection?.rewound === true;
+  // The one shared trading-disabled authority; the chart surfaces use the same
+  // helper, so no second inline expression can drift from it.
+  const mutationDisabled = isTradingMutationDisabled(sessions);
 
-  const entryQuantity = wholeContracts(quantityText);
-  const stop = stopText.trim() === '' ? null : Number(stopText);
-  const validEntry = entryQuantity !== null && (stop === null || (Number.isFinite(stop) && stop > 0));
-  const scaleQuantity = wholeContracts(scaleText);
-  const exitQuantity = wholeContracts(exitText);
+  // One parsed Order Quantity now serves both the initial Entry and Scale In,
+  // through the one shared parsing authority. Accepted and rejected inputs are
+  // unchanged from the released panel.
+  const orderQuantity = parseOrderQuantity(orderQuantityText);
+  const entryIntent = parseEntryIntent(orderQuantityText, initialStopText);
+  const validEntry = entryIntent !== null;
+  const exitQuantity = parseOrderQuantity(exitText);
   const validExit = open !== null && exitQuantity !== null && exitQuantity <= open.remainingQuantity;
 
   const summaryRows: Array<[string, string]> = open === null ? [] : [
@@ -77,12 +108,12 @@ export function ReplayTradingPanel({ sessions }: { sessions: ReplaySessionsState
 
       {open === null
         ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end' }}>
-          <label style={{ color: C.dim, fontSize: 10 }}>Whole contracts<Input type="number" min={1} step={1} width={110} value={quantityText} onChange={setQuantityText} disabled={mutationDisabled} /></label>
-          <label style={{ color: C.dim, fontSize: 10 }}>Initial stop (optional)<Input type="number" step="0.25" width={140} value={stopText} onChange={setStopText} disabled={mutationDisabled} /></label>
+          <label style={{ color: C.dim, fontSize: 10 }}>Whole contracts<Input type="number" min={1} step={1} width={110} value={orderQuantityText} onChange={onOrderQuantityTextChange} disabled={mutationDisabled} /></label>
+          <label style={{ color: C.dim, fontSize: 10 }}>Initial stop (optional)<Input type="number" step="0.25" width={140} value={initialStopText} onChange={onInitialStopTextChange} disabled={mutationDisabled} /></label>
           <Button variant="success" disabled={mutationDisabled || !validEntry}
-            onClick={() => { if (validEntry && entryQuantity !== null) void submitReplayEntryIntent(sessions, 'long', entryQuantity, stop); }}>Long</Button>
+            onClick={() => { if (entryIntent !== null) void submitReplayEntryIntent(sessions, 'long', entryIntent.quantity, entryIntent.initialStopPrice); }}>Long</Button>
           <Button variant="danger" disabled={mutationDisabled || !validEntry}
-            onClick={() => { if (validEntry && entryQuantity !== null) void submitReplayEntryIntent(sessions, 'short', entryQuantity, stop); }}>Short</Button>
+            onClick={() => { if (entryIntent !== null) void submitReplayEntryIntent(sessions, 'short', entryIntent.quantity, entryIntent.initialStopPrice); }}>Short</Button>
           <Button disabled={mutationDisabled} onClick={() => void sessions.complete()}>Complete Session</Button>
         </div>
         : <>
@@ -93,18 +124,20 @@ export function ReplayTradingPanel({ sessions }: { sessions: ReplaySessionsState
             </Fragment>)}
           </dl>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end' }}>
-            <label style={{ color: C.dim, fontSize: 10 }}>Scale quantity<Input type="number" min={1} step={1} width={110} value={scaleText} onChange={setScaleText} disabled={mutationDisabled} /></label>
-            <Button variant={open.side === 'long' ? 'success' : 'danger'} disabled={mutationDisabled || scaleQuantity === null}
+            <label style={{ color: C.dim, fontSize: 10 }}>Scale quantity<Input type="number" min={1} step={1} width={110} value={orderQuantityText} onChange={onOrderQuantityTextChange} disabled={mutationDisabled} /></label>
+            <Button variant={open.side === 'long' ? 'success' : 'danger'} disabled={mutationDisabled || orderQuantity === null}
               onClick={() => {
                 // The controller independently inherits the immutable stop; the
-                // third argument only satisfies the existing entry signature.
-                if (scaleQuantity !== null) void submitReplayEntryIntent(sessions, open.side, scaleQuantity, open.initialStopPrice);
+                // third argument only satisfies the existing entry signature, and
+                // it comes from the OPEN AGGREGATE — never from the shared
+                // workspace stop text, which applies to a flat entry only.
+                if (orderQuantity !== null) void submitReplayEntryIntent(sessions, open.side, orderQuantity, open.initialStopPrice);
               }}>{open.side === 'long' ? 'Scale In Long' : 'Scale In Short'}</Button>
             <label style={{ color: C.dim, fontSize: 10 }}>Exit quantity<Input type="number" min={1} max={open.remainingQuantity} step={1} width={110} value={exitText} onChange={setExitText} disabled={mutationDisabled} /></label>
             <Button disabled={mutationDisabled || !validExit}
               onClick={() => { if (validExit && exitQuantity !== null) void sessions.exit(exitQuantity); }}>Exit</Button>
             <Button disabled={mutationDisabled}
-              onClick={() => void sessions.exit(open.remainingQuantity)}>Exit All</Button>
+              onClick={() => void submitReplayExitAllIntent(sessions, open.remainingQuantity)}>Exit All</Button>
             <Button disabled onClick={() => void sessions.complete()}>Complete Session</Button>
           </div>
         </>}

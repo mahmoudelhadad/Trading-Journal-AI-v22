@@ -6,6 +6,9 @@ import { deriveReplayBars } from '@calculations/htfDerivation.js';
 import { isReplaySpeed, projectReplayCursor } from '@calculations/replayClock.js';
 import { mergeBarsInsertIfAbsent, revealClosedBars } from '@calculations/replayReveal.js';
 import {
+  currentRevealedBarStart, previousCommittedDayStart, previousExistingBarStart,
+} from '@calculations/replayStepBack.js';
+import {
   beginAuthoritativeOperation, canCommitAuthoritative, canCommitPrefetch,
   capturePrefetchAuthority, createAuthority, enterImportBarrier, markCommitted,
   replaceWindow, settleImportBarrier, type AuthorityToken,
@@ -39,12 +42,27 @@ export interface ReplayRuntime {
   getSnapshot(): ReplaySnapshot;
   selectSeries(series: HistoricalSeriesIdentity): void;
   resumeSession(series: HistoricalSeriesIdentity, cursorUtcMs: number): Promise<boolean>;
-  setTimeframe(timeframe: ReplayTimeframe): void;
+  /**
+   * B2d Phase 7A — NAVIGATION OUTCOME CONTRACT.
+   *
+   * The four navigation commands below report whether the requested navigation
+   * was applied and published. Each value is a fact this runtime already
+   * computes — `startReestablish`'s commit decision, the next-bar selection, the
+   * predecessor settle — surfaced instead of discarded; no navigation algorithm,
+   * clock or error model is added to produce it.
+   *
+   * The boolean says ONLY that. It does not claim that historical storage is
+   * healthy, that a progress checkpoint was written, that execution is allowed,
+   * that the chart overlay is eligible, or that the session is mutable: those
+   * domains keep their own authorities.
+   */
+  setTimeframe(timeframe: ReplayTimeframe): boolean;
   setSpeed(speed: number): boolean;
   play(): void;
   pause(): void;
-  goTo(utcMs: number): Promise<void>;
-  stepForward(): Promise<void>;
+  goTo(utcMs: number): Promise<boolean>;
+  stepForward(): Promise<boolean>;
+  stepBackward(): Promise<boolean>;
   runImport(series: HistoricalSeriesIdentity, mutation: () => Promise<ReplayMutationResult>): Promise<ReplayMutationResult>;
   beginExecutionCommand(series: BacktestSessionSeries): ReplayCanonicalCaptureResult & ({ ok: true; fill: ExecutionFill } | { ok: false });
   beginCompletionCommand(series: BacktestSessionSeries): ReplayCanonicalCaptureResult;
@@ -383,13 +401,33 @@ export function createReplayRuntime(deps: ReplayRuntimeDependencies): ReplayRunt
       pendingReestablish = false;
       return startReestablish(cursorUtcMs, series);
     },
-    setTimeframe(timeframe) { if (state.canonicalBarrier === null && !sessionSafetyBlocked) publish({ timeframe }); },
+    /**
+     * The display timeframe is a pure view transform over the same canonical 1m
+     * buffer, so it is deliberately NOT gated on the import barrier, on loading
+     * or on a published error — only the released canonical-command and safety
+     * guards reject it. Requesting the timeframe already in effect republishes
+     * it and is therefore applied, not rejected.
+     */
+    setTimeframe(timeframe) {
+      if (state.canonicalBarrier !== null || sessionSafetyBlocked) return false;
+      publish({ timeframe });
+      return true;
+    },
     setSpeed(speed) { if (state.canonicalBarrier !== null || sessionSafetyBlocked || !isReplaySpeed(speed)) return false; publish({ speed }); reanchor(); return true; },
     play() { if (state.canonicalBarrier !== null || sessionSafetyBlocked || authority.barrierDepth > 0 || state.loading || state.error !== null) return; resumeAfterVisibility = false; publish({ playState: 'playing' }); reanchor(); },
     pause() { resumeAfterVisibility = false; publish({ playState: 'paused' }); reanchor(); },
-    async goTo(utcMs) { if (state.canonicalBarrier !== null || sessionSafetyBlocked || !Number.isSafeInteger(utcMs)) return; await startReestablish(utcMs); },
+    /**
+     * `startReestablish` is the existing commit authority for a requested
+     * cursor: it publishes the settled snapshot and reports whether its own
+     * operation won. Returning that value is what makes Go To truthful — the
+     * caller never inspects the snapshot afterwards to guess.
+     */
+    async goTo(utcMs) {
+      if (state.canonicalBarrier !== null || sessionSafetyBlocked || !Number.isSafeInteger(utcMs)) return false;
+      return startReestablish(utcMs);
+    },
     async stepForward() {
-      if (state.canonicalBarrier !== null || sessionSafetyBlocked) return;
+      if (state.canonicalBarrier !== null || sessionSafetyBlocked) return false;
       resumeAfterVisibility = false;
       const findNext = () => [...buffer.values()]
         .filter((b) => b.t + MINUTE_MS > state.nowUtcMs
@@ -401,7 +439,100 @@ export function createReplayRuntime(deps: ReplayRuntimeDependencies): ReplayRunt
         if (!await extendCoverage()) break;
         next = findNext();
       }
-      if (next !== undefined) { publish({ nowUtcMs: next.t + MINUTE_MS, playState: 'paused' }); reanchor(); }
+      // The outcome is the STEP, not the extension: a coverage read that stopped
+      // early still reports success when a next bar was already found, and a
+      // successful extension that revealed no further bar still reports failure.
+      if (next === undefined) return false;
+      publish({ nowUtcMs: next.t + MINUTE_MS, playState: 'paused' });
+      reanchor();
+      return true;
+    },
+    /**
+     * Move from the CURRENT revealed canonical 1m bar to the immediately
+     * PREVIOUS EXISTING canonical 1m bar. Never `cursor - MINUTE_MS`: selection
+     * is over the bar set, so a missing minute, a session gap and a weekend are
+     * each crossed in one press and no bar is ever synthesized.
+     *
+     * Selection lives in `@calculations/replayStepBack.js` — this method owns
+     * only the guards, the reload orchestration and the cursor publish. The
+     * predecessor is always ranked against `currentBarStart`, never against
+     * cursor milliseconds, which is what makes every cursor inside the current
+     * bar's revealed interval land on the same predecessor.
+     *
+     * The buffer holds raw canonical 1m bars, so the step size is independent of
+     * `state.timeframe`, matching released `stepForward`.
+     */
+    async stepBackward() {
+      if (!attached || state.canonicalBarrier !== null || sessionSafetyBlocked) return false;
+      // Navigation may not start on top of another operation: an import barrier,
+      // an in-flight authoritative read, or a published operational error.
+      if (authority.barrierDepth > 0 || state.loading || state.importing || state.error !== null) return false;
+      resumeAfterVisibility = false;
+      const retainedFloor = (): number => state.coverageStartUtcMs ?? Number.NEGATIVE_INFINITY;
+      const originCursorUtcMs = state.nowUtcMs;
+      const currentBarStartUtcMs = currentRevealedBarStart(buffer.values(), originCursorUtcMs, retainedFloor());
+      if (currentBarStartUtcMs === null) return false;
+      const settle = (previousBarStartUtcMs: number): void => {
+        publish({ nowUtcMs: previousBarStartUtcMs + MINUTE_MS, playState: 'paused' });
+        reanchor();
+      };
+      const retained = previousExistingBarStart(buffer.values(), currentBarStartUtcMs, retainedFloor());
+      if (retained !== null) { settle(retained); return true; } // no historical read in the normal case
+
+      // Off buffer. Both boundaries below are deterministic no-ops WITHOUT a
+      // reload: an unknown availability cannot authorize a committed-day search,
+      // and the first observed bar has no predecessor to load.
+      const observed = state.availability;
+      if (!observed.available || observed.observedFirstUtcMs === undefined) return false;
+      if (currentBarStartUtcMs <= observed.observedFirstUtcMs) return false;
+      // The current committed UTC day is reloaded FIRST when the current bar is
+      // not that day's first instant: the predecessor being absent from the
+      // retained buffer does not prove it belongs to an earlier day.
+      const currentDayStartUtcMs = utcDayStart(currentBarStartUtcMs);
+      let dayTargetUtcMs: number | null = currentBarStartUtcMs > currentDayStartUtcMs
+        ? currentDayStartUtcMs
+        : previousCommittedDayStart(observed.observedDays, currentDayStartUtcMs);
+      // Bounded by the committed-day metadata, never by wall-clock day stepping:
+      // weekends and empty days never appear in `observedDays`.
+      let remainingDays = (observed.observedDays?.length ?? 0) + 1;
+      while (dayTargetUtcMs !== null && remainingDays > 0) {
+        remainingDays -= 1;
+        /*
+         * NO-LOOK-AHEAD TARGET. `startReestablish` publishes its settled
+         * snapshot to subscribers BEFORE its promise resolves here, so every
+         * intermediate cursor of this operation is observable and must never sit
+         * later than the origin cursor. `dayEnd` alone would break that for the
+         * CURRENT day: with the current bar at 14:30 and the origin cursor at
+         * 14:31, a reload at 23:59:59.999 would reveal 14:31, 15:00 and every
+         * other later bar of that same day.
+         *
+         * Clamping to the origin cursor keeps both required properties:
+         *   - load: `dayStart <= min(origin, dayEnd) <= dayEnd`, because
+         *     `origin >= currentBarStart + MINUTE_MS > dayStart` whenever the
+         *     target is the current bar's own day, and `dayEnd < currentBarStart
+         *     < origin` for every strictly earlier committed day (so the clamp
+         *     is inert there). The floor therefore always lands on the intended
+         *     UTC day — including a current bar starting at 23:59, whose target
+         *     is `dayEnd` = 23:59:59.999 and NOT the 00:00 next-day close that
+         *     `currentBarStart + MINUTE_MS` would have produced.
+         *   - reveal: the published cursor is <= the origin cursor, and
+         *     `revealClosedBars` is monotonic in the cursor, so the revealed set
+         *     is always a subset of the origin revealed set. Replay time may
+         *     stand still or move backward during the operation, never forward.
+         */
+        const reloadCursorUtcMs = Math.min(originCursorUtcMs, dayTargetUtcMs + DAY_MS - 1);
+        // A failed or superseded reload publishes no predecessor. The accepted
+        // Item-B window may leave an earlier intermediate view behind, and that
+        // is deliberately still NOT a successful predecessor step.
+        if (!await startReestablish(reloadCursorUtcMs)) return false;
+        // Ranked against the ORIGINAL current bar, never against the temporary
+        // cursor the reload published.
+        const reloaded = previousExistingBarStart(buffer.values(), currentBarStartUtcMs, retainedFloor());
+        if (reloaded !== null) { settle(reloaded); return true; }
+        dayTargetUtcMs = previousCommittedDayStart(
+          state.availability.available ? state.availability.observedDays : undefined, dayTargetUtcMs);
+      }
+      return false;   // every committed day was exhausted without a predecessor
     },
     async runImport(series, mutation) {
       if (state.canonicalBarrier !== null || sessionSafetyBlocked || !allowedBySessionSeries(series)) return { ok: false, reason: 'command_pending', message: 'A Replay session command is still being saved or owns another series.' };

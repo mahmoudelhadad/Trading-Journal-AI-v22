@@ -18,6 +18,7 @@ export function useReplayRuntime() {
       setSpeed: (speed: ReplaySpeed) => runtime.setSpeed(speed),
       play: () => runtime.play(), pause: () => runtime.pause(),
       goTo: (utcMs: number) => runtime.goTo(utcMs), stepForward: () => runtime.stepForward(),
+      stepBackward: () => runtime.stepBackward(),
       importNinjaTrader,
     },
     runtime,

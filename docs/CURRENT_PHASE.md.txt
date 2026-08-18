@@ -4,7 +4,7 @@
 
 ## Phase
 
-v1.9 — B2c Manual Position Scaling
+v1.10 — B2d Replay Trading Workspace & Chart Visualization
 
 Release type:
 
@@ -18,21 +18,22 @@ Status:
 
 IMPLEMENTATION COMPLETE
 AUTOMATED VERIFICATION COMPLETE
-RUNTIME ACCEPTANCE COMPLETE (RA-1 THROUGH RA-32 + RA-PERF)
+BROWSER RUNTIME ACCEPTANCE COMPLETE
+SOURCE CLEANUP COMPLETE
 DOCUMENTATION + VERSION PRE-GATE-B WORK COMPLETE
 GATE B NOT CROSSED
 
-Package semantic version: **1.9.0**.
+Package semantic version: **1.10.0**.
 
-- Base release: **v1.8.0** — B2b Simulated Trading & Replay Session Foundation.
-- Base commit: `71deefabac30f7daad3fc2f29f24768fb9a0d7d9`.
-- Target release: **v1.9.0**.
+- Base release: **v1.9.0** — B2c Manual Position Scaling.
+- Base commit: `cd950ac641c506c47f57012cfa5b78f96d7e96db`.
+- Target release: **v1.10.0**.
 - Local Git closure has not been performed.
-- No push, deployment or release tag has been performed for v1.9.0.
+- No push, deployment or release tag has been performed for v1.10.0.
 
 ## Release Marker
 
-The canonical release marker for this version is the annotated tag **`v1.9.0`**,
+The canonical release marker for this version is the annotated tag **`v1.10.0`**,
 created at Gate D on the canonical release commit. The Git tag reference is
 authoritative for which commit carries that marker. This document prepares the
 local release candidate; it does not assert a deployment, live acceptance result
@@ -40,142 +41,140 @@ or release marker that Git does not carry.
 
 ## Objective
 
-Let a simulated Replay position be built and unwound as the sequence of
-executions it actually was — same-side Scale In, partial Scale Out, repeated
-partial exits, Scale In after a partial exit and a final Exit — while remaining
-one flat-to-flat trade with one moving cost basis, one immutable stop anchor,
-one cumulative anchored risk and one final R, on the released schema-v1
-persistence contract and with no migration.
+Make the Replay chart the primary working surface for a simulated session: show
+what the session already recorded — where each execution happened, where the
+average entry sits and where the stop is anchored — and allow the actions that
+drive that session to be taken from the chart, on the released execution,
+persistence and market-data contracts and with no migration.
 
 ## Delivered Scope
 
-### Scaling and aggregate model
+### Chart visualization
 
-- Manual same-side Scale In on an open episode with positive safe-integer
-  whole-contract quantities; opposite-side entries and reversal are rejected.
-- Partial Exit / Scale Out, repeated partial exits and Scale In after a partial
-  exit, never exceeding the remaining quantity and never clamped.
-- Final Exit returns the episode to Flat and closes the trade.
-- One `tradeId` per flat-to-flat episode, reused by every execution in that
-  episode and never reopened; one unique `actionId` per execution.
-- `openAggregate` projects side, entered, exited and remaining quantity, moving
-  weighted-average basis, realized gross P/L, stop anchor and anchored risk.
+- Execution markers for the session's own executions.
+- Weighted average-entry (AVG) price line that moves with the open position.
+- Immutable stop (STOP) price line for the open episode's anchored stop.
+- Final-exit line cleanup once an episode returns to Flat.
+- Overlays isolated per session and cleared on leaving a session or selecting a
+  series with no local observations.
 
-### Arithmetic and risk
+### Trading from the chart
 
-- Moving weighted-average cost basis over the remaining inventory only; exited
-  contracts never re-enter the average.
-- Intermediate realized gross P/L recognized at each partial exit against the
-  basis as it stood immediately before that exit.
-- Exact scaled arithmetic through private rational internals, converted back to
-  Number only at the derived-projection boundary.
-- Released IEEE-754 Number behavior preserved for structurally legacy
-  one-Entry / full-Exit histories.
-- Weighted final Entry and Exit aggregates for closed scaled trades, with
-  points, ticks and gross P/L conserved against the sum of the partial
-  realizations.
-- Immutable common stop anchored by the episode's first Entry; a stopless
-  episode stays stopless; partial exits never reduce the risk denominator.
-- Cumulative anchored risk summed per Entry, and final R from gross P/L over
-  that cumulative anchored risk.
+- Quick Trade market actions for the current position state, driven entirely by
+  the released execution path.
+- Order Quantity shared between the chart controls and the detailed Trading
+  Panel, so the two surfaces cannot disagree.
+- Initial Stop shared while FLAT; once an episode is open its stop is immutable
+  and inherited from the open aggregate.
+- Exit All for the remaining quantity.
 
-### Replay, concurrency and UI
+### Replay chart context menu
 
-- Scaling-aware rewind hides future scaled actions without truncating canonical
-  history, and mutations remain blocked below the action high-water mark.
-- Canonical sequence ordering for executions that share one decision time.
-- Stale cross-tab conflicts invalidate the captured candidate instead of
-  reshaping it: no quantity clamp, no candidate rebuild, no regenerated action
-  identity, no automatic retry and no recaptured fill; recovery requires
-  explicit hydration and fresh user intent.
-- Completed sessions remain terminal and read-only, with replay navigation
-  non-persisted.
-- Minimal scaling UI: Scale Quantity with same-side Scale In, Exit Quantity with
-  Exit and Exit All, immutable stop display and an aggregate summary. No
-  reversal control, no stop editing, no unrealized P/L.
+- Safe right-click menu with Copy Price, Use as Initial Stop and Go To This Bar.
+
+### Navigation
+
+- Step Forward, and Step Backward to the immediately previous EXISTING canonical
+  1-minute bar, independent of the displayed timeframe.
+- Select Bar navigation to a clicked rendered bar.
+- Navigation-only Undo / Redo over cursor and display timeframe, with an
+  explicit Play start captured as a history entry and playback frames never
+  captured.
+
+### Workspace
+
+- Focus Mode preserving session, position, cursor, timeframe and form state, and
+  hiding rather than unmounting the detailed panel.
+- Toolbar that can be docked or floated and dragged by an explicit handle, with
+  a forced-dock fallback below 768 CSS px and a shared safe top inset that keeps
+  a floating toolbar clear of the application header and the Quick Trade strip.
+- Compact icon transport controls for Play, Pause, Step Forward, Step Backward,
+  Undo and Redo, each carrying its exact hover title and accessible name.
 
 ## Runtime Acceptance
 
-Pre-Gate-B Runtime Acceptance is **COMPLETE**.
+Browser Runtime Acceptance is COMPLETE, across narrow, intermediate and desktop
+viewports, against a real authenticated account and a real imported 1-minute
+series.
 
-- Numbered acceptance: **RA-1 through RA-32 — PASS**.
-- RA-PERF: **PASS**.
-- FAIL: **0**.
-- OPEN / NOT RUN in that range: **0**.
+Two release-quality defects were found during acceptance and corrected before
+this release:
 
-Later release-stage acceptance remains part of this release:
+- Focus stacking: the released sticky application header was painted over the
+  top of the focused chart and made the Quick Trade strip non-interactive. Focus
+  now owns a stacking level above the header while remaining below the user
+  menu, modal and confirmation layers. Re-acceptance confirmed by direct
+  hit-testing that the Quick Trade controls resolve to themselves.
+- Floating-toolbar position: a newly floated toolbar opened inside the header
+  band, leaving its drag handle unreachable outside Focus and covering the Quick
+  Trade strip inside Focus. Initial position and drag clamp now derive their
+  minimum Y from one shared safe-top authority. Re-acceptance confirmed the
+  handle is fully reachable and Quick Trade remains uncovered in Focus.
 
-- **RA-33** is a post-Gate-C live acceptance requirement.
-- **RA-34** is a pre-Gate-D live cleanup and identity requirement.
+Validated in a normal external browser: native hover tooltips on all six
+transport controls with exact labels; the Replay context menu inside Focus; and
+two-stage Escape, where the first Escape closes the context menu only and the
+second exits Focus.
 
-Browser acceptance was driven through rendered controls in an isolated
-disposable profile against a disposable identity, and covered Long and Short
-scaled episodes with reload persistence, scaling-aware rewind and high-water
-behavior, an unavailable historical series, a real two-tab same-owner quantity
-conflict with safe loser recovery, final Exit followed by a separate explicit
-Complete, terminal completed-session read-only behavior, and the same workflow
-against a local production build served from `dist`.
-
-RA-PERF ran in real Chromium against real LocalStorage and real Web Locks
-through the frozen repository implementation, on an isolated disposable
-performance owner. The dataset was exactly 10 sessions and exactly 2,000
-canonical Entry/Exit actions of mixed scaled histories, in an 866,758-byte
-envelope, with zero integrity mismatch. Against the frozen 100 ms per verified
-mutation threshold, the maxima were progress checkpoint 20.1 ms, Scale-In
-append 21.0 ms, Partial-Exit append 22.2 ms and final-Exit append 19.0 ms, with
-zero breaches. List/hydration and projection/fold were measured separately as
-reads. Zero long tasks were observed during the run, alongside an event-loop
-probe; those diagnostics are observations, not a release threshold. The
-disposable performance owner's storage and the temporary harness were removed
-exactly, leaving pre-existing storage byte-identical.
+A single non-reproducible observation of an active session appearing to drop
+after a Select Bar navigation did not reproduce across three directed retries,
+with the session retained and listed every time. It is carried as an observation
+and is not classified as a defect.
 
 ## Automated Verification
 
-- TypeScript: **0 errors**.
-- ESLint: **0 errors and exactly 7 pre-existing warnings**.
-- Tests: **888 passing across 42 files**.
-- Focused B2c suites: **196 passing across 4 files**.
-- Production build: passed; **1036 modules transformed**.
-- `git diff --check` and `git diff --cached --check`: passed.
+- TypeScript: 0 errors.
+- ESLint: 0 errors and exactly 7 pre-existing warnings.
+- Tests: **1247 passing across 52 files**, 0 failed and 0 skipped.
+- Production build: passed; **1044 modules transformed**.
+- `git diff --check`: passed.
 
 ## Preserved Contracts
 
-`schemaVersion` remains 1 and `actionVersion` remains 1. The persisted Entry and
-Exit shapes are unchanged: no `legId`, no cached aggregate, no persisted
-rational or BigInt value and no persistence redesign. `openAggregate` is the
-canonical B2c open projection; `openPosition` is retained only as a
-compatibility projection with no B2c semantic authority.
+No schema change and no persistence migration is introduced. `schemaVersion`
+stays 1 and `actionVersion` stays 1. Sessions written by released v1.9 remain
+readable without migration.
 
-Sessions written by released v1.8 remain readable without migration, and a
-released v1.8 client handed B2c-shaped schema-v1 history fails closed on those
-bytes rather than rewriting them.
+Execution authority remains `sessions.enter`, `sessions.exit` and
+`sessions.complete`; no execution fill, action identifier or trade identifier is
+constructed in the UI. Undo and Redo are navigation-only and can never remove or
+alter a simulated trade.
+
+The canonical time architecture is preserved: UTC internally and for the replay
+clock, with America/New_York session and display semantics under IANA rules. The
+canonical market-data architecture is preserved: 1-minute OHLCV remains
+canonical, higher timeframes remain derived, and there is no synthetic gap
+filling and no look-ahead.
 
 Journal trades, accounts and storage remain isolated from Replay sessions. The
 historical market-data domain remains a separate read-only reconstructable
 cache, and the read-only broker-integration policy is unchanged. Unchanged:
 Journal IndexedDB schema and LocalStorage contracts; Backup, Restore and
 Recovery Bin behavior; account/trade models; Supabase and sync; historical
-market-data schema and mutation contracts; and B2a Replay reveal, chart, import
-and visibility behavior.
+market-data schema and mutation contracts; the B2b session lifecycle and B2c
+scaling and aggregate contracts; and the released application header, its
+stacking level and the shared UI button component.
 
-B2c does not include Journal promotion or trade provenance promotion into the
-Journal; cloud or multi-device Backtest session sync; broker execution or order
-routing; pending orders; brackets or OCO; automatic stop execution; automatic
-take-profit lifecycle; trailing or otherwise modifiable stops; reversal;
-hedging; multiple independent simultaneous positions; fractional contracts;
-commission or slippage modeling; configurable fills; durable unrealized P/L or
-market marks; persistence redesign; or cached aggregate persistence.
+B2d does not include pending orders — Buy Limit, Sell Limit, Buy Stop or Sell
+Stop — and introduces no pending entity, pending persistence, trigger engine,
+cancellation, modification, pending chart line or limit/stop fill semantics.
+Those remain a separate future initiative. B2d also does not include Journal
+promotion or trade provenance promotion into the Journal; cloud or multi-device
+Backtest session sync; broker execution or order routing; brackets or OCO;
+automatic stop execution; automatic take-profit lifecycle; trailing or otherwise
+modifiable stops; reversal; hedging; multiple independent simultaneous
+positions; fractional contracts; commission or slippage modeling; configurable
+fills; durable unrealized P/L or market marks; or persistence redesign.
 
 ## Versioning and Migration
 
-- Package semantic version: **1.8.0 → 1.9.0** in `package.json` and the two
+- Package semantic version: **1.9.0 → 1.10.0** in `package.json` and the two
   root-project version fields in `package-lock.json`.
-- B2c added `jsdom ^30.0.1` as a dev dependency for real DOM component testing.
-  It is test infrastructure only; no production runtime dependency was
-  introduced, and no other dependency declaration, resolved version or integrity
-  value changed.
+- No dependency was added, removed or changed. No dependency declaration,
+  resolved version or integrity value differs from v1.9.0; the icon controls use
+  local inline SVG rather than an icon package.
 - No session schema, action, Journal, historical-market-data, backup,
-  synchronization, Supabase or cloud migration exists in B2c.
+  synchronization, Supabase or cloud migration exists in B2d.
 
 ## Next Pending Decision
 

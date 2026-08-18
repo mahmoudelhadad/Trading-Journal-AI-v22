@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendBacktestAction, createBacktestSession, projectBacktestSession } from '@calculations/backtestSession.js';
 import { ReplayTradingPanel } from './ReplayTradingPanel.js';
+import { useReplayWorkspace } from '@hooks/useReplayWorkspace.js';
+import { parseEntryIntent } from '@calculations/replayWorkspace.js';
 import type { BacktestAction, BacktestSession } from '@apptypes/backtestSession.js';
 import type { ReplaySessionsState } from '@hooks/useReplaySessions.js';
 
@@ -64,16 +66,38 @@ function stateFor(session: BacktestSession, overrides: Partial<ReplaySessionsSta
 
 const roots: Array<{ root: Root; container: HTMLElement }> = [];
 
-async function render(sessions: ReplaySessionsState) {
+interface Spies {
+  quantity?: (text: string) => void;
+  stop?: (text: string) => void;
+}
+
+/**
+ * B2d Phase 4 — the panel's Order Quantity and Initial Stop are now controlled
+ * by the workspace. The harness uses the REAL `useReplayWorkspace` hook so the
+ * shared-state behaviour under test is production behaviour, not a test double;
+ * the optional spies observe the upward delegation without replacing the state.
+ * The hook lives in this harness component, so a `rerender` with a new sessions
+ * state preserves the workspace text exactly as the mounted page would.
+ */
+function ControlledPanel({ sessions, spies }: { sessions: ReplaySessionsState; spies: Spies }) {
+  const workspace = useReplayWorkspace();
+  return <ReplayTradingPanel sessions={sessions}
+    orderQuantityText={workspace.orderQuantityText}
+    onOrderQuantityTextChange={(text) => { spies.quantity?.(text); workspace.setOrderQuantityText(text); }}
+    initialStopText={workspace.initialStopText}
+    onInitialStopTextChange={(text) => { spies.stop?.(text); workspace.setInitialStopText(text); }} />;
+}
+
+async function render(sessions: ReplaySessionsState, spies: Spies = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
   roots.push({ root, container });
-  await act(async () => { root.render(<ReplayTradingPanel sessions={sessions} />); });
+  await act(async () => { root.render(<ControlledPanel sessions={sessions} spies={spies} />); });
   return {
     container,
     rerender: async (next: ReplaySessionsState) => {
-      await act(async () => { root.render(<ReplayTradingPanel sessions={next} />); });
+      await act(async () => { root.render(<ControlledPanel sessions={next} spies={spies} />); });
     },
   };
 }
@@ -382,5 +406,137 @@ describe('ReplayTradingPanel — no automatic execution', () => {
     expect(summary(container, 'Avg Entry')).toBe('20000.9375');
     expect(sessions.enter).not.toHaveBeenCalled();
     expect(sessions.exit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * B2d Phase 4 — shared workspace state.
+ *
+ * The single Order Quantity is a DELIBERATE UX CHANGE, not a behaviour-preserving
+ * refactor: the released panel kept independent Entry and Scale In quantities, so
+ * entering Long with 3 now leaves the Scale In field reading 3.
+ */
+describe('ReplayTradingPanel — shared workspace Order Quantity and Initial Stop', () => {
+  it('starts from the released defaults', async () => {
+    const { container } = await render(stateFor(FLAT));
+    expect(labelledInput(container, 'Whole contracts')?.value).toBe('1');
+    expect(labelledInput(container, 'Initial stop')?.value).toBe('');
+  });
+
+  it('delegates both fields upward instead of holding local state', async () => {
+    const quantity = vi.fn();
+    const stop = vi.fn();
+    const { container } = await render(stateFor(FLAT), { quantity, stop });
+    await typeInto(labelledInput(container, 'Whole contracts')!, '4');
+    await typeInto(labelledInput(container, 'Initial stop')!, '19995');
+    expect(quantity).toHaveBeenCalledWith('4');
+    expect(stop).toHaveBeenCalledWith('19995');
+
+    // The Scale In field is the SAME shared value, not a second state.
+    const openState = stateFor(OPEN_LONG);
+    const view = await render(openState, { quantity });
+    quantity.mockClear();
+    await typeInto(labelledInput(view.container, 'Scale quantity')!, '5');
+    expect(quantity).toHaveBeenCalledWith('5');
+  });
+
+  it('carries the Order Quantity across Flat to Open and back to Flat', async () => {
+    const sessions = stateFor(FLAT);
+    const { container, rerender } = await render(sessions);
+    await typeInto(labelledInput(container, 'Whole contracts')!, '3');
+    await click(button(container, 'Long')!);
+    expect(sessions.enter).toHaveBeenCalledWith('long', 3, null);
+
+    // The verified entry lands; the workspace is NOT remounted.
+    const open = stateFor(OPEN_LONG, { enter: sessions.enter, exit: sessions.exit });
+    await rerender(open);
+    expect(labelledInput(container, 'Scale quantity')?.value).toBe('3');   // shared, by design
+
+    await typeInto(labelledInput(container, 'Scale quantity')!, '2');
+    await click(button(container, 'Scale In Long')!);
+    expect(open.enter).toHaveBeenLastCalledWith('long', 2, 19995);
+
+    await rerender(stateFor(FLAT, { enter: open.enter }));
+    expect(labelledInput(container, 'Whole contracts')?.value).toBe('2');  // last edit survives
+  });
+
+  it('scales in with the existing episode anchor, never the transient stop text', async () => {
+    const sessions = stateFor(FLAT);
+    const { container, rerender } = await render(sessions);
+    await typeInto(labelledInput(container, 'Initial stop')!, '19900');
+    await click(button(container, 'Long')!);
+    expect(sessions.enter).toHaveBeenCalledWith('long', 1, 19900);
+
+    // The episode's immutable anchor is 19995 in this fixture; the workspace text
+    // is deliberately changed to a DIFFERENT value while flat is no longer true.
+    const open = stateFor(OPEN_LONG, { enter: sessions.enter });
+    await rerender(open);
+    expect(summary(container, 'Risk Stop Anchor')).toBe('19995');
+    expect(labelledInput(container, 'Initial stop')).toBeUndefined();      // no editor while open
+
+    await click(button(container, 'Scale In Long')!);
+    expect(open.enter).toHaveBeenLastCalledWith('long', 1, 19995);         // inherited, not 19900
+
+    // Flat again: the form text is workspace state and legitimately differs from
+    // any past episode's frozen anchor. No historical action is mutated.
+    await rerender(stateFor(FLAT, { enter: open.enter }));
+    expect(labelledInput(container, 'Initial stop')?.value).toBe('19900');
+    expect(open.enter).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the transient stop text out of an open-episode Scale In even when it differs', async () => {
+    const open = stateFor(OPEN_LONG);
+    const { container, rerender } = await render(open);
+    // Reach the stop field by returning to flat, edit it, then go open again.
+    await rerender(stateFor(FLAT, { enter: open.enter }));
+    await typeInto(labelledInput(container, 'Initial stop')!, '19800');
+    await rerender(stateFor(OPEN_LONG, { enter: open.enter }));
+    await click(button(container, 'Scale In Long')!);
+    expect(open.enter).toHaveBeenCalledTimes(1);
+    expect(open.enter).toHaveBeenCalledWith('long', 1, 19995);
+  });
+
+  /**
+   * B2d Phase 5 — the panel now consumes the SHARED parsing authority, so its
+   * accepted/rejected set is the pure helper's by construction. This asserts the
+   * parity directly rather than restating a second list of magic values.
+   */
+  it('accepts and rejects exactly what the shared entry parser does', async () => {
+    // Both fields are `type="number"`, so the DOM itself discards text that is
+    // not a number (it becomes ''); only values a number input can actually hold
+    // are reachable through the UI. The parser still rejects the rest — that is
+    // covered directly in replayWorkspace.test.ts.
+    const cases = [['4', '19995'], ['2', ''], ['1', '0.25'], ['0', ''], ['-1', ''], ['1.5', ''],
+      ['', ''], ['abc', ''], ['3', '-5'], ['3', '0']];
+    for (const [quantity, stop] of cases) {
+      const expected = parseEntryIntent(quantity, stop);
+      const sessions = stateFor(FLAT);
+      const { container } = await render(sessions);
+      await typeInto(labelledInput(container, 'Whole contracts')!, quantity);
+      await typeInto(labelledInput(container, 'Initial stop')!, stop);
+      const long = button(container, 'Long')!;
+      expect(long.disabled, `${quantity}/${stop}`).toBe(expected === null);
+      await click(long);
+      if (expected === null) {
+        expect(sessions.enter, `${quantity}/${stop}`).not.toHaveBeenCalled();
+      } else {
+        expect(sessions.enter, `${quantity}/${stop}`)
+          .toHaveBeenCalledWith('long', expected.quantity, expected.initialStopPrice);
+      }
+    }
+  });
+
+  it('keeps the Exit quantity independent of the shared Order Quantity', async () => {
+    const sessions = stateFor(OPEN_LONG);
+    const { container } = await render(sessions);
+    await typeInto(labelledInput(container, 'Scale quantity')!, '3');
+    await typeInto(labelledInput(container, 'Exit quantity')!, '2');
+    expect(labelledInput(container, 'Scale quantity')?.value).toBe('3');   // unchanged by the exit edit
+    expect(labelledInput(container, 'Exit quantity')?.value).toBe('2');
+
+    await click(button(container, 'Exit')!);
+    expect(sessions.exit).toHaveBeenCalledWith(2);
+    await click(button(container, 'Scale In Long')!);
+    expect(sessions.enter).toHaveBeenCalledWith('long', 3, 19995);
   });
 });
